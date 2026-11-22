@@ -42,6 +42,9 @@ jobs:
           WGPU_BACKEND: vulkan
         run: |
           cargo build --locked --workspace
+          env -u DISPLAY -u WAYLAND_DISPLAY target/debug/aurora-player --headless --frames 600 > "$RUNNER_TEMP/scene-first.json"
+          env -u DISPLAY -u WAYLAND_DISPLAY target/debug/aurora-player --headless --frames 600 > "$RUNNER_TEMP/scene-second.json"
+          cmp "$RUNNER_TEMP/scene-first.json" "$RUNNER_TEMP/scene-second.json"
           mkdir -p screenshots
           timeout 45s xvfb-run -a target/debug/aurora-player --screenshot screenshots/player.png
           timeout 45s xvfb-run -a target/debug/aurora-editor --screenshot screenshots/editor.png

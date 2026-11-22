@@ -13,7 +13,7 @@ Hash the source bytes and importer settings. Publish cache results only after im
 
 ## Build and run
 
-`cargo test --locked -p aurora-engine-core`
+`cargo test --locked -p engine_core`
 
 Commands for later milestones apply once their implementation lands. Check AGENTS.md for current status.
 

@@ -2,3 +2,7 @@
 
 pub mod app;
 mod render;
+
+pub mod assets;
+pub mod ecs;
+pub mod scene;

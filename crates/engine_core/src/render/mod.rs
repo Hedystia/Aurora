@@ -1,10 +1,18 @@
 //! wgpu surface ownership and render pass for the player.
 
+mod sprite;
+
 use std::{path::Path, sync::Arc};
 
 use anyhow::{Context, ensure};
 use wgpu::*;
 use winit::{dpi::PhysicalSize, window::Window};
+
+use crate::{
+    assets::Assets,
+    scene::{Camera2D, NodeState},
+};
+use sprite::SpriteBatch;
 
 pub(crate) struct Renderer {
     instance: Instance,
@@ -13,6 +21,7 @@ pub(crate) struct Renderer {
     queue: Queue,
     config: SurfaceConfiguration,
     size: PhysicalSize<u32>,
+    sprites: SpriteBatch,
 }
 
 impl Renderer {
@@ -51,6 +60,7 @@ impl Renderer {
                 })
                 .context("No supported screenshot pixel format")?;
         }
+        let sprites = SpriteBatch::new(&device, config.format);
         let mut renderer = Self {
             instance,
             surface,
@@ -58,6 +68,7 @@ impl Renderer {
             queue,
             config,
             size,
+            sprites,
         };
         renderer.resize(size);
         Ok(renderer)
@@ -76,6 +87,9 @@ impl Renderer {
         &mut self,
         window: &Arc<Window>,
         screenshot: Option<&Path>,
+        assets: &Assets,
+        nodes: &[NodeState],
+        camera: Camera2D,
     ) -> anyhow::Result<bool> {
         if self.size.width == 0 || self.size.height == 0 {
             return Ok(false);
@@ -102,12 +116,21 @@ impl Renderer {
             }
             CurrentSurfaceTexture::Validation => anyhow::bail!("Surface texture validation failed"),
         };
+        let extent = frame.texture.size();
         let view = frame.texture.create_view(&TextureViewDescriptor::default());
         let mut encoder = self
             .device
             .create_command_encoder(&CommandEncoderDescriptor::default());
-        encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("Player clear"),
+        self.sprites.prepare(
+            &self.device,
+            &self.queue,
+            assets,
+            nodes,
+            camera,
+            [extent.width, extent.height],
+        )?;
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("2D scene"),
             color_attachments: &[Some(RenderPassColorAttachment {
                 view: &view,
                 depth_slice: None,
@@ -124,11 +147,13 @@ impl Renderer {
             })],
             ..Default::default()
         });
+        self.sprites.draw(&mut pass);
+        drop(pass);
         let readback = screenshot.map(|_| {
-            let row = (self.config.width * 4).next_multiple_of(COPY_BYTES_PER_ROW_ALIGNMENT);
+            let row = (extent.width * 4).next_multiple_of(COPY_BYTES_PER_ROW_ALIGNMENT);
             let buffer = self.device.create_buffer(&BufferDescriptor {
                 label: Some("Player screenshot"),
-                size: u64::from(row) * u64::from(self.config.height),
+                size: u64::from(row) * u64::from(extent.height),
                 usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
@@ -142,7 +167,7 @@ impl Renderer {
                         rows_per_image: None,
                     },
                 },
-                frame.texture.size(),
+                extent,
             );
             (buffer, row)
         });
@@ -150,12 +175,18 @@ impl Renderer {
         window.pre_present_notify();
         frame.present();
         if let Some((path, (buffer, row))) = screenshot.zip(readback) {
-            self.save_capture(path, &buffer, row)?;
+            self.save_capture(path, &buffer, row, extent)?;
         }
         Ok(true)
     }
 
-    fn save_capture(&self, path: &Path, buffer: &Buffer, row: u32) -> anyhow::Result<()> {
+    fn save_capture(
+        &self,
+        path: &Path,
+        buffer: &Buffer,
+        row: u32,
+        extent: Extent3d,
+    ) -> anyhow::Result<()> {
         let slice = buffer.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(MapMode::Read, move |result| {
@@ -166,7 +197,7 @@ impl Renderer {
         let mapped = slice.get_mapped_range();
         let mut pixels = Vec::new();
         for padded in mapped.chunks_exact(row as usize) {
-            pixels.extend_from_slice(&padded[..self.config.width as usize * 4]);
+            pixels.extend_from_slice(&padded[..extent.width as usize * 4]);
         }
         if matches!(
             self.config.format,
@@ -179,8 +210,8 @@ impl Renderer {
         image::save_buffer_with_format(
             path,
             &pixels,
-            self.config.width,
-            self.config.height,
+            extent.width,
+            extent.height,
             image::ColorType::Rgba8,
             image::ImageFormat::Png,
         )?;

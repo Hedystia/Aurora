@@ -22,3 +22,14 @@ Pins are declared in the workspace [Cargo.toml](../Cargo.toml), [scripts/package
 | TypeScript, esbuild, Vitest | 5.9.3, 0.25.12, 3.2.7 | Retain TypeScript line and take esbuild/Vitest patches |
 | scriptc | 0.4.16 | Pinned standalone GNU/Linux release |
 | Portable Bun | 1.2.22 | Pin a published Linux release with checksums for x86-64 baseline and ARM64 |
+
+## M1 runtime dependencies
+
+| Component | Pin | Reason |
+| --- | --- | --- |
+| hecs | 0.11.2 | Activates the existing workspace pin for scene storage |
+| bytemuck | 1.25.2 | Uses the existing transitive version to encode GPU vertices |
+| sha2 | 0.10.9 | SHA-256 identities and integrity checks for imported textures |
+| tempfile | 3.27.0 | Atomic cache publication using staging files in the destination directory |
+
+Serde activates at `1.0.229`, matching the patch already resolved transitively in the M0 lockfile.

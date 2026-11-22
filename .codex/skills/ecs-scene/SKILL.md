@@ -13,7 +13,7 @@ The player owns entity handles. Reject cycles, keep tree and ECS mutations consi
 
 ## Build and run
 
-`cargo test --locked -p aurora-engine-core`
+`cargo test --locked -p engine_core`
 
 Commands for later milestones apply once their implementation lands. Check AGENTS.md for current status.
 
