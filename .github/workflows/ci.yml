@@ -1,0 +1,53 @@
+name: CI
+on: [push, pull_request]
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux graphics dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang xauth xvfb libvulkan1 mesa-vulkan-drivers libxkbcommon-x11-0 libwayland-dev
+      - name: Verify Bun provisioning without system runtimes
+        shell: bash
+        run: |
+          path_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$path_dir"' EXIT
+          for tool in bash chmod curl dirname mkdir mktemp mv rm sha256sum uname unzip; do
+            ln -s "$(command -v "$tool")" "$path_dir/$tool"
+          done
+          runtime="$(PATH="$path_dir" tools/setup.sh --print-runtime)"
+          test "$runtime" = "$PWD/.aurora/tools/bun"
+          "$runtime" --version
+      - name: Provision toolchains
+        run: tools/setup.sh
+      - run: cargo fmt --all --check
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace
+      - name: Verify one wgpu version
+        run: |
+          cargo tree --locked --workspace -d
+          cargo tree --locked --workspace -i wgpu
+      - name: Compile and run a TypeScript executable
+        run: |
+          printf 'console.log("Aurora");\n' > "$RUNNER_TEMP/hello.ts"
+          "$(tools/setup.sh --print-scriptc)" build "$RUNNER_TEMP/hello.ts" --tier static-only -o "$RUNNER_TEMP/aurora-hello"
+          test "$("$RUNNER_TEMP/aurora-hello")" = Aurora
+      - name: Capture editor and player
+        env:
+          WGPU_BACKEND: vulkan
+        run: |
+          cargo build --locked --workspace
+          mkdir -p screenshots
+          timeout 45s xvfb-run -a target/debug/aurora-player --screenshot screenshots/player.png
+          timeout 45s xvfb-run -a target/debug/aurora-editor --screenshot screenshots/editor.png
+          test -s screenshots/player.png
+          test -s screenshots/editor.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aurora-screenshots
+          path: screenshots/

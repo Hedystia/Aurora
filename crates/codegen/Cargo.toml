@@ -1,0 +1,12 @@
+[package]
+name = "codegen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "aurora-codegen"
+path = "src/mod.rs"
+
+[lints]
+workspace = true

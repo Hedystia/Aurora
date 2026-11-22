@@ -1,0 +1,18 @@
+[package]
+name = "engine_core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/mod.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+image.workspace = true
+pollster.workspace = true
+wgpu.workspace = true
+winit.workspace = true
