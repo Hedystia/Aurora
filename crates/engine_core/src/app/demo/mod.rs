@@ -3,11 +3,13 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use script_api::Kind;
 
 use crate::{
     assets::Assets,
     ecs::EntityId,
     scene::{Camera2D, Lifecycle, Scene, Sprite, Transform2D},
+    scripting::{Script, Session},
 };
 
 pub(super) const CAMERA: Camera2D = Camera2D {
@@ -20,6 +22,9 @@ pub(super) struct Demo {
     pub(super) assets: Assets,
     pub(super) scene: Scene,
     pivot: EntityId,
+    primary: EntityId,
+    script: Option<Session>,
+    script_position: [f32; 2],
     pub(super) ticks: u64,
 }
 
@@ -59,11 +64,41 @@ impl Demo {
             assets,
             scene,
             pivot,
+            primary,
+            script: None,
+            script_position: [0.0; 2],
             ticks: 0,
         })
     }
 
+    pub(super) fn attach_script(&mut self, script: Option<&Script>) -> Result<()> {
+        self.script = script.map(Session::spawn).transpose()?;
+        self.dispatch(Kind::Start)
+    }
+
+    pub(super) fn disconnect_script(&mut self) {
+        self.script = None;
+    }
+
+    fn dispatch(&mut self, kind: Kind) -> Result<()> {
+        if let Some(script) = &mut self.script
+            && let Some(position) = script.exchange(kind, self.primary.0, self.script_position)?
+        {
+            self.scene.set_transform(
+                self.primary,
+                Transform2D {
+                    position,
+                    ..Transform2D::default()
+                },
+            )?;
+            self.script_position = position;
+        }
+        Ok(())
+    }
+
     pub(super) fn tick(&mut self) -> Result<()> {
+        self.dispatch(Kind::FixedUpdate)?;
+        self.dispatch(Kind::Update)?;
         self.ticks += 1;
         for event in self.scene.process()? {
             if event == Lifecycle::Process(self.pivot) {

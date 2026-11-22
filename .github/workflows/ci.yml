@@ -32,11 +32,15 @@ jobs:
         run: |
           cargo tree --locked --workspace -d
           cargo tree --locked --workspace -i wgpu
-      - name: Compile and run a TypeScript executable
+      - name: Compare native and development game scripts
         run: |
-          printf 'console.log("Aurora");\n' > "$RUNNER_TEMP/hello.ts"
-          "$(tools/setup.sh --print-scriptc)" build "$RUNNER_TEMP/hello.ts" --tier static-only -o "$RUNNER_TEMP/aurora-hello"
-          test "$("$RUNNER_TEMP/aurora-hello")" = Aurora
+          cargo build --locked --workspace
+          native="$(tools/build-script.sh native)"
+          dev="$(tools/build-script.sh dev)"
+          env -u DISPLAY -u WAYLAND_DISPLAY target/debug/aurora-player --headless --frames 120 --script "$native" > "$RUNNER_TEMP/native.json"
+          env -u DISPLAY -u WAYLAND_DISPLAY target/debug/aurora-player --headless --frames 120 --script-dev "$dev" > "$RUNNER_TEMP/dev.json"
+          cmp "$RUNNER_TEMP/native.json" "$RUNNER_TEMP/dev.json"
+          python3 -c 'import json,sys; scene=json.load(open(sys.argv[1])); assert scene["nodes"][1]["local"]["position"] == [76, 0]' "$RUNNER_TEMP/native.json"
       - name: Capture editor and player
         env:
           WGPU_BACKEND: vulkan
@@ -46,7 +50,7 @@ jobs:
           env -u DISPLAY -u WAYLAND_DISPLAY target/debug/aurora-player --headless --frames 600 > "$RUNNER_TEMP/scene-second.json"
           cmp "$RUNNER_TEMP/scene-first.json" "$RUNNER_TEMP/scene-second.json"
           mkdir -p screenshots
-          timeout 45s xvfb-run -a target/debug/aurora-player --screenshot screenshots/player.png
+          timeout 45s xvfb-run -a target/debug/aurora-player --script .aurora/scripts/hello-native --screenshot screenshots/player.png
           timeout 45s xvfb-run -a target/debug/aurora-editor --screenshot screenshots/editor.png
           test -s screenshots/player.png
           test -s screenshots/editor.png

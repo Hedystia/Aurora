@@ -9,3 +9,11 @@ path = "src/mod.rs"
 
 [lints]
 workspace = true
+
+[dependencies]
+bincode.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+anyhow.workspace = true
+memmap2.workspace = true
+nix.workspace = true

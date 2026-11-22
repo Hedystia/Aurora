@@ -33,3 +33,7 @@ Pins are declared in the workspace [Cargo.toml](../Cargo.toml), [scripts/package
 | tempfile | 3.27.0 | Atomic cache publication using staging files in the destination directory |
 
 Serde activates at `1.0.229`, matching the patch already resolved transitively in the M0 lockfile.
+
+## M2 scripting dependencies
+
+Bincode `2.0.1` and nix `0.30.1` activate their existing pins. Memmap2 activates at `0.9.12`, matching the patch previously resolved transitively. The native script uses the existing scriptc `0.4.16` pin.

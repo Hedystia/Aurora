@@ -11,10 +11,13 @@ Read the project skills in `.codex/skills/` for the subsystem being changed.
 - Run `cargo run --locked --bin aurora-player -- --headless --frames 600` to emit a deterministic scene snapshot with no display or GPU. Compare repeated output with `cmp` or inspect its SHA-256.
 - Pass `--sprite path/to/image.png` to load a custom PNG in either player mode. Imported textures default to `.aurora/import`. Use `--asset-cache PATH` to redirect the cache.
 
+- Build scripts with `tools/build-script.sh native` or `tools/build-script.sh dev`. Pass the printed executable to `aurora-player --script PATH` or `aurora-player --script-dev PATH` respectively. Add `--headless --frames 120` to inspect the resulting scene state.
+- The script build emits inspector metadata and SDK declarations under `.aurora/scripts/metadata`.
+
 ## Conventions
 
 Use `src/mod.rs` for Cargo targets and subdirectory `mod.rs` files for modules. Document public Rust items. Keep the editor independent of the player's window and keep editor code out of engine_core. Record version changes in docs/VERSIONS.md and architecture decisions in docs/ADR.md.
 
 ## Milestone status
 
-M1 adds the hecs scene tree, fixed-step player, headless scene snapshots, PNG import cache, camera and sprite renderer. Protocol and TS SDK implementation start in M2. The Jumpy Bird golden baseline starts in M6.
+M1 adds the hecs scene tree, fixed-step player, headless scene snapshots, PNG import cache, camera and sprite renderer. M2 adds a frame-locked script child, native shared-memory IPC, a development socket backend and the TypeScript component SDK. Physics, audio and input start in M3. The Jumpy Bird golden baseline starts in M6.

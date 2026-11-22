@@ -13,7 +13,7 @@ Use the socket for framed control messages and one producer and consumer per sha
 
 ## Build and run
 
-`cargo test --locked -p aurora-script-api -p aurora-engine-core`
+`cargo test --locked -p script_api -p engine_core`
 
 Commands for later milestones apply once their implementation lands. Check AGENTS.md for current status.
 

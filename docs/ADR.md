@@ -15,3 +15,11 @@
 - Rendering uses a centered, aspect-preserving design viewport. Adjacent sprites with the same texture share a draw call, preserving order for alpha blending. GPU resources stay on the window path.
 - A rational 60 Hz accumulator drives the window loop with at most 250 ms of catch-up per wake. Headless runs advance the same runtime one tick at a time and write ordered JSON. The M1 smoke check compares repeated output. The game golden baseline lands in M6.
 - The PNG importer hashes source bytes with a versioned importer identifier. It publishes checksummed RGBA8 cache files by atomic rename and rebuilds damaged cache entries from source. File watching and reference remapping will land with editor hot reload.
+
+## M2 scripting bridge
+
+- The pinned scriptc release builds the native sample in static-only mode. Its C ABI adapter accepts byte spans and communicates through inherited file descriptors. The game logic and byte codec are shared by the native and development entry points.
+- Development uses the same envelopes fully on the socket so both Bun and Node can use their built-in descriptor I/O. Native builds carry hot payloads in memfd rings.
+- The current SDK binds one component to the demo sprite. It passes position snapshots and applies checked commands in frame order. The sample registers inspector metadata as a strict JSON literal in TypeScript, and codegen extracts that declaration at build time.
+- The player launches the child in a dedicated process group, bounds reply wait time, and reaps the group on session teardown. Automated headless runs surface protocol failures as command failures.
+- Both backend choices share the same child lifecycle and envelope validation. A backend enum selects the launch and transport configuration, so the runtime uses one session implementation.

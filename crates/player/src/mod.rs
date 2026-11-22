@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
+use engine_core::scripting::Script;
 
 #[derive(Parser)]
 #[command(version, about = "Aurora game player")]
@@ -22,20 +23,36 @@ struct Options {
     /// Number of simulation ticks in headless mode (defaults to 600).
     #[arg(long, requires = "headless")]
     frames: Option<u64>,
+    /// Run a scriptc game executable.
+    #[arg(long, conflicts_with = "script_dev")]
+    script: Option<PathBuf>,
+    /// Run a generated development script launcher.
+    #[arg(long)]
+    script_dev: Option<PathBuf>,
 }
 
 fn main() -> anyhow::Result<()> {
     let options = Options::parse();
     let cache = Some(options.asset_cache);
+    let script = options
+        .script
+        .map(Script::Native)
+        .or_else(|| options.script_dev.map(Script::Development));
     if options.headless {
         let state = engine_core::app::run_headless(
             options.sprite.as_deref(),
             cache,
             options.frames.unwrap_or(600),
+            script.as_ref(),
         )?;
         println!("{state}");
         Ok(())
     } else {
-        engine_core::app::run(options.sprite.as_deref(), cache, options.screenshot)
+        engine_core::app::run(
+            options.sprite.as_deref(),
+            cache,
+            options.screenshot,
+            script.as_ref(),
+        )
     }
 }

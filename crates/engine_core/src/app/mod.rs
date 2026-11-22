@@ -17,7 +17,7 @@ use winit::{
     window::{Window, WindowId},
 };
 
-use crate::render::Renderer;
+use crate::{render::Renderer, scripting::Script};
 use clock::Clock;
 use demo::Demo;
 
@@ -26,12 +26,21 @@ pub fn run(
     sprite: Option<&Path>,
     cache: Option<PathBuf>,
     screenshot: Option<PathBuf>,
+    script: Option<&Script>,
 ) -> anyhow::Result<()> {
+    let mut demo = Demo::new(sprite, cache)?;
+    if let Err(error) = demo.attach_script(script) {
+        if screenshot.is_some() {
+            return Err(error);
+        }
+        eprintln!("Game script failed to start: {error:#}");
+        demo.disconnect_script();
+    }
     let mut app = Player {
         display: None,
         screenshot,
         result: Ok(()),
-        demo: Demo::new(sprite, cache)?,
+        demo,
         clock: Clock::default(),
         last_update: None,
     };
@@ -49,6 +58,7 @@ pub fn run_headless(
     sprite: Option<&Path>,
     cache: Option<PathBuf>,
     ticks: u64,
+    script: Option<&Script>,
 ) -> anyhow::Result<String> {
     #[derive(serde::Serialize)]
     struct Snapshot {
@@ -56,6 +66,7 @@ pub fn run_headless(
         nodes: Vec<crate::scene::NodeState>,
     }
     let mut demo = Demo::new(sprite, cache)?;
+    demo.attach_script(script)?;
     for _ in 0..ticks {
         demo.tick()?;
     }
@@ -116,9 +127,9 @@ impl ApplicationHandler for Player {
         let ticks = self.clock.advance(now - previous);
         for _ in 0..ticks {
             if let Err(error) = self.demo.tick() {
-                self.result = Err(error);
-                event_loop.exit();
-                return;
+                eprintln!("Game script stopped: {error:#}");
+                self.demo.disconnect_script();
+                break;
             }
         }
         if ticks > 0 {

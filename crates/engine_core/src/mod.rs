@@ -6,3 +6,5 @@ mod render;
 pub mod assets;
 pub mod ecs;
 pub mod scene;
+
+pub mod scripting;
