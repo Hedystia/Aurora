@@ -49,3 +49,7 @@ Notify activates the existing `8.1.0` workspace pin. Egui Dock stays at `0.20.1`
 ## M6 golden snapshot
 
 Insta activates the existing `1.43.2` workspace pin. The golden runner uses existing SHA-256 and scriptc versions.
+
+## M7 3D dependencies
+
+Rapier 3D activates at the workspace pin `0.35.3` with enhanced determinism. The optional Jolt backend resolves `oxijolt 0.6.0+jolt-5.6.0`. Glam `0.33.12` matches the version already used by Rapier's math API.

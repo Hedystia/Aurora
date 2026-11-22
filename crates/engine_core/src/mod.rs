@@ -12,6 +12,7 @@ pub mod scripting;
 pub mod audio;
 pub mod input;
 pub mod physics2d;
+pub mod physics3d;
 
 pub mod animation;
 pub mod director;

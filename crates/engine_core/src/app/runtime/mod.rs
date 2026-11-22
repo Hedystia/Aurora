@@ -1,6 +1,7 @@
 //! Shared player entry point for built-in demos and authored scenes.
 
 mod gameplay;
+mod spatial;
 
 use std::path::{Path, PathBuf};
 
@@ -12,18 +13,23 @@ use winit::{
 };
 
 use crate::{
-    assets::Assets,
     director::Director,
     input::InputEvent,
-    scene::Scene,
+    physics3d::Backend,
+    render::{Cube, Frame},
+    scene::NodeState,
     scripting::{Command, Script, Session},
 };
 
-use super::{Scenario, demo::Demo};
+use super::{
+    Scenario,
+    demo::{CAMERA, Demo},
+};
 
 pub(super) enum Runtime {
     Demo(Box<Demo>),
     Authored(Box<Authored>),
+    Spatial(Box<spatial::Spatial>),
 }
 
 impl Runtime {
@@ -33,6 +39,9 @@ impl Runtime {
         scenario: &Scenario<'_>,
         silent: bool,
     ) -> Result<Self> {
+        if let Some(backend) = scenario.spatial {
+            return Ok(Self::Spatial(Box::new(spatial::Spatial::new(backend)?)));
+        }
         if scenario.scenes.is_empty() {
             Ok(Self::Demo(Box::new(Demo::new(
                 sprite,
@@ -58,6 +67,10 @@ impl Runtime {
     pub(super) fn attach_script(&mut self, script: Option<&Script>) -> Result<()> {
         match self {
             Self::Demo(demo) => demo.attach_script(script),
+            Self::Spatial(_) => {
+                anyhow::ensure!(script.is_none(), "The 3D demo has no script bindings");
+                Ok(())
+            }
             Self::Authored(game) => {
                 game.script = script.map(Session::spawn).transpose()?;
                 game.start()
@@ -69,6 +82,7 @@ impl Runtime {
         match self {
             Self::Demo(demo) => demo.disconnect_script(),
             Self::Authored(game) => game.script = None,
+            Self::Spatial(_) => {}
         }
     }
 
@@ -76,34 +90,53 @@ impl Runtime {
         match self {
             Self::Demo(demo) => demo.tick(input),
             Self::Authored(game) => game.tick(input),
+            Self::Spatial(game) => game.tick(),
         }
     }
 
-    pub(super) fn scene(&self) -> &Scene {
+    pub(super) fn node_states(&self) -> Result<Vec<NodeState>> {
         match self {
-            Self::Demo(demo) => &demo.scene,
-            Self::Authored(game) => game.director.scene(),
+            Self::Demo(demo) => demo.scene.snapshot(),
+            Self::Authored(game) => game.director.scene().snapshot(),
+            Self::Spatial(_) => Ok(Vec::new()),
         }
     }
 
-    pub(super) fn assets(&self) -> &Assets {
+    pub(super) fn spatial_state(&self) -> Option<(Backend, &[Cube])> {
         match self {
-            Self::Demo(demo) => &demo.assets,
-            Self::Authored(game) => game.director.assets(),
+            Self::Spatial(game) => Some((game.backend, &game.cubes)),
+            _ => None,
         }
+    }
+
+    pub(super) fn frame(&self) -> Result<Frame<'_>> {
+        Ok(match self {
+            Self::Demo(demo) => Frame::Sprites {
+                assets: &demo.assets,
+                nodes: demo.scene.snapshot()?,
+                camera: CAMERA,
+            },
+            Self::Authored(game) => Frame::Sprites {
+                assets: game.director.assets(),
+                nodes: game.director.scene().snapshot()?,
+                camera: CAMERA,
+            },
+            Self::Spatial(game) => Frame::Cubes(&game.cubes),
+        })
     }
 
     pub(super) fn ticks(&self) -> u64 {
         match self {
             Self::Demo(demo) => demo.ticks,
             Self::Authored(game) => game.director.ticks(),
+            Self::Spatial(game) => game.ticks,
         }
     }
 
     pub(super) fn bird_stats(&self) -> Result<Option<serde_json::Value>> {
         match self {
             Self::Demo(demo) => demo.bird_stats(),
-            Self::Authored(_) => Ok(None),
+            Self::Authored(_) | Self::Spatial(_) => Ok(None),
         }
     }
 
@@ -112,6 +145,7 @@ impl Runtime {
             Self::Demo(demo) if demo.is_bird() => "Aurora Bird · Space, ↑ or touch to flap",
             Self::Authored(_) => "Aurora Player · P pause/resume · Tab switch scene",
             Self::Demo(_) => "Aurora Player",
+            Self::Spatial(_) => "Aurora · 3D Drop Test",
         }
     }
 

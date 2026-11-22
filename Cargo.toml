@@ -45,6 +45,7 @@ criterion = "=0.7.0"
 insta = "=1.43.2"
 pollster = "=0.4.0"
 bytemuck = { version = "=1.25.2", features = ["derive"] }
+glam = "=0.33.12"
 sha2 = "=0.10.9"
 tempfile = "=3.27.0"
 

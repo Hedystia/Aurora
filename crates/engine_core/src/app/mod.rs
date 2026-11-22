@@ -29,6 +29,8 @@ use runtime::Runtime;
 pub struct Scenario<'a> {
     /// Load the bird and pipes scene.
     pub bird: bool,
+    /// Run the 3D drop test with the selected solver.
+    pub spatial: Option<crate::physics3d::Backend>,
     /// Registered authored scene files. The first is active on startup.
     pub scenes: &'a [PathBuf],
     /// Inline node index bound to the script in an authored scene.
@@ -86,19 +88,29 @@ pub fn run_headless(
     scenario: Scenario<'_>,
 ) -> anyhow::Result<String> {
     #[derive(serde::Serialize)]
-    struct Snapshot {
+    struct Snapshot<'a> {
         ticks: u64,
         nodes: Vec<crate::scene::NodeState>,
         #[serde(skip_serializing_if = "Option::is_none")]
         bird: Option<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        spatial: Option<SpatialSnapshot<'a>>,
+    }
+    #[derive(serde::Serialize)]
+    struct SpatialSnapshot<'a> {
+        backend: crate::physics3d::Backend,
+        cubes: &'a [crate::render::Cube],
     }
     let mut demo = Runtime::new(sprite, cache, &scenario, true)?;
     demo.attach_script(script)?;
     advance(&mut demo, ticks, scenario.input)?;
     Ok(serde_json::to_string(&Snapshot {
         ticks: demo.ticks(),
-        nodes: demo.scene().snapshot()?,
+        nodes: demo.node_states()?,
         bird: demo.bird_stats()?,
+        spatial: demo
+            .spatial_state()
+            .map(|(backend, cubes)| SpatialSnapshot { backend, cubes }),
     })?)
 }
 
@@ -177,6 +189,11 @@ impl ApplicationHandler for Player {
             let result = self.demo.tick(&self.input);
             self.input.clear();
             if let Err(error) = result {
+                if self.demo.spatial_state().is_some() {
+                    self.result = Err(error);
+                    event_loop.exit();
+                    return;
+                }
                 eprintln!("Game script stopped: {error:#}");
                 self.demo.disconnect_script();
                 break;
@@ -208,15 +225,11 @@ impl ApplicationHandler for Player {
                 window.request_redraw();
             }
             WindowEvent::Occluded(false) => window.request_redraw(),
-            WindowEvent::RedrawRequested => match self.demo.scene().snapshot().and_then(|nodes| {
-                renderer.draw(
-                    window,
-                    self.screenshot.as_deref(),
-                    self.demo.assets(),
-                    &nodes,
-                    demo::CAMERA,
-                )
-            }) {
+            WindowEvent::RedrawRequested => match self
+                .demo
+                .frame()
+                .and_then(|frame| renderer.draw(window, self.screenshot.as_deref(), frame))
+            {
                 Ok(true) if self.screenshot.is_some() => {
                     self.screenshot = None;
                     event_loop.exit();

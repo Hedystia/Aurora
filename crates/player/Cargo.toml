@@ -11,6 +11,9 @@ path = "src/mod.rs"
 [lints]
 workspace = true
 
+[features]
+physics-jolt = ["engine_core/physics-jolt"]
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true

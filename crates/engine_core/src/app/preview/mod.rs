@@ -15,7 +15,7 @@ use crate::{
     scripting::Script,
 };
 
-use super::{Scenario, clock::Clock, demo::CAMERA, runtime::Runtime};
+use super::{Scenario, clock::Clock, runtime::Runtime};
 
 /// Raw RGBA preview frame size shared by the editor and player.
 pub const SIZE: [u32; 2] = [640, 384];
@@ -55,6 +55,9 @@ pub fn run_preview(
         if !paused {
             for _ in 0..ticks {
                 if let Err(error) = runtime.tick(&input) {
+                    if runtime.spatial_state().is_some() {
+                        return Err(error);
+                    }
                     eprintln!("Game script stopped: {error:#}");
                     runtime.disconnect_script();
                 }
@@ -64,7 +67,7 @@ pub fn run_preview(
             input.clear();
         }
         if now >= next_frame {
-            let pixels = gpu.frame(runtime.assets(), &runtime.scene().snapshot()?, CAMERA)?;
+            let pixels = gpu.frame(runtime.frame()?)?;
             let mut output = tempfile::NamedTempFile::new_in(dir)?;
             output.write_all(&pixels)?;
             output.persist(dir.join("frame.rgba"))?;

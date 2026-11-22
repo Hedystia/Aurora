@@ -1,5 +1,6 @@
 //! wgpu surface ownership and render pass for the player.
 
+mod mesh;
 mod sprite;
 
 use std::{path::Path, sync::Arc};
@@ -12,7 +13,26 @@ use crate::{
     assets::Assets,
     scene::{Camera2D, NodeState},
 };
+use mesh::MeshPass;
+use serde::Serialize;
 use sprite::SpriteBatch;
+
+#[derive(Serialize)]
+pub(crate) struct Cube {
+    pub(crate) name: &'static str,
+    pub(crate) extent: [f32; 3],
+    pub(crate) color: [f32; 3],
+    pub(crate) state: crate::physics3d::BodyState,
+}
+
+pub(crate) enum Frame<'a> {
+    Sprites {
+        assets: &'a Assets,
+        nodes: Vec<NodeState>,
+        camera: Camera2D,
+    },
+    Cubes(&'a [Cube]),
+}
 
 pub(crate) struct Renderer {
     instance: Instance,
@@ -83,9 +103,7 @@ impl Renderer {
         &mut self,
         window: &Arc<Window>,
         screenshot: Option<&Path>,
-        assets: &Assets,
-        nodes: &[NodeState],
-        camera: Camera2D,
+        render_frame: Frame<'_>,
     ) -> anyhow::Result<bool> {
         if self.size.width == 0 || self.size.height == 0 {
             return Ok(false);
@@ -114,7 +132,7 @@ impl Renderer {
         };
         let (encoder, readback) =
             self.gpu
-                .encode(&frame.texture, assets, nodes, camera, screenshot.is_some())?;
+                .encode(&frame.texture, render_frame, screenshot.is_some())?;
         self.gpu.queue.submit([encoder.finish()]);
         window.pre_present_notify();
         frame.present();
@@ -144,6 +162,7 @@ struct GpuScene {
     queue: Queue,
     format: TextureFormat,
     sprites: SpriteBatch,
+    mesh: Option<MeshPass>,
 }
 
 impl GpuScene {
@@ -154,15 +173,14 @@ impl GpuScene {
             queue,
             format,
             sprites,
+            mesh: None,
         }
     }
 
     fn encode(
         &mut self,
         target: &Texture,
-        assets: &Assets,
-        nodes: &[NodeState],
-        camera: Camera2D,
+        frame: Frame<'_>,
         capture: bool,
     ) -> anyhow::Result<(CommandEncoder, Option<Readback>)> {
         let extent = target.size();
@@ -170,6 +188,65 @@ impl GpuScene {
         let mut encoder = self
             .device
             .create_command_encoder(&CommandEncoderDescriptor::default());
+        match frame {
+            Frame::Sprites {
+                assets,
+                nodes,
+                camera,
+            } => {
+                self.encode_sprites(&mut encoder, &view, extent, assets, &nodes, camera)?;
+            }
+            Frame::Cubes(cubes) => {
+                self.mesh
+                    .get_or_insert_with(|| MeshPass::new(&self.device, self.format))
+                    .encode(
+                        &self.device,
+                        &self.queue,
+                        &mut encoder,
+                        &view,
+                        extent,
+                        cubes,
+                    )?;
+            }
+        }
+        let readback = capture.then(|| {
+            let row = (extent.width * 4).next_multiple_of(COPY_BYTES_PER_ROW_ALIGNMENT);
+            let buffer = self.device.create_buffer(&BufferDescriptor {
+                label: Some("Frame readback"),
+                size: u64::from(row) * u64::from(extent.height),
+                usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            encoder.copy_texture_to_buffer(
+                target.as_image_copy(),
+                TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(row),
+                        rows_per_image: None,
+                    },
+                },
+                extent,
+            );
+            Readback {
+                buffer,
+                row,
+                extent,
+            }
+        });
+        Ok((encoder, readback))
+    }
+
+    fn encode_sprites(
+        &mut self,
+        encoder: &mut CommandEncoder,
+        view: &TextureView,
+        extent: Extent3d,
+        assets: &Assets,
+        nodes: &[NodeState],
+        camera: Camera2D,
+    ) -> anyhow::Result<()> {
         self.sprites.prepare(
             &self.device,
             &self.queue,
@@ -181,7 +258,7 @@ impl GpuScene {
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("2D scene"),
             color_attachments: &[Some(RenderPassColorAttachment {
-                view: &view,
+                view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: Operations {
@@ -210,33 +287,7 @@ impl GpuScene {
         );
         self.sprites.draw(&mut pass);
         drop(pass);
-        let readback = capture.then(|| {
-            let row = (extent.width * 4).next_multiple_of(COPY_BYTES_PER_ROW_ALIGNMENT);
-            let buffer = self.device.create_buffer(&BufferDescriptor {
-                label: Some("Frame readback"),
-                size: u64::from(row) * u64::from(extent.height),
-                usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
-            encoder.copy_texture_to_buffer(
-                target.as_image_copy(),
-                TexelCopyBufferInfo {
-                    buffer: &buffer,
-                    layout: TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(row),
-                        rows_per_image: None,
-                    },
-                },
-                extent,
-            );
-            Readback {
-                buffer,
-                row,
-                extent,
-            }
-        });
-        Ok((encoder, readback))
+        Ok(())
     }
 
     fn read(&self, readback: &Readback) -> anyhow::Result<Vec<u8>> {
@@ -299,13 +350,8 @@ impl Offscreen {
         })
     }
 
-    pub(crate) fn frame(
-        &mut self,
-        assets: &Assets,
-        nodes: &[NodeState],
-        camera: Camera2D,
-    ) -> anyhow::Result<Vec<u8>> {
-        let (encoder, readback) = self.gpu.encode(&self.target, assets, nodes, camera, true)?;
+    pub(crate) fn frame(&mut self, frame: Frame<'_>) -> anyhow::Result<Vec<u8>> {
+        let (encoder, readback) = self.gpu.encode(&self.target, frame, true)?;
         self.gpu.queue.submit([encoder.finish()]);
         self.gpu
             .read(&readback.context("Missing preview readback")?)

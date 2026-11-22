@@ -11,7 +11,7 @@ jobs:
       - name: Install Linux graphics dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang xauth xvfb libvulkan1 libasound2-dev mesa-vulkan-drivers libxkbcommon-x11-0 libwayland-dev
+          sudo apt-get install -y clang cmake g++ xauth xvfb libvulkan1 libasound2-dev mesa-vulkan-drivers libxkbcommon-x11-0 libwayland-dev
       - name: Verify Bun provisioning without system runtimes
         shell: bash
         run: |
@@ -58,6 +58,12 @@ jobs:
           target/debug/aurora-player "${scenes[@]}" --headless --frames 120 --script-dev "$dev" > "$RUNNER_TEMP/scene-dev.json"
           cmp "$RUNNER_TEMP/scene-native.json" "$RUNNER_TEMP/scene-dev.json"
           python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["ticks"] == 54 and [n["name"] for n in s["nodes"]] == ["Lookout", "Marker", "Satellite"]' "$RUNNER_TEMP/scene-native.json"
+      - name: Check both 3D solvers
+        run: |
+          target/debug/aurora-player --3d --headless --frames 240 > "$RUNNER_TEMP/3d-first.json"
+          target/debug/aurora-player --3d --headless --frames 240 > "$RUNNER_TEMP/3d-second.json"
+          cmp "$RUNNER_TEMP/3d-first.json" "$RUNNER_TEMP/3d-second.json"
+          cargo test --locked -p engine_core --features physics-jolt physics3d
       - name: Check the 600-frame Jumpy Bird golden
         run: tools/golden_test.sh
       - name: Capture editor and player
@@ -71,6 +77,8 @@ jobs:
           mkdir -p screenshots
           timeout 45s xvfb-run -a target/debug/aurora-player --bird --script .aurora/scripts/bird-native --capture-after 24 --flap-at 0 --screenshot screenshots/player.png
           timeout 45s xvfb-run -a target/debug/aurora-editor --screenshot screenshots/editor.png
+          timeout 45s xvfb-run -a target/debug/aurora-player --3d --capture-after 240 --screenshot screenshots/player-3d.png
+          test -s screenshots/player-3d.png
           test -s screenshots/player.png
           test -s screenshots/editor.png
           timeout 55s xvfb-run -a target/debug/aurora-editor --project scripts/game-template/scenes/gallery.aurora-scene --play --screenshot screenshots/editor-game.png

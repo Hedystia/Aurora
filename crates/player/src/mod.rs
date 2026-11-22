@@ -2,12 +2,20 @@
 
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use engine_core::{
     app::Scenario,
     input::{InputEvent, Key},
+    physics3d::Backend,
     scripting::Script,
 };
+
+#[derive(Clone, Copy, Default, ValueEnum)]
+enum PhysicsBackend {
+    #[default]
+    Rapier,
+    Jolt,
+}
 
 #[derive(Parser)]
 #[command(version, about = "Aurora game player")]
@@ -36,6 +44,12 @@ struct Options {
     /// Play the M3 bird and pipes sample.
     #[arg(long, conflicts_with = "sprite")]
     bird: bool,
+    /// Run the native 3D cuboid drop test.
+    #[arg(long = "3d", conflicts_with_all = ["bird", "scene", "sprite", "script", "script_dev", "flap_at", "touch_at"])]
+    three_d: bool,
+    /// Select the solver for the 3D drop test.
+    #[arg(long, value_enum, requires = "three_d")]
+    physics_backend: Option<PhysicsBackend>,
     /// Register an authored scene. The first path opens at startup.
     #[arg(long, conflicts_with_all = ["bird", "sprite"])]
     scene: Vec<PathBuf>,
@@ -83,6 +97,12 @@ fn main() -> anyhow::Result<()> {
     );
     let scenario = Scenario {
         bird: options.bird,
+        spatial: options
+            .three_d
+            .then(|| match options.physics_backend.unwrap_or_default() {
+                PhysicsBackend::Rapier => Backend::Rapier,
+                PhysicsBackend::Jolt => Backend::Jolt,
+            }),
         scenes: &options.scene,
         script_node: options.script_node,
         profile: options.profile.as_deref(),

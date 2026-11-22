@@ -47,3 +47,9 @@
 - All sample game rules live in TypeScript. The generic authored runtime resolves sensor, sprite-frame and audio banks and applies bounded script command batches. The scene's contact areas use transformed world-space AABBs. The M3 Rapier sample remains a separate path.
 - The TypeScript NodePool recycles a fixed set of authored prefab instances. Returning a slot hides its subtree and removes its colliders from authored sensor queries. This keeps authored indices and entity state deterministic through wraparound and restart.
 - Profile storage is opt-in for standalone runs. Best-score writes are locked and atomically replaced. The golden run uses no profile and hashes only the player's serialized state, after checking that the trace both scores and ends the run.
+
+## M7 3D groundwork
+
+- Rapier remains the default 3D solver. The optional Jolt implementation is selected at runtime in a build that enables `physics-jolt`. Both expose the same cuboid pose and velocity shape and advance once per existing fixed tick.
+- The 3D preview and windowed player share their existing GPU device, surface management and frame readback. The new opaque pass owns a perspective camera, an instanced unit cuboid and a depth attachment sized to the active target.
+- The spatial snapshot adds an optional 3D section. The 2D state schema and scripting protocol stay compatible with the earlier samples.
