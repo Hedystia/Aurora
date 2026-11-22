@@ -2,6 +2,7 @@
 
 mod clock;
 mod demo;
+mod runtime;
 
 use std::{
     path::{Path, PathBuf},
@@ -19,13 +20,15 @@ use winit::{
 
 use crate::{input::InputEvent, render::Renderer, scripting::Script};
 use clock::Clock;
-use demo::Demo;
+use runtime::Runtime;
 
 /// Scenario selection and synthetic input for deterministic runs.
 #[derive(Default)]
 pub struct Scenario<'a> {
     /// Load the bird and pipes scene.
     pub bird: bool,
+    /// Registered authored scene files. The first is active on startup.
+    pub scenes: &'a [PathBuf],
     /// Input paired with the zero-based tick at which it is delivered.
     pub input: &'a [(u64, InputEvent)],
 }
@@ -39,7 +42,7 @@ pub fn run(
     scenario: Scenario<'_>,
     capture_after: u64,
 ) -> anyhow::Result<()> {
-    let mut demo = Demo::new(sprite, cache, scenario.bird, screenshot.is_some())?;
+    let mut demo = Runtime::new(sprite, cache, &scenario, screenshot.is_some())?;
     if let Err(error) = demo.attach_script(script) {
         if screenshot.is_some() {
             return Err(error);
@@ -83,17 +86,17 @@ pub fn run_headless(
         #[serde(skip_serializing_if = "Option::is_none")]
         bird: Option<serde_json::Value>,
     }
-    let mut demo = Demo::new(sprite, cache, scenario.bird, true)?;
+    let mut demo = Runtime::new(sprite, cache, &scenario, true)?;
     demo.attach_script(script)?;
     advance(&mut demo, ticks, scenario.input)?;
     Ok(serde_json::to_string(&Snapshot {
-        ticks: demo.ticks,
-        nodes: demo.scene.snapshot()?,
+        ticks: demo.ticks(),
+        nodes: demo.scene().snapshot()?,
         bird: demo.bird_stats()?,
     })?)
 }
 
-fn advance(demo: &mut Demo, ticks: u64, input: &[(u64, InputEvent)]) -> anyhow::Result<()> {
+fn advance(demo: &mut Runtime, ticks: u64, input: &[(u64, InputEvent)]) -> anyhow::Result<()> {
     let mut input = input.to_vec();
     input.sort_by_key(|&(tick, _)| tick);
     anyhow::ensure!(
@@ -118,7 +121,7 @@ struct Player {
     display: Option<(Arc<Window>, Renderer)>,
     screenshot: Option<PathBuf>,
     result: anyhow::Result<()>,
-    demo: Demo,
+    demo: Runtime,
     clock: Clock,
     last_update: Option<Instant>,
     input: Vec<InputEvent>,
@@ -129,11 +132,7 @@ impl Player {
         let window = Arc::new(
             event_loop.create_window(
                 Window::default_attributes()
-                    .with_title(if self.demo.is_bird() {
-                        "Aurora Bird · Space, ↑ or touch to flap"
-                    } else {
-                        "Aurora Player"
-                    })
+                    .with_title(self.demo.title())
                     .with_inner_size(LogicalSize::new(800, 480)),
             )?,
         );
@@ -195,6 +194,7 @@ impl ApplicationHandler for Player {
         {
             self.input.push(event);
         }
+        self.demo.controls(&event);
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
@@ -202,11 +202,11 @@ impl ApplicationHandler for Player {
                 window.request_redraw();
             }
             WindowEvent::Occluded(false) => window.request_redraw(),
-            WindowEvent::RedrawRequested => match self.demo.scene.snapshot().and_then(|nodes| {
+            WindowEvent::RedrawRequested => match self.demo.scene().snapshot().and_then(|nodes| {
                 renderer.draw(
                     window,
                     self.screenshot.as_deref(),
-                    &self.demo.assets,
+                    self.demo.assets(),
                     &nodes,
                     demo::CAMERA,
                 )

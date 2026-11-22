@@ -24,10 +24,16 @@ export class Collider2D {
 export class AudioSource {
   playOneShot(index: number): void;
 }
+export class Director {
+  pause(): void;
+  resume(): void;
+  changeScene(index: number): void;
+}
 export class Component {
   readonly node: Node;
   readonly audio: AudioSource;
   readonly body: RigidBody2D;
+  readonly director: Director;
   onStart(): void;
   onUpdate(dt: number): void;
   onFixedUpdate(dt: number): void;
@@ -35,4 +41,5 @@ export class Component {
   onTouchStart(): void;
   onBeginContact(other: Collider2D): void;
   onEndContact(other: Collider2D): void;
+  onAnimationEvent(code: number): void;
 }

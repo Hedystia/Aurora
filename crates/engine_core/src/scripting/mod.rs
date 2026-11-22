@@ -6,6 +6,9 @@ pub(crate) enum Command {
     SetPosition([f32; 2]),
     SetLinearVelocity([f32; 2]),
     PlayOneShot(usize),
+    Pause,
+    Resume,
+    ChangeScene(usize),
 }
 
 #[cfg(target_os = "linux")]

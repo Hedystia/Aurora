@@ -147,6 +147,9 @@ impl Demo {
                 .as_mut()
                 .context("No bound audio source")?
                 .play(index)?,
+            Some(Command::Pause | Command::Resume | Command::ChangeScene(_)) => {
+                anyhow::bail!("Director commands require an authored scene");
+            }
             None => {}
         }
         Ok(())

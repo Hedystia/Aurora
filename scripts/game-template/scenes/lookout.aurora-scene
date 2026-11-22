@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "nodes": [{ "name": "Lookout" }],
+  "instances": [{ "prefab": "marker.aurora-prefab", "parent": 0 }],
+  "animations": [
+    {
+      "name": "Rise",
+      "sample_rate": 60,
+      "duration": 48,
+      "speed": 1,
+      "wrap": "once",
+      "tracks": [
+        {
+          "node": 1,
+          "property": "y",
+          "interpolation": "linear",
+          "keys": [{ "frame": 0, "value": -120 }, { "frame": 48, "value": 120 }]
+        }
+      ],
+      "events": [{ "frame": 24, "code": 8 }]
+    }
+  ],
+  "autoplay": 0
+}

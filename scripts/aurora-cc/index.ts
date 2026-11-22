@@ -64,10 +64,26 @@ export class AudioSource {
   }
 }
 
+export class Director {
+  action = 0;
+  scene = 0;
+
+  pause(): void { this.action = 1; }
+  resume(): void { this.action = 2; }
+  changeScene(index: number): void {
+    if (!Number.isInteger(index) || index < 0 || index > 0xffffffff) {
+      throw new Error("Invalid scene index");
+    }
+    this.scene = index;
+    this.action = 3;
+  }
+}
+
 export class Component {
   readonly node = new Node();
   readonly audio = new AudioSource();
   readonly body = new RigidBody2D();
+  readonly director = new Director();
 
   onStart(): void {}
   onUpdate(_dt: number): void {}
@@ -76,4 +92,5 @@ export class Component {
   onTouchStart(): void {}
   onBeginContact(_other: Collider2D): void {}
   onEndContact(_other: Collider2D): void {}
+  onAnimationEvent(_code: number): void {}
 }

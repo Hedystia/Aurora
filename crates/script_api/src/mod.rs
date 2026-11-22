@@ -6,7 +6,7 @@ pub mod transport;
 use bincode::{Decode, Encode};
 
 /// Current script protocol version.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 /// Fixed byte count of an encoded envelope.
 pub const ENVELOPE_BYTES: usize = 48;
 /// Size of the protocol, sequence and kind prefix.
@@ -39,6 +39,14 @@ pub enum Kind {
     SetLinearVelocity,
     /// Play a clip from the bound audio source, indexed by detail.
     PlayOneShot,
+    /// Authored animation marker, identified by detail.
+    AnimationEvent,
+    /// Pause authored scene simulation.
+    Pause,
+    /// Resume authored scene simulation.
+    Resume,
+    /// Replace the authored scene with the registered index in detail.
+    ChangeScene,
 }
 
 /// Wire message encoded with bincode 2 fixed-width, little-endian configuration.

@@ -49,6 +49,15 @@ jobs:
           env -u DISPLAY -u WAYLAND_DISPLAY target/debug/aurora-player --bird --headless --frames 140 --flap-at 0 --touch-at 75 --script-dev "$dev" > "$RUNNER_TEMP/bird-dev.json"
           cmp "$RUNNER_TEMP/bird-native.json" "$RUNNER_TEMP/bird-dev.json"
           python3 -c 'import json,sys; stats=json.load(open(sys.argv[1]))["bird"]; assert stats["flaps"] == 2 and stats["pipe_hits"] > 0 and stats["contact_exits"] > 0 and stats["one_shots"] > 2' "$RUNNER_TEMP/bird-native.json"
+      - name: Verify authored scene transition and pause
+        run: |
+          native="$(tools/build-script.sh native scene)"
+          dev="$(tools/build-script.sh dev scene)"
+          scenes=(--scene scripts/game-template/scenes/gallery.aurora-scene --scene scripts/game-template/scenes/lookout.aurora-scene)
+          target/debug/aurora-player "${scenes[@]}" --headless --frames 120 --script "$native" > "$RUNNER_TEMP/scene-native.json"
+          target/debug/aurora-player "${scenes[@]}" --headless --frames 120 --script-dev "$dev" > "$RUNNER_TEMP/scene-dev.json"
+          cmp "$RUNNER_TEMP/scene-native.json" "$RUNNER_TEMP/scene-dev.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["ticks"] == 54 and [n["name"] for n in s["nodes"]] == ["Lookout", "Marker", "Satellite"]' "$RUNNER_TEMP/scene-native.json"
       - name: Capture editor and player
         env:
           WGPU_BACKEND: vulkan

@@ -29,3 +29,9 @@
 - Rapier owns body and collider state. Nodes keep stable body associations. Contact pairs are normalized by node ID, then diffed once per tick to report exits before entries. This covers removal and keeps callback order independent of Rapier iteration order.
 - The bird scene uses meters in physics and 32 pixels per meter in rendering. Window presses are queued for the next fixed tick. Headless and screenshot runs feed the same input queue with a tick-indexed schedule.
 - Kira decodes the two embedded WAV clips before opening the render loop. The default device services separate effects and music tracks. Headless verification runs the same mixer and effects commands against Kira's silent backend, which also provides a fallback when the default device is unavailable.
+
+## M4 authored scene runtime
+
+- JSON scene and prefab documents store stable document indices and source PNG paths. Resolved entity handles and asset hashes belong to the runtime. File writes stage in the destination directory before atomic replacement. A scene transition resolves its resources before replacing the active tree.
+- Pool checkout reuses the existing hecs allocations and issues fresh node handles. Pool return detaches the subtree, invalidates its handles, and removes it from processing and rendering. Scene-owned handles advance across transitions.
+- Authored clips use scalar transform tracks and sample-indexed markers. Clip playback advances at 60 Hz, supports held, linear and cubic segments, and applies once, loop or ping-pong wrapping. Director pause freezes scene ticks and leaves input available for resuming.

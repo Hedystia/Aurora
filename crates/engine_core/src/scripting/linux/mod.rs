@@ -130,6 +130,9 @@ impl Session {
                 }
             }
             Kind::PlayOneShot => Ok(Some(ScriptCommand::PlayOneShot(reply.detail.try_into()?))),
+            Kind::Pause => Ok(Some(ScriptCommand::Pause)),
+            Kind::Resume => Ok(Some(ScriptCommand::Resume)),
+            Kind::ChangeScene => Ok(Some(ScriptCommand::ChangeScene(reply.detail.try_into()?))),
             _ => anyhow::bail!("Unexpected script reply kind {:?}", reply.kind),
         }
     }

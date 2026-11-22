@@ -3,7 +3,7 @@ set -euo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 sample="${2:-hello}"
-case "$sample" in hello|bird) ;; *) printf 'Unknown sample %s\n' "$sample" >&2; exit 2 ;; esac
+case "$sample" in hello|bird|scene) ;; *) printf 'Unknown sample %s\n' "$sample" >&2; exit 2 ;; esac
 output="$root/.aurora/scripts"
 mkdir -p "$output"
 stage="$(mktemp -d "$output/.build.XXXXXXXX")"
@@ -48,5 +48,5 @@ case "${1:-}" in
         mv -f "$stage/hello" "$output/$sample-dev"
         printf '%s\n' "$output/$sample-dev"
         ;;
-    *) printf 'Usage: %s native|dev [hello|bird]\n' "$0" >&2; exit 2 ;;
+    *) printf 'Usage: %s native|dev [hello|bird|scene]\n' "$0" >&2; exit 2 ;;
 esac

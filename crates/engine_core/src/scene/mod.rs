@@ -4,12 +4,14 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, ensure};
 use hecs::{Entity, World};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{assets::AssetId, ecs::EntityId};
+mod prefab;
+pub use prefab::{NodePool, Prefab, PrefabNode};
 
 /// Local 2D pose using pixels, radians and unitless scale.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Transform2D {
     /// Translation in the parent's coordinate space, with positive Y up.
     pub position: [f32; 2],
@@ -30,7 +32,7 @@ impl Default for Transform2D {
 }
 
 /// Affine transform columns, retaining shear from nested rotation and scale.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Affine2D([[f32; 2]; 3]);
 
 impl Affine2D {
@@ -112,6 +114,25 @@ pub struct NodeState {
 }
 
 impl Scene {
+    pub(crate) fn successor(&self) -> Self {
+        Self {
+            next_id: self.next_id,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn deactivate(&mut self) -> Result<Vec<Lifecycle>> {
+        let mut events = Vec::new();
+        if self.active {
+            self.walk(
+                &self.roots,
+                |_, _, _| Ok(()),
+                |id| events.push(Lifecycle::ExitTree(id)),
+            )?;
+            self.active = false;
+        }
+        Ok(events)
+    }
     fn entity(&self, id: EntityId) -> Result<Entity> {
         self.entities
             .get(&id)
@@ -166,6 +187,11 @@ impl Scene {
     /// Sets or replaces a node's sprite.
     pub fn set_sprite(&mut self, id: EntityId, sprite: Sprite) -> Result<()> {
         Ok(self.world.insert_one(self.entity(id)?, sprite)?)
+    }
+
+    /// Reads a node's local pose.
+    pub fn transform(&self, id: EntityId) -> Result<Transform2D> {
+        Ok(self.node(id)?.local)
     }
 
     /// Updates the local transform.

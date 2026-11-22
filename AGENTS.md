@@ -18,10 +18,13 @@ Read the project skills in `.codex/skills/` for the subsystem being changed.
 - For deterministic verification use `--bird --headless --frames 140 --flap-at 0 --touch-at 75`. The JSON includes flap, pipe-hit, contact-exit, and one-shot counts. For a graphical capture replace `--headless --frames 140` with `--capture-after 140 --screenshot /tmp/aurora-bird.png`.
 - Linux build prerequisites include ALSA development headers for CPAL.
 
+- Build the authored scene sample with `tools/build-script.sh native scene`. Run the player with `--scene scripts/game-template/scenes/gallery.aurora-scene --scene scripts/game-template/scenes/lookout.aurora-scene --script .aurora/scripts/scene-native`. Press **P** to pause or resume and **Tab** to switch scenes. Add `--headless --frames 120` to verify the scripted transition and pause.
+- See [scene files and animation](docs/SCENES.md) for the persistence format and pool API.
+
 ## Conventions
 
 Use `src/mod.rs` for Cargo targets and subdirectory `mod.rs` files for modules. Document public Rust items. Keep the editor independent of the player's window and keep editor code out of engine_core. Record version changes in docs/VERSIONS.md and architecture decisions in docs/ADR.md.
 
 ## Milestone status
 
-M1 adds the hecs scene tree, fixed-step player, headless scene snapshots, PNG import cache, camera and sprite renderer. M2 adds a frame-locked script child, native shared-memory IPC, a development socket backend and the TypeScript component SDK. M3 adds Rapier 2D, Kira one-shots, and fixed-tick keyboard/touch input. Prefabs, persistence, animation and director APIs start in M4. The Jumpy Bird golden baseline starts in M6.
+M1 adds the hecs scene tree, fixed-step player, headless scene snapshots, PNG import cache, camera and sprite renderer. M2 adds a frame-locked script child, native shared-memory IPC, a development socket backend and the TypeScript component SDK. M3 adds Rapier 2D, Kira one-shots, and fixed-tick keyboard/touch input. M4 adds authored scenes and prefabs, a scene-bound node pool, fixed-tick clip playback, and director controls. Interactive editor work starts in M5. The Jumpy Bird golden baseline starts in M6.

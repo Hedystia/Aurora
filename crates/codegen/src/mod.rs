@@ -87,6 +87,10 @@ fn main() -> Result<()> {
         script_api::Kind::TouchStart,
         script_api::Kind::SetLinearVelocity,
         script_api::Kind::PlayOneShot,
+        script_api::Kind::AnimationEvent,
+        script_api::Kind::Pause,
+        script_api::Kind::Resume,
+        script_api::Kind::ChangeScene,
     ] {
         use std::fmt::Write;
         writeln!(protocol, "export const kind{kind:?} = {};", kind as u32)?;

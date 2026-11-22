@@ -36,6 +36,9 @@ struct Options {
     /// Play the M3 bird and pipes sample.
     #[arg(long, conflicts_with = "sprite")]
     bird: bool,
+    /// Register an authored scene. The first path opens at startup.
+    #[arg(long, conflicts_with_all = ["bird", "sprite"])]
+    scene: Vec<PathBuf>,
     /// Inject a Space key at a zero-based tick in a headless or screenshot run.
     #[arg(long, requires = "bird")]
     flap_at: Vec<u64>,
@@ -71,6 +74,7 @@ fn main() -> anyhow::Result<()> {
     );
     let scenario = Scenario {
         bird: options.bird,
+        scenes: &options.scene,
         input: &input,
     };
     if options.headless {

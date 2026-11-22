@@ -1,8 +1,8 @@
-# Script protocol 2
+# Script protocol 3
 
 Linux player and script use one full-duplex Unix stream socket. The script receives its end as file descriptor 0. Standard output and standard error carry diagnostics to the player's standard error. Native scripts also inherit a 528-byte memfd on descriptor 3. Its size is sealed before the process starts.
 
-Each transaction is one request and one response with the same protocol, sequence, and node. The sequence starts at zero and increments after every valid reply. Protocol 2 accepts commands for the bound node only. The player rejects unknown variants, the wrong protocol or sequence, mismatched handles and positions that cannot be stored as finite f32 values.
+Each transaction is one request and one response with the same protocol, sequence, and node. The sequence starts at zero and increments after every valid reply. Protocol 3 accepts commands for the bound node only. The player rejects unknown variants, the wrong protocol or sequence, mismatched handles and positions that cannot be stored as finite f32 values.
 
 ## Envelope
 
@@ -31,8 +31,12 @@ bincode 2 uses fixed-width little-endian encoding. `aurora-codegen` emits the pr
 | 8 | TouchStart | 0 |
 | 9 | SetLinearVelocity | 0 |
 | 10 | PlayOneShot | Zero-based clip index |
+| 11 | AnimationEvent | Authored marker code |
+| 12 | Pause | 0 |
+| 13 | Resume | 0 |
+| 14 | ChangeScene | Registered scene index |
 
-Startup sends Start once. Each bird tick sends queued input, FixedUpdate, ordered Rapier contact changes, then Update. The SDK supplies 1/60 second to both tick callbacks. Each transaction accepts one command and applies it before the next event. Scripts receive contact handles as opaque low/high words. SetLinearVelocity (meters per second) and PlayOneShot are valid for the bird scene. Animation events enter the protocol with the animation subsystem.
+Startup sends Start once. Each bird tick sends queued input, FixedUpdate, ordered Rapier contact changes, then Update. The SDK supplies 1/60 second to both tick callbacks. Each transaction accepts one command and applies it before the next event. Scripts receive contact handles as opaque low/high words. SetLinearVelocity (meters per second) and PlayOneShot are valid for the bird scene. For authored scenes, input is delivered even while paused. On an unpaused tick FixedUpdate precedes ascending animation playback time, then Update. AnimationEvent conveys each crossed marker in that order. Pause and Resume take effect immediately. ChangeScene loads the destination at the next tick boundary and sends Start again with the new scene's bound node. Existing script processes retain their component instance across a scene change. The envelope and ring sizes remain the same as in protocol 2.
 
 ## Shared memory
 
