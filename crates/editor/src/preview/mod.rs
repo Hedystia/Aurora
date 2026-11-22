@@ -77,6 +77,15 @@ impl Preview {
         for instance in &mut document.instances {
             instance.prefab = project.root.join(&instance.prefab);
         }
+        if let Some(gameplay) = &mut document.gameplay {
+            for path in gameplay
+                .sounds
+                .iter_mut()
+                .chain(gameplay.frames.iter_mut().flat_map(|frame| &mut frame.png))
+            {
+                *path = project.root.join(&*path);
+            }
+        }
         let scene = location.join("preview.aurora-scene");
         document.save(&scene)?;
         let engine_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -91,6 +100,11 @@ impl Preview {
             .arg(scene)
             .arg("--asset-cache")
             .arg(project.root.join(".aurora/import"));
+        if document.gameplay.is_some() {
+            command
+                .arg("--profile")
+                .arg(project.root.join(".aurora/best-score"));
+        }
         if let Some((node, attachment)) =
             project
                 .document

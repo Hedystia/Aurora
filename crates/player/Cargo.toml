@@ -15,3 +15,13 @@ workspace = true
 anyhow.workspace = true
 clap.workspace = true
 engine_core.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+sha2.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+
+[[test]]
+name = "golden"
+path = "tests/golden/mod.rs"

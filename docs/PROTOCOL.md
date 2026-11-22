@@ -1,8 +1,8 @@
-# Script protocol 3
+# Script protocol 4
 
 Linux player and script use one full-duplex Unix stream socket. The script receives its end as file descriptor 0. Standard output and standard error carry diagnostics to the player's standard error. Native scripts also inherit a 528-byte memfd on descriptor 3. Its size is sealed before the process starts.
 
-Each transaction is one request and one response with the same protocol, sequence, and node. The sequence starts at zero and increments after every valid reply. Protocol 3 accepts commands for the bound node only. The player rejects unknown variants, the wrong protocol or sequence, mismatched handles and positions that cannot be stored as finite f32 values.
+Each transaction is one request and one response with the same protocol, sequence, and node. The sequence starts at zero and increments after every valid reply. Protocol 4 accepts immediate commands for the bound node and queued commands for validated authored indices. The player rejects unknown variants, the wrong protocol or sequence, mismatched handles and positions that cannot be stored as finite f32 values.
 
 ## Envelope
 
@@ -35,6 +35,13 @@ bincode 2 uses fixed-width little-endian encoding. `aurora-codegen` emits the pr
 | 12 | Pause | 0 |
 | 13 | Resume | 0 |
 | 14 | ChangeScene | Registered scene index |
+| 15 | FlushCommands | 0 |
+| 16 | MoveNode | Authored node index |
+| 17 | ShowNode | Authored node index |
+| 18 | SelectFrame | Authored node index |
+| 19 | QueueSound | Scene sound index |
+| 20 | RecordScore | Unsigned score |
+| 21 | RestoreScore | Unsigned best score |
 
 Startup sends Start once. Each bird tick sends queued input, FixedUpdate, ordered Rapier contact changes, then Update. The SDK supplies 1/60 second to both tick callbacks. Each transaction accepts one command and applies it before the next event. Scripts receive contact handles as opaque low/high words. SetLinearVelocity (meters per second) and PlayOneShot are valid for the bird scene. For authored scenes, input is delivered even while paused. On an unpaused tick FixedUpdate precedes ascending animation playback time, then Update. AnimationEvent conveys each crossed marker in that order. Pause and Resume take effect immediately. ChangeScene loads the destination at the next tick boundary and sends Start again with the new scene's bound node. Existing script processes retain their component instance across a scene change. The envelope and ring sizes remain the same as in protocol 2.
 
@@ -45,3 +52,5 @@ The native socket record is the 16-byte envelope header. The corresponding 32-by
 Each ring has a native-endian atomic u32 write cursor at offset 0 and read cursor at offset 4. Eight 32-byte slots follow at offset 8. Counters wrap modulo 2³² and select slots modulo 8. The producer acquires the read cursor before reusing a slot and releases the write cursor after copying. The consumer acquires the write cursor before copying and releases the read cursor after copying. One process owns each cursor for its session. A full ring or a notification without a valid payload ends the session without overwriting data.
 
 Development scripts preserve the same envelope and transaction ordering, sending all 48 bytes on the socket via Bun or Node. This lets the development runtime use ordinary file-descriptor I/O. A bad reply, disconnect, or 250 ms reply deadline ends the session. The windowed player logs the error and continues without the child. Headless and screenshot runs return the error for automated verification.
+
+An authored event can return an immediate command or queue up to 128 scene edits. After each queued reply, the player applies one edit and sends FlushCommands to get the next one. Ack ends the batch. MoveNode reads X/Y in local pixels. ShowNode requires X equal to 0 or 1. SelectFrame reads an integral frame index from X. QueueSound and RecordScore read only Detail. RestoreScore precedes Start for a scene with gameplay resources. Sensor contacts are sampled after the tick's Update and sprite/transform commands, with exits before entries and stable handle order within each group. The envelope and ring sizes remain unchanged from protocol 3.

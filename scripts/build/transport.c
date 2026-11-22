@@ -1,4 +1,4 @@
-/* Native script endpoint for Aurora protocol 3. */
+/* Native script endpoint for Aurora protocol 4. */
 #include <errno.h>
 #include <stdatomic.h>
 #include <stdint.h>

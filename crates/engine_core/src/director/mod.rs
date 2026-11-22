@@ -97,6 +97,14 @@ impl Director {
         &self.assets
     }
 
+    pub(crate) fn assets_mut(&mut self) -> &mut Assets {
+        &mut self.assets
+    }
+
+    pub(crate) fn scene_path(&self) -> &std::path::Path {
+        &self.paths[self.current]
+    }
+
     /// Loads the requested scene before replacing the previous one.
     pub fn change_scene(&mut self, index: usize) -> Result<Vec<Lifecycle>> {
         let path = self.paths.get(index).context("Unknown scene index")?;

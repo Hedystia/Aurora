@@ -40,10 +40,10 @@ struct Options {
     #[arg(long, conflicts_with_all = ["bird", "sprite"])]
     scene: Vec<PathBuf>,
     /// Inject a Space key at a zero-based tick in a headless or screenshot run.
-    #[arg(long, requires = "bird")]
+    #[arg(long)]
     flap_at: Vec<u64>,
     /// Inject a touch press at a zero-based tick in a headless or screenshot run.
-    #[arg(long, requires = "bird")]
+    #[arg(long)]
     touch_at: Vec<u64>,
     /// Simulate this many ticks before capturing the frame.
     #[arg(long, requires = "screenshot")]
@@ -54,6 +54,9 @@ struct Options {
     /// Bind the script to this authored node index.
     #[arg(long, requires = "scene", default_value = "0")]
     script_node: usize,
+    /// Persist an authored game's best score to this file.
+    #[arg(long, requires = "scene")]
+    profile: Option<PathBuf>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -82,6 +85,7 @@ fn main() -> anyhow::Result<()> {
         bird: options.bird,
         scenes: &options.scene,
         script_node: options.script_node,
+        profile: options.profile.as_deref(),
         input: &input,
     };
     if let Some(dir) = options.preview_dir {

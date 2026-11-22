@@ -108,6 +108,70 @@ pub struct InstanceFile {
     pub parent: Option<usize>,
 }
 
+/// A non-solid overlap sensor centered on an authored node.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SensorFile {
+    /// Node index, including expanded prefab nodes.
+    pub node: usize,
+    /// Local dimensions in pixels.
+    pub size: [f32; 2],
+}
+
+/// Sprite frame alternatives for a node.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameFile {
+    /// Target node index.
+    pub node: usize,
+    /// Frame PNGs relative to the scene document.
+    pub png: Vec<PathBuf>,
+}
+
+/// Optional authored resources used by gameplay scripts.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GameplayFile {
+    /// Non-solid contact areas.
+    pub sensors: Vec<SensorFile>,
+    /// Registered frame textures by target node.
+    pub frames: Vec<FrameFile>,
+    /// Registered one-shot audio asset paths.
+    pub sounds: Vec<PathBuf>,
+}
+
+impl GameplayFile {
+    fn validate(&self, nodes: usize) -> Result<()> {
+        let mut sensors = std::collections::BTreeSet::new();
+        for sensor in &self.sensors {
+            ensure!(
+                sensor.node < nodes
+                    && sensors.insert(sensor.node)
+                    && sensor
+                        .size
+                        .iter()
+                        .all(|side| side.is_finite() && *side > 0.0),
+                "Invalid or duplicate gameplay sensor"
+            );
+        }
+        let mut frames = std::collections::BTreeSet::new();
+        for frame in &self.frames {
+            ensure!(
+                frame.node < nodes
+                    && frames.insert(frame.node)
+                    && (1..=256).contains(&frame.png.len())
+                    && frame.png.iter().all(|path| !path.as_os_str().is_empty()),
+                "Invalid or duplicate frame bank"
+            );
+        }
+        ensure!(
+            self.sounds.len() <= 128 && self.sounds.iter().all(|path| !path.as_os_str().is_empty()),
+            "Invalid scene sound bank"
+        );
+        Ok(())
+    }
+}
+
 /// Versioned .aurora-scene document.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -125,6 +189,9 @@ pub struct SceneFile {
     /// Clip started automatically on scene entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autoplay: Option<usize>,
+    /// Optional scene-level gameplay resources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gameplay: Option<GameplayFile>,
 }
 
 /// Versioned .aurora-prefab document describing one subtree.
@@ -163,6 +230,7 @@ impl SceneFile {
             instances: Vec::new(),
             animations: Vec::new(),
             autoplay: None,
+            gameplay: None,
         };
         document.validate()?;
         Ok(document)
@@ -195,12 +263,16 @@ impl SceneFile {
                 .is_none_or(|index| index < self.animations.len()),
             "Invalid autoplay clip"
         );
+        let node_limit = if self.instances.is_empty() {
+            self.nodes.len()
+        } else {
+            MAX_NODES
+        };
         for clip in &self.animations {
-            clip.validate(if self.instances.is_empty() {
-                self.nodes.len()
-            } else {
-                usize::MAX
-            })?;
+            clip.validate(node_limit)?;
+        }
+        if let Some(gameplay) = &self.gameplay {
+            gameplay.validate(node_limit)?;
         }
         Ok(())
     }
@@ -264,6 +336,9 @@ impl SceneFile {
         }
         for clip in &self.animations {
             clip.validate(ids.len())?;
+        }
+        if let Some(gameplay) = &self.gameplay {
+            gameplay.validate(ids.len())?;
         }
         let mut loaded = Loaded {
             scene,

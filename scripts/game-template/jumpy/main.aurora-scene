@@ -1,0 +1,682 @@
+{
+  "version": 1,
+  "nodes": [
+    {
+      "name": "Canvas"
+    },
+    {
+      "name": "Night sky",
+      "parent": 0,
+      "transform": {
+        "position": [
+          0,
+          0
+        ],
+        "rotation": 0,
+        "scale": [
+          1,
+          1
+        ]
+      },
+      "sprite": {
+        "png": "assets/sky.png",
+        "size": [
+          640,
+          384
+        ]
+      }
+    },
+    {
+      "name": "Ground 1",
+      "parent": 0,
+      "transform": {
+        "position": [
+          -320,
+          -184
+        ],
+        "rotation": 0,
+        "scale": [
+          1,
+          1
+        ]
+      },
+      "sprite": {
+        "png": "assets/ground.png",
+        "size": [
+          256,
+          24
+        ]
+      },
+      "appearance": {
+        "anchor": [
+          0,
+          0.5
+        ],
+        "layer": 1
+      }
+    },
+    {
+      "name": "Ground 2",
+      "parent": 0,
+      "transform": {
+        "position": [
+          -64,
+          -184
+        ],
+        "rotation": 0,
+        "scale": [
+          1,
+          1
+        ]
+      },
+      "sprite": {
+        "png": "assets/ground.png",
+        "size": [
+          256,
+          24
+        ]
+      },
+      "appearance": {
+        "anchor": [
+          0,
+          0.5
+        ],
+        "layer": 1
+      }
+    },
+    {
+      "name": "Ground 3",
+      "parent": 0,
+      "transform": {
+        "position": [
+          192,
+          -184
+        ],
+        "rotation": 0,
+        "scale": [
+          1,
+          1
+        ]
+      },
+      "sprite": {
+        "png": "assets/ground.png",
+        "size": [
+          256,
+          24
+        ]
+      },
+      "appearance": {
+        "anchor": [
+          0,
+          0.5
+        ],
+        "layer": 1
+      }
+    },
+    {
+      "name": "Jumpy",
+      "parent": 0,
+      "transform": {
+        "position": [
+          -145,
+          0
+        ],
+        "rotation": 0,
+        "scale": [
+          1,
+          1
+        ]
+      },
+      "sprite": {
+        "png": "assets/jumpy.png",
+        "size": [
+          36,
+          30
+        ]
+      },
+      "scripts": [
+        {
+          "path": "assets/Jumpy.ts",
+          "component": "Jumpy",
+          "values": {
+            "birdNode": {
+              "type": "node",
+              "value": 5
+            },
+            "startScreen": {
+              "type": "node",
+              "value": 7
+            },
+            "endScreen": {
+              "type": "node",
+              "value": 8
+            },
+            "firstGround": {
+              "type": "node",
+              "value": 2
+            },
+            "scoreDigits": {
+              "type": "node",
+              "value": 9
+            },
+            "bestDigits": {
+              "type": "node",
+              "value": 12
+            }
+          }
+        }
+      ],
+      "appearance": {
+        "layer": 2
+      }
+    },
+    {
+      "name": "Wing",
+      "parent": 5,
+      "transform": {
+        "position": [
+          -6,
+          -3
+        ],
+        "rotation": 0,
+        "scale": [
+          1,
+          1
+        ]
+      },
+      "sprite": {
+        "png": "assets/wing.png",
+        "size": [
+          15,
+          11
+        ]
+      },
+      "appearance": {
+        "layer": 2
+      }
+    },
+    {
+      "name": "Start screen",
+      "parent": 0,
+      "transform": {
+        "position": [
+          0,
+          48
+        ],
+        "rotation": 0,
+        "scale": [
+          1,
+          1
+        ]
+      },
+      "sprite": {
+        "png": "assets/ready.png",
+        "size": [
+          352,
+          100
+        ]
+      },
+      "appearance": {
+        "layer": 20
+      }
+    },
+    {
+      "name": "Game over screen",
+      "parent": 0,
+      "transform": {
+        "position": [
+          0,
+          48
+        ],
+        "rotation": 0,
+        "scale": [
+          1,
+          1
+        ]
+      },
+      "sprite": {
+        "png": "assets/over.png",
+        "size": [
+          352,
+          100
+        ]
+      },
+      "appearance": {
+        "active": false,
+        "layer": 20
+      }
+    },
+    {
+      "name": "Score digit 1",
+      "parent": 0,
+      "transform": {
+        "position": [
+          -250,
+          142
+        ],
+        "rotation": 0,
+        "scale": [
+          1,
+          1
+        ]
+      },
+      "sprite": {
+        "png": "assets/0.png",
+        "size": [
+          23,
+          28
+        ]
+      },
+      "appearance": {
+        "layer": 10
+      }
+    },
+    {
+      "name": "Score digit 2",
+      "parent": 0,
+      "transform": {
+        "position": [
+          -227,
+          142
+        ],
+        "rotation": 0,
+        "scale": [
+          1,
+          1
+        ]
+      },
+      "sprite": {
+        "png": "assets/0.png",
+        "size": [
+          23,
+          28
+        ]
+      },
+      "appearance": {
+        "layer": 10
+      }
+    },
+    {
+      "name": "Score digit 3",
+      "parent": 0,
+      "transform": {
+        "position": [
+          -204,
+          142
+        ],
+        "rotation": 0,
+        "scale": [
+          1,
+          1
+        ]
+      },
+      "sprite": {
+        "png": "assets/0.png",
+        "size": [
+          23,
+          28
+        ]
+      },
+      "appearance": {
+        "layer": 10
+      }
+    },
+    {
+      "name": "Best digit 1",
+      "parent": 0,
+      "transform": {
+        "position": [
+          203,
+          142
+        ],
+        "rotation": 0,
+        "scale": [
+          1,
+          1
+        ]
+      },
+      "sprite": {
+        "png": "assets/0.png",
+        "size": [
+          23,
+          28
+        ]
+      },
+      "appearance": {
+        "layer": 10
+      }
+    },
+    {
+      "name": "Best digit 2",
+      "parent": 0,
+      "transform": {
+        "position": [
+          226,
+          142
+        ],
+        "rotation": 0,
+        "scale": [
+          1,
+          1
+        ]
+      },
+      "sprite": {
+        "png": "assets/0.png",
+        "size": [
+          23,
+          28
+        ]
+      },
+      "appearance": {
+        "layer": 10
+      }
+    },
+    {
+      "name": "Best digit 3",
+      "parent": 0,
+      "transform": {
+        "position": [
+          249,
+          142
+        ],
+        "rotation": 0,
+        "scale": [
+          1,
+          1
+        ]
+      },
+      "sprite": {
+        "png": "assets/0.png",
+        "size": [
+          23,
+          28
+        ]
+      },
+      "appearance": {
+        "layer": 10
+      }
+    },
+    {
+      "name": "Score label",
+      "parent": 0,
+      "transform": {
+        "position": [
+          -227,
+          169
+        ],
+        "rotation": 0,
+        "scale": [
+          1,
+          1
+        ]
+      },
+      "sprite": {
+        "png": "assets/score.png",
+        "size": [
+          75,
+          18
+        ]
+      },
+      "appearance": {
+        "layer": 10
+      }
+    },
+    {
+      "name": "Best label",
+      "parent": 0,
+      "transform": {
+        "position": [
+          226,
+          169
+        ],
+        "rotation": 0,
+        "scale": [
+          1,
+          1
+        ]
+      },
+      "sprite": {
+        "png": "assets/best.png",
+        "size": [
+          75,
+          18
+        ]
+      },
+      "appearance": {
+        "layer": 10
+      }
+    },
+    {
+      "name": "Ground sensor",
+      "parent": 0,
+      "transform": {
+        "position": [
+          0,
+          -192
+        ],
+        "rotation": 0,
+        "scale": [
+          1,
+          1
+        ]
+      }
+    }
+  ],
+  "instances": [
+    {
+      "prefab": "pillars.aurora-prefab",
+      "parent": 0
+    },
+    {
+      "prefab": "pillars.aurora-prefab",
+      "parent": 0
+    },
+    {
+      "prefab": "pillars.aurora-prefab",
+      "parent": 0
+    },
+    {
+      "prefab": "pillars.aurora-prefab",
+      "parent": 0
+    }
+  ],
+  "animations": [
+    {
+      "name": "Wingbeat",
+      "sample_rate": 60,
+      "duration": 10,
+      "speed": 1,
+      "wrap": "ping_pong",
+      "tracks": [
+        {
+          "node": 6,
+          "property": "scale_y",
+          "interpolation": "cubic",
+          "keys": [
+            {
+              "frame": 0,
+              "value": 1
+            },
+            {
+              "frame": 10,
+              "value": 0.36
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "autoplay": 0,
+  "gameplay": {
+    "sensors": [
+      {
+        "node": 5,
+        "size": [
+          24,
+          22
+        ]
+      },
+      {
+        "node": 17,
+        "size": [
+          640,
+          26
+        ]
+      },
+      {
+        "node": 19,
+        "size": [
+          52,
+          230
+        ]
+      },
+      {
+        "node": 20,
+        "size": [
+          52,
+          230
+        ]
+      },
+      {
+        "node": 22,
+        "size": [
+          52,
+          230
+        ]
+      },
+      {
+        "node": 23,
+        "size": [
+          52,
+          230
+        ]
+      },
+      {
+        "node": 25,
+        "size": [
+          52,
+          230
+        ]
+      },
+      {
+        "node": 26,
+        "size": [
+          52,
+          230
+        ]
+      },
+      {
+        "node": 28,
+        "size": [
+          52,
+          230
+        ]
+      },
+      {
+        "node": 29,
+        "size": [
+          52,
+          230
+        ]
+      }
+    ],
+    "frames": [
+      {
+        "node": 9,
+        "png": [
+          "assets/0.png",
+          "assets/1.png",
+          "assets/2.png",
+          "assets/3.png",
+          "assets/4.png",
+          "assets/5.png",
+          "assets/6.png",
+          "assets/7.png",
+          "assets/8.png",
+          "assets/9.png"
+        ]
+      },
+      {
+        "node": 10,
+        "png": [
+          "assets/0.png",
+          "assets/1.png",
+          "assets/2.png",
+          "assets/3.png",
+          "assets/4.png",
+          "assets/5.png",
+          "assets/6.png",
+          "assets/7.png",
+          "assets/8.png",
+          "assets/9.png"
+        ]
+      },
+      {
+        "node": 11,
+        "png": [
+          "assets/0.png",
+          "assets/1.png",
+          "assets/2.png",
+          "assets/3.png",
+          "assets/4.png",
+          "assets/5.png",
+          "assets/6.png",
+          "assets/7.png",
+          "assets/8.png",
+          "assets/9.png"
+        ]
+      },
+      {
+        "node": 12,
+        "png": [
+          "assets/0.png",
+          "assets/1.png",
+          "assets/2.png",
+          "assets/3.png",
+          "assets/4.png",
+          "assets/5.png",
+          "assets/6.png",
+          "assets/7.png",
+          "assets/8.png",
+          "assets/9.png"
+        ]
+      },
+      {
+        "node": 13,
+        "png": [
+          "assets/0.png",
+          "assets/1.png",
+          "assets/2.png",
+          "assets/3.png",
+          "assets/4.png",
+          "assets/5.png",
+          "assets/6.png",
+          "assets/7.png",
+          "assets/8.png",
+          "assets/9.png"
+        ]
+      },
+      {
+        "node": 14,
+        "png": [
+          "assets/0.png",
+          "assets/1.png",
+          "assets/2.png",
+          "assets/3.png",
+          "assets/4.png",
+          "assets/5.png",
+          "assets/6.png",
+          "assets/7.png",
+          "assets/8.png",
+          "assets/9.png"
+        ]
+      }
+    ],
+    "sounds": [
+      "assets/swoosh.wav",
+      "assets/point.wav",
+      "assets/hit.wav",
+      "assets/die.wav"
+    ]
+  }
+}

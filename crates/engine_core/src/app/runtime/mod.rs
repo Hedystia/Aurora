@@ -1,5 +1,7 @@
 //! Shared player entry point for built-in demos and authored scenes.
 
+mod gameplay;
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -39,8 +41,13 @@ impl Runtime {
                 silent,
             )?)))
         } else {
+            let mut director = Director::new(scenario.scenes.to_vec(), cache)?;
+            let gameplay = gameplay::Gameplay::load(&mut director, silent, scenario.profile)?;
             Ok(Self::Authored(Box::new(Authored {
-                director: Director::new(scenario.scenes.to_vec(), cache)?,
+                director,
+                gameplay,
+                profile: scenario.profile.map(Path::to_path_buf),
+                silent,
                 script: None,
                 pending_scene: None,
                 script_node: scenario.script_node,
@@ -53,7 +60,7 @@ impl Runtime {
             Self::Demo(demo) => demo.attach_script(script),
             Self::Authored(game) => {
                 game.script = script.map(Session::spawn).transpose()?;
-                game.dispatch(Kind::Start, 0)
+                game.start()
             }
         }
     }
@@ -135,50 +142,118 @@ impl Runtime {
 
 pub(super) struct Authored {
     director: Director,
+    gameplay: Option<gameplay::Gameplay>,
+    profile: Option<PathBuf>,
+    silent: bool,
     script: Option<Session>,
     pending_scene: Option<usize>,
     script_node: usize,
 }
 
 impl Authored {
-    fn dispatch(&mut self, kind: Kind, detail: u64) -> Result<()> {
-        let Some(script) = &mut self.script else {
+    fn start(&mut self) -> Result<()> {
+        if let Some(gameplay) = &self.gameplay {
+            self.dispatch(Kind::RestoreScore, u64::from(gameplay.best))?;
+        }
+        self.dispatch(Kind::Start, 0)
+    }
+
+    fn dispatch(&mut self, mut kind: Kind, mut detail: u64) -> Result<()> {
+        if self.script.is_none() {
             return Ok(());
-        };
+        }
         let node = self
             .director
             .node(self.script_node)
             .context("The script needs a bound scene node")?;
-        let transform = self.director.scene().transform(node)?;
-        match script.exchange(kind, node.0, transform.position, detail)? {
-            Some(Command::SetPosition(position)) => self.director.scene_mut().set_transform(
-                node,
-                crate::scene::Transform2D {
-                    position,
-                    ..transform
-                },
-            )?,
-            Some(Command::Pause) => self.director.pause(),
-            Some(Command::Resume) => self.director.resume(),
-            Some(Command::ChangeScene(index)) => {
+        for _ in 0..=128 {
+            let transform = self.director.scene().transform(node)?;
+            let command = self
+                .script
+                .as_mut()
+                .context("Script disconnected")?
+                .exchange(kind, node.0, transform.position, detail)?;
+            let Some(command) = command else {
+                return Ok(());
+            };
+            if !self.apply(node, command)? {
+                return Ok(());
+            }
+            kind = Kind::FlushCommands;
+            detail = 0;
+        }
+        anyhow::bail!("Script scene command limit exceeded")
+    }
+
+    fn target(&self, index: usize) -> Result<crate::ecs::EntityId> {
+        self.director.node(index).context("Unknown authored node")
+    }
+
+    fn require_gameplay(&mut self) -> Result<&mut gameplay::Gameplay> {
+        self.gameplay
+            .as_mut()
+            .context("Scene has no gameplay resources")
+    }
+
+    fn apply(&mut self, node: crate::ecs::EntityId, command: Command) -> Result<bool> {
+        match command {
+            Command::SetPosition(position) => {
+                self.move_node(node, position)?;
+            }
+            Command::Pause => self.director.pause(),
+            Command::Resume => self.director.resume(),
+            Command::ChangeScene(index) => {
                 anyhow::ensure!(
                     index < self.director.scene_count(),
                     "Unknown scene index {index}"
                 );
                 self.pending_scene = Some(index);
             }
-            Some(Command::SetLinearVelocity(_) | Command::PlayOneShot(_)) => {
-                anyhow::bail!("The bound authored node has no physics body or audio source");
+            Command::PlayOneShot(index) => self.require_gameplay()?.sound(index)?,
+            Command::SetLinearVelocity(_) => {
+                anyhow::bail!("The bound authored node has no physics body")
             }
-            None => {}
+            Command::MoveNode(index, position) => {
+                self.move_node(self.target(index)?, position)?;
+                return Ok(true);
+            }
+            Command::ShowNode(index, visible) => {
+                let target = self.target(index)?;
+                self.director.scene_mut().set_visible(target, visible)?;
+                return Ok(true);
+            }
+            Command::SelectFrame(index, frame) => {
+                let target = self.target(index)?;
+                self.gameplay
+                    .as_ref()
+                    .context("Scene has no gameplay resources")?
+                    .select_frame(&mut self.director, target, frame)?;
+                return Ok(true);
+            }
+            Command::QueueSound(index) => {
+                self.require_gameplay()?.sound(index)?;
+                return Ok(true);
+            }
+            Command::RecordScore(score) => {
+                self.require_gameplay()?.record(score)?;
+                return Ok(true);
+            }
         }
-        Ok(())
+        Ok(false)
+    }
+
+    fn move_node(&mut self, node: crate::ecs::EntityId, position: [f32; 2]) -> Result<()> {
+        let mut transform = self.director.scene().transform(node)?;
+        transform.position = position;
+        self.director.scene_mut().set_transform(node, transform)
     }
 
     fn tick(&mut self, input: &[InputEvent]) -> Result<()> {
         if let Some(index) = self.pending_scene.take() {
             self.director.change_scene(index)?;
-            self.dispatch(Kind::Start, 0)?;
+            self.gameplay =
+                gameplay::Gameplay::load(&mut self.director, self.silent, self.profile.as_deref())?;
+            self.start()?;
         }
         for event in input {
             match event {
@@ -196,6 +271,15 @@ impl Authored {
         for code in self.director.step()? {
             self.dispatch(Kind::AnimationEvent, u64::from(code))?;
         }
-        self.dispatch(Kind::Update, 0)
+        self.dispatch(Kind::Update, 0)?;
+        if let Some(gameplay) = &mut self.gameplay {
+            gameplay.step_audio();
+            if let Some(target) = self.director.node(self.script_node) {
+                for (kind, other) in gameplay.contacts(&self.director, target)? {
+                    self.dispatch(kind, other.value())?;
+                }
+            }
+        }
+        Ok(())
     }
 }

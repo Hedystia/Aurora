@@ -1,0 +1,5 @@
+---
+source: crates/player/tests/golden/mod.rs
+expression: digest
+---
+64e4400479526792aa932d5df8a8a49a83f4f69e716d62a5b960091c6e04b165

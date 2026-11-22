@@ -80,6 +80,9 @@ pub struct SpriteAppearance {
     pub color: [u8; 4],
     /// Additional alpha multiplier.
     pub opacity: u8,
+    /// Painter's order. Equal layers retain traversal order.
+    #[serde(skip_serializing_if = "zero_layer")]
+    pub layer: i32,
 }
 
 impl Default for SpriteAppearance {
@@ -90,8 +93,13 @@ impl Default for SpriteAppearance {
             skew: [0.0; 2],
             color: [255; 4],
             opacity: 255,
+            layer: 0,
         }
     }
+}
+
+fn zero_layer(layer: &i32) -> bool {
+    *layer == 0
 }
 
 impl SpriteAppearance {
@@ -235,6 +243,26 @@ impl Scene {
             Vec::new()
         };
         Ok((id, events))
+    }
+
+    /// Returns a node's sprite if registered.
+    pub fn sprite(&self, id: EntityId) -> Result<Option<Sprite>> {
+        Ok(self
+            .world
+            .get::<&Sprite>(self.entity(id)?)
+            .ok()
+            .as_deref()
+            .copied())
+    }
+
+    /// Changes visibility while preserving the other visual overrides.
+    pub fn set_visible(&mut self, id: EntityId, visible: bool) -> Result<()> {
+        let entity = self.entity(id)?;
+        let mut node = self.world.get::<&mut Node>(entity)?;
+        let mut appearance = node.appearance.unwrap_or_default();
+        appearance.active = visible;
+        node.appearance = Some(appearance);
+        Ok(())
     }
 
     /// Sets or replaces a node's sprite.

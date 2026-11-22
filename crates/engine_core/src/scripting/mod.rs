@@ -9,6 +9,11 @@ pub(crate) enum Command {
     Pause,
     Resume,
     ChangeScene(usize),
+    MoveNode(usize, [f32; 2]),
+    ShowNode(usize, bool),
+    SelectFrame(usize, usize),
+    QueueSound(usize),
+    RecordScore(u32),
 }
 
 #[cfg(target_os = "linux")]

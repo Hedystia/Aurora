@@ -41,3 +41,9 @@
 - The editor edits the versioned scene document. Tree operations remap indexed bindings, and both the editor viewport and player resolve the same scene resources.
 - The preview owns a private frame directory and runs the normal player simulation in a separate process. A shared GPU pass renders windowed and offscreen frames. Atomic RGBA publication prevents partial frames from reaching egui. Preview commands travel downstream through the child input pipe.
 - Script builds run off the UI thread and reuse static SDK metadata. A successful rebuild replaces the running preview. The dock tree is serialized per document directory.
+
+## M6 authored game
+
+- All sample game rules live in TypeScript. The generic authored runtime resolves sensor, sprite-frame and audio banks and applies bounded script command batches. The scene's contact areas use transformed world-space AABBs. The M3 Rapier sample remains a separate path.
+- The TypeScript NodePool recycles a fixed set of authored prefab instances. Returning a slot hides its subtree and removes its colliders from authored sensor queries. This keeps authored indices and entity state deterministic through wraparound and restart.
+- Profile storage is opt-in for standalone runs. Best-score writes are locked and atomically replaced. The golden run uses no profile and hashes only the player's serialized state, after checking that the trace both scores and ends the run.

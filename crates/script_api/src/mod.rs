@@ -6,7 +6,7 @@ pub mod transport;
 use bincode::{Decode, Encode};
 
 /// Current script protocol version.
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 /// Fixed byte count of an encoded envelope.
 pub const ENVELOPE_BYTES: usize = 48;
 /// Size of the protocol, sequence and kind prefix.
@@ -47,6 +47,20 @@ pub enum Kind {
     Resume,
     /// Replace the authored scene with the registered index in detail.
     ChangeScene,
+    /// Requests the next queued scene mutation or Ack.
+    FlushCommands,
+    /// Updates an authored node position, selected by detail.
+    MoveNode,
+    /// Changes the authored node's visibility, selected by detail.
+    ShowNode,
+    /// Selects a registered sprite frame for an authored node.
+    SelectFrame,
+    /// Plays a registered scene sound as a queued mutation.
+    QueueSound,
+    /// Updates the scene's best score.
+    RecordScore,
+    /// Delivers the current best score.
+    RestoreScore,
 }
 
 /// Wire message encoded with bincode 2 fixed-width, little-endian configuration.

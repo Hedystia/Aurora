@@ -45,3 +45,7 @@ Rapier 2D activates at `0.35.3` with `enhanced-determinism`. This release does n
 ## M5 editor dependencies
 
 Notify activates the existing `8.1.0` workspace pin. Egui Dock stays at `0.20.1` and enables its Serde feature for saved layouts. The editor links the existing engine core and shared metadata parser.
+
+## M6 golden snapshot
+
+Insta activates the existing `1.43.2` workspace pin. The golden runner uses existing SHA-256 and scriptc versions.

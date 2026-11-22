@@ -120,7 +120,12 @@ impl SpriteBatch {
     ) -> Result<()> {
         self.vertices.clear();
         self.batches.clear();
-        for node in nodes.iter().filter(|node| node.visible) {
+        let mut ordered: Vec<_> = nodes
+            .iter()
+            .filter(|node| node.visible && node.sprite.is_some())
+            .collect();
+        ordered.sort_by_key(|node| node.appearance.map_or(0, |appearance| appearance.layer));
+        for node in ordered {
             let Some(sprite) = &node.sprite else { continue };
             let id = sprite.texture;
             if let Entry::Vacant(entry) = self.textures.entry(id) {

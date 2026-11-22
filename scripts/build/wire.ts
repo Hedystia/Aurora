@@ -1,4 +1,4 @@
-import { frameBytes, protocol, kindStart, kindUpdate, kindFixedUpdate, kindAck, kindSetPosition, kindCollisionEnter, kindCollisionExit, kindKeyDown, kindTouchStart, kindSetLinearVelocity, kindPlayOneShot, kindAnimationEvent, kindPause, kindResume, kindChangeScene } from "../../.aurora/scripts/metadata/protocol.mts";
+import { frameBytes, protocol, kindStart, kindUpdate, kindFixedUpdate, kindAck, kindSetPosition, kindCollisionEnter, kindCollisionExit, kindKeyDown, kindTouchStart, kindSetLinearVelocity, kindPlayOneShot, kindAnimationEvent, kindPause, kindResume, kindChangeScene, kindFlushCommands, kindMoveNode, kindShowNode, kindSelectFrame, kindQueueSound, kindRecordScore, kindRestoreScore } from "../../.aurora/scripts/metadata/protocol.mts";
 import { Component, Collider2D, NodeHandle } from "../aurora-cc/index.ts";
 
 // The record layout is bincode v2 fixed-width little-endian (docs/PROTOCOL.md).
@@ -28,7 +28,11 @@ export function run(
     const director = component.director;
     director.action = 0;
     const kind = view.getUint32(12, true);
-    if (kind === kindStart) component.onStart();
+    const scene = component.scene;
+    if (kind !== kindFlushCommands) scene.clear();
+    if (kind === kindFlushCommands) { /* Drain the existing queue. */ }
+    else if (kind === kindRestoreScore) component.onBestScore(view.getUint32(40, true));
+    else if (kind === kindStart) component.onStart();
     else if (kind === kindUpdate) component.onUpdate(fixedDt);
     else if (kind === kindFixedUpdate) component.onFixedUpdate(fixedDt);
     else if (kind === kindKeyDown) component.onKeyDown(view.getUint32(40, true));
@@ -48,6 +52,22 @@ export function run(
     else if (director.action === 1) response = kindPause;
     else if (director.action === 2) response = kindResume;
     else if (director.action === 3) response = kindChangeScene;
+    if (scene.cursor < scene.edits.length) {
+      if (commands !== 0) throw new Error("Mixing queued and immediate commands is unsupported");
+      const edit = scene.edits[scene.cursor++];
+      let queued = kindMoveNode;
+      if (edit.kind === 1) queued = kindShowNode;
+      else if (edit.kind === 2) queued = kindSelectFrame;
+      else if (edit.kind === 3) queued = kindQueueSound;
+      else if (edit.kind === 4) queued = kindRecordScore;
+      view.setUint32(12, queued, true);
+      view.setUint32(40, edit.target, true);
+      view.setUint32(44, 0, true);
+      view.setFloat64(24, edit.x, true);
+      view.setFloat64(32, edit.y, true);
+      if (reply(bytes) !== 1) throw new Error("Aurora script reply failed");
+      continue;
+    }
     view.setUint32(12, response, true);
     view.setUint32(40, response === kindChangeScene ? director.scene : audio.pending >= 0 ? audio.pending : 0, true);
     view.setUint32(44, 0, true);

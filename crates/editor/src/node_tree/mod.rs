@@ -136,8 +136,21 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
                     .animations
                     .iter()
                     .any(|clip| clip.tracks.iter().any(|track| track.node >= inline));
+                let has_instance_bindings =
+                    editor
+                        .project
+                        .document
+                        .gameplay
+                        .as_ref()
+                        .is_some_and(|game| {
+                            game.sensors.iter().any(|sensor| sensor.node >= inline)
+                                || game.frames.iter().any(|frame| frame.node >= inline)
+                        });
                 if ui
-                    .add_enabled(!has_instance_tracks, egui::Button::new(strings::REMOVE))
+                    .add_enabled(
+                        !has_instance_tracks && !has_instance_bindings,
+                        egui::Button::new(strings::REMOVE),
+                    )
                     .on_disabled_hover_text(strings::INSTANCE_TRACKS)
                     .clicked()
                 {

@@ -29,11 +29,25 @@ export class Director {
   resume(): void;
   changeScene(index: number): void;
 }
+export class SceneCommands {
+  move(node: number, x: number, y: number): void;
+  show(node: number, visible: boolean): void;
+  frame(node: number, frame: number): void;
+  sound(clip: number): void;
+  bestScore(score: number): void;
+}
+export class NodePool {
+  constructor(slots: number[]);
+  get(): number;
+  reset(scene: SceneCommands, slot: number, x: number, y: number): void;
+  put(scene: SceneCommands, slot: number): void;
+}
 export class Component {
   readonly node: Node;
   readonly audio: AudioSource;
   readonly body: RigidBody2D;
   readonly director: Director;
+  readonly scene: SceneCommands;
   onStart(): void;
   onUpdate(dt: number): void;
   onFixedUpdate(dt: number): void;
@@ -42,4 +56,5 @@ export class Component {
   onBeginContact(other: Collider2D): void;
   onEndContact(other: Collider2D): void;
   onAnimationEvent(code: number): void;
+  onBestScore(score: number): void;
 }

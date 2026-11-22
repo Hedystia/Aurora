@@ -41,6 +41,13 @@ fn main() -> Result<()> {
         script_api::Kind::Pause,
         script_api::Kind::Resume,
         script_api::Kind::ChangeScene,
+        script_api::Kind::FlushCommands,
+        script_api::Kind::MoveNode,
+        script_api::Kind::ShowNode,
+        script_api::Kind::SelectFrame,
+        script_api::Kind::QueueSound,
+        script_api::Kind::RecordScore,
+        script_api::Kind::RestoreScore,
     ] {
         use std::fmt::Write;
         writeln!(protocol, "export const kind{kind:?} = {};", kind as u32)?;

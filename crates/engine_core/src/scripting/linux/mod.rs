@@ -133,6 +133,30 @@ impl Session {
             Kind::Pause => Ok(Some(ScriptCommand::Pause)),
             Kind::Resume => Ok(Some(ScriptCommand::Resume)),
             Kind::ChangeScene => Ok(Some(ScriptCommand::ChangeScene(reply.detail.try_into()?))),
+            Kind::MoveNode => {
+                let position = [reply.x as f32, reply.y as f32];
+                ensure!(
+                    position.iter().all(|value| value.is_finite()),
+                    "Invalid node position"
+                );
+                Ok(Some(ScriptCommand::MoveNode(
+                    reply.detail.try_into()?,
+                    position,
+                )))
+            }
+            Kind::ShowNode if reply.x == 0.0 || reply.x == 1.0 => Ok(Some(
+                ScriptCommand::ShowNode(reply.detail.try_into()?, reply.x == 1.0),
+            )),
+            Kind::SelectFrame
+                if (0.0..=f64::from(u16::MAX)).contains(&reply.x) && reply.x.fract() == 0.0 =>
+            {
+                Ok(Some(ScriptCommand::SelectFrame(
+                    reply.detail.try_into()?,
+                    reply.x as usize,
+                )))
+            }
+            Kind::QueueSound => Ok(Some(ScriptCommand::QueueSound(reply.detail.try_into()?))),
+            Kind::RecordScore => Ok(Some(ScriptCommand::RecordScore(reply.detail.try_into()?))),
             _ => anyhow::bail!("Unexpected script reply kind {:?}", reply.kind),
         }
     }

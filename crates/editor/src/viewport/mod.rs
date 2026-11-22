@@ -156,7 +156,9 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
     );
     let project = |p: [f32; 2]| center + vec2(p[0], -p[1]) * scale;
     let mut picked = None;
-    for state in &viewport.nodes {
+    let mut ordered: Vec<_> = viewport.nodes.iter().collect();
+    ordered.sort_by_key(|node| node.appearance.map_or(0, |appearance| appearance.layer));
+    for state in ordered {
         let index = state.id.value() as usize;
         if !state.visible {
             continue;

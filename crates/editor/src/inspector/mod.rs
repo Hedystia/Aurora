@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use codegen::PropertyType;
 use egui::{DragValue, Ui};
-use engine_core::save::PropertyValue;
+use engine_core::save::{FrameFile, PropertyValue, SensorFile};
 
 use crate::{Editor, node_tree::Drag, project::extension, strings, theme};
 
@@ -81,6 +81,9 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
                 visual_changed |= ui
                     .add(DragValue::new(&mut appearance.opacity).prefix(strings::OPACITY))
                     .changed();
+                visual_changed |= ui
+                    .add(DragValue::new(&mut appearance.layer).prefix(strings::DRAW_ORDER))
+                    .changed();
                 if visual_changed {
                     node.appearance = Some(appearance);
                     changed = true;
@@ -117,8 +120,12 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         }
         if remove_sprite {
             editor.project.document.nodes[selected].sprite = None;
+            if let Some(data) = &mut editor.project.document.gameplay {
+                data.frames.retain(|bank| bank.node != selected);
+            }
             changed = true;
         }
+        changed |= gameplay(ui, editor, selected);
         let mut remove_script = None;
         for (index, script) in editor.project.document.nodes[selected]
             .scripts
@@ -158,6 +165,143 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
     if changed {
         editor.project.changed();
     }
+}
+
+fn gameplay(ui: &mut Ui, editor: &mut Editor, selected: usize) -> bool {
+    if editor.project.prefab {
+        return false;
+    }
+    let document = &mut editor.project.document;
+    let node = &document.nodes[selected];
+    let root = &editor.project.root;
+    let mut changed = false;
+    ui.collapsing(strings::GAMEPLAY, |ui| {
+        let mut resource = document.gameplay.take();
+        let mut sensor = resource
+            .as_ref()
+            .is_some_and(|data| data.sensors.iter().any(|sensor| sensor.node == selected));
+        if ui.checkbox(&mut sensor, strings::CONTACT_SENSOR).changed() {
+            let data = resource.get_or_insert_with(Default::default);
+            if sensor {
+                let size = node.sprite.as_ref().map_or([24.0; 2], |sprite| sprite.size);
+                data.sensors.push(SensorFile {
+                    node: selected,
+                    size,
+                });
+            } else {
+                data.sensors.retain(|area| area.node != selected);
+            }
+            changed = true;
+        }
+        if let Some(sensor) = resource.as_mut().and_then(|data| {
+            data.sensors
+                .iter_mut()
+                .find(|sensor| sensor.node == selected)
+        }) && pair(ui, strings::SENSOR_SIZE, &mut sensor.size)
+        {
+            sensor.size = sensor.size.map(|side| side.max(1.0));
+            changed = true;
+        }
+        if node.sprite.is_some() {
+            ui.label(strings::SPRITE_FRAMES);
+            if let Some(path) = asset_drop(ui, strings::ADD_FRAME, &["png"], root) {
+                let data = resource.get_or_insert_with(Default::default);
+                if let Some(bank) = data.frames.iter_mut().find(|bank| bank.node == selected) {
+                    if bank.png.len() < 256 {
+                        bank.png.push(path);
+                        changed = true;
+                    }
+                } else {
+                    data.frames.push(FrameFile {
+                        node: selected,
+                        png: vec![path],
+                    });
+                    changed = true;
+                }
+            }
+            if let Some(data) = &mut resource {
+                if let Some(bank) = data.frames.iter_mut().find(|bank| bank.node == selected) {
+                    changed |= entry_list(ui, &mut bank.png);
+                }
+                data.frames.retain(|bank| !bank.png.is_empty());
+            }
+        }
+        if node.parent.is_none() {
+            ui.label(strings::ONE_SHOT_BANK);
+            if let Some(path) = asset_drop(ui, strings::ADD_SOUND, &["wav", "mp3"], root) {
+                let data = resource.get_or_insert_with(Default::default);
+                if data.sounds.len() < 128 {
+                    data.sounds.push(path);
+                    changed = true;
+                }
+            }
+            if let Some(data) = &mut resource {
+                changed |= entry_list(ui, &mut data.sounds);
+            }
+        }
+        document.gameplay = if changed {
+            resource.filter(|data| {
+                !data.frames.is_empty() || !data.sensors.is_empty() || !data.sounds.is_empty()
+            })
+        } else {
+            resource
+        };
+    });
+    changed
+}
+
+fn asset_drop(
+    ui: &mut Ui,
+    label: &str,
+    extensions: &[&str],
+    root: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let response = ui.button(label);
+    let valid = |payload: &Drag| match payload {
+        Drag::Asset(path) => extensions.contains(&extension(path)),
+        _ => false,
+    };
+    if let Some(payload) = response.dnd_hover_payload::<Drag>() {
+        let tint = if valid(payload.as_ref()) {
+            theme::ACCEPT
+        } else {
+            theme::REJECT
+        };
+        ui.painter().rect_stroke(
+            response.rect,
+            theme::ROUND,
+            (theme::OUTLINE, tint),
+            egui::StrokeKind::Inside,
+        );
+    }
+    let payload = response.dnd_release_payload::<Drag>()?;
+    match payload.as_ref() {
+        Drag::Asset(path) if valid(payload.as_ref()) => {
+            Some(path.strip_prefix(root).unwrap_or(path).to_path_buf())
+        }
+        _ => None,
+    }
+}
+
+fn entry_list(ui: &mut Ui, paths: &mut Vec<std::path::PathBuf>) -> bool {
+    let mut remove = None;
+    for (index, path) in paths.iter().enumerate() {
+        ui.horizontal(|ui| {
+            ui.label(format!("{index} · {}", path.display()));
+            if ui
+                .small_button(strings::CLEAR)
+                .on_hover_text(strings::REMOVE)
+                .clicked()
+            {
+                remove = Some(index);
+            }
+        });
+    }
+    if let Some(index) = remove {
+        paths.remove(index);
+        return true;
+    }
+    false
 }
 
 fn fields(

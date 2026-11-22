@@ -33,6 +33,8 @@ pub struct Scenario<'a> {
     pub scenes: &'a [PathBuf],
     /// Inline node index bound to the script in an authored scene.
     pub script_node: usize,
+    /// Optional best-score file for an authored game.
+    pub profile: Option<&'a Path>,
     /// Input paired with the zero-based tick at which it is delivered.
     pub input: &'a [(u64, InputEvent)],
 }

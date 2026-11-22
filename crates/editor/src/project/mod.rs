@@ -105,6 +105,7 @@ impl Project {
                 track.node += 1;
             }
         }
+        self.shift_gameplay(id, 1);
         self.selected = Some(id);
         self.changed();
         id
@@ -175,6 +176,7 @@ impl Project {
                 }
             }
         }
+        self.shift_gameplay(original_len, added);
         self.selected = Some(original_len);
         self.changed();
         Ok(())
@@ -185,6 +187,21 @@ impl Project {
         ensure!(!(self.prefab && id == 0), "Cannot remove the prefab root");
         self.reorder(&self.subtree(id));
         Ok(())
+    }
+
+    fn shift_gameplay(&mut self, inline: usize, added: usize) {
+        if let Some(gameplay) = &mut self.document.gameplay {
+            for index in gameplay
+                .sensors
+                .iter_mut()
+                .map(|sensor| &mut sensor.node)
+                .chain(gameplay.frames.iter_mut().map(|frame| &mut frame.node))
+            {
+                if *index >= inline {
+                    *index += added;
+                }
+            }
+        }
     }
 
     fn subtree(&self, id: usize) -> BTreeSet<usize> {
@@ -250,6 +267,30 @@ impl Project {
                 } else {
                     return false;
                 }
+                true
+            });
+        }
+        if let Some(gameplay) = &mut self.document.gameplay {
+            let new_count = self.document.nodes.len();
+            let remap = |index: usize| {
+                if index >= original {
+                    Some(new_count + index - original)
+                } else {
+                    map[index]
+                }
+            };
+            gameplay.sensors.retain_mut(|sensor| {
+                let Some(node) = remap(sensor.node) else {
+                    return false;
+                };
+                sensor.node = node;
+                true
+            });
+            gameplay.frames.retain_mut(|frame| {
+                let Some(node) = remap(frame.node) else {
+                    return false;
+                };
+                frame.node = node;
                 true
             });
         }
@@ -379,6 +420,7 @@ fn empty() -> SceneFile {
         instances: Vec::new(),
         animations: Vec::new(),
         autoplay: None,
+        gameplay: None,
     }
 }
 

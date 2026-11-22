@@ -58,6 +58,8 @@ jobs:
           target/debug/aurora-player "${scenes[@]}" --headless --frames 120 --script-dev "$dev" > "$RUNNER_TEMP/scene-dev.json"
           cmp "$RUNNER_TEMP/scene-native.json" "$RUNNER_TEMP/scene-dev.json"
           python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["ticks"] == 54 and [n["name"] for n in s["nodes"]] == ["Lookout", "Marker", "Satellite"]' "$RUNNER_TEMP/scene-native.json"
+      - name: Check the 600-frame Jumpy Bird golden
+        run: tools/golden_test.sh
       - name: Capture editor and player
         env:
           WGPU_BACKEND: vulkan

@@ -119,3 +119,13 @@ pub(super) const REMOVE_KEY: &str = "Remove Keyframe";
 pub(super) const STEP: &str = "Step";
 pub(super) const LINEAR: &str = "Linear";
 pub(super) const CUBIC: &str = "Cubic";
+
+pub(super) const GAMEPLAY: &str = "Gameplay";
+pub(super) const CONTACT_SENSOR: &str = "Contact Sensor";
+pub(super) const SENSOR_SIZE: &str = "Sensor Size";
+pub(super) const SPRITE_FRAMES: &str = "Sprite Frames";
+pub(super) const ADD_FRAME: &str = "Drop PNG to Add Frame";
+pub(super) const ONE_SHOT_BANK: &str = "Scene Audio Clips";
+pub(super) const ADD_SOUND: &str = "Drop WAV or MP3 to Add Clip";
+
+pub(super) const DRAW_ORDER: &str = "Draw Order ";

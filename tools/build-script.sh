@@ -3,14 +3,16 @@ set -euo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 sample="${2:-hello}"
-case "$sample" in hello|bird|scene) ;; *) printf 'Unknown sample %s\n' "$sample" >&2; exit 2 ;; esac
+case "$sample" in hello|bird|scene|jumpy) ;; *) printf 'Unknown sample %s\n' "$sample" >&2; exit 2 ;; esac
+source="scripts/game-template/$sample.ts"
+if [[ "$sample" == jumpy ]]; then source="scripts/game-template/jumpy/assets/Jumpy.ts"; fi
 output="$root/.aurora/scripts"
 mkdir -p "$output"
 stage="$(mktemp -d "$output/.build.XXXXXXXX")"
 trap 'rm -rf -- "$stage"' EXIT
 
 case "${1:-}" in native|dev)
-    cargo run --quiet --locked --bin aurora-codegen -- scripts/game-template/"$sample.ts" "$output/metadata/$sample"
+    cargo run --quiet --locked --bin aurora-codegen -- "$source" "$output/metadata/$sample"
     mv -f "$output/metadata/$sample/protocol.mts" "$output/metadata/protocol.mts"
     ;;
 esac
@@ -48,5 +50,5 @@ case "${1:-}" in
         mv -f "$stage/hello" "$output/$sample-dev"
         printf '%s\n' "$output/$sample-dev"
         ;;
-    *) printf 'Usage: %s native|dev [hello|bird|scene]\n' "$0" >&2; exit 2 ;;
+    *) printf 'Usage: %s native|dev [hello|bird|scene|jumpy]\n' "$0" >&2; exit 2 ;;
 esac

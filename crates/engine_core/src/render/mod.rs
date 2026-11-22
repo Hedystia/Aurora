@@ -196,6 +196,18 @@ impl GpuScene {
             })],
             ..Default::default()
         });
+        let scale = (extent.width as f32 / camera.design_size[0])
+            .min(extent.height as f32 / camera.design_size[1]);
+        let width = (camera.design_size[0] * scale).round() as u32;
+        let height = (camera.design_size[1] * scale).round() as u32;
+        let width = width.clamp(1, extent.width);
+        let height = height.clamp(1, extent.height);
+        pass.set_scissor_rect(
+            (extent.width - width) / 2,
+            (extent.height - height) / 2,
+            width,
+            height,
+        );
         self.sprites.draw(&mut pass);
         drop(pass);
         let readback = capture.then(|| {
