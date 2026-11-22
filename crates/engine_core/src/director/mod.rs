@@ -87,6 +87,11 @@ impl Director {
         self.loaded.ids.first().copied()
     }
 
+    /// Returns a scene node in authored document order.
+    pub fn node(&self, index: usize) -> Option<EntityId> {
+        self.loaded.ids.get(index).copied()
+    }
+
     /// Returns textures shared by the current scene and renderer.
     pub fn assets(&self) -> &Assets {
         &self.assets

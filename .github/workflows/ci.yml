@@ -71,6 +71,8 @@ jobs:
           timeout 45s xvfb-run -a target/debug/aurora-editor --screenshot screenshots/editor.png
           test -s screenshots/player.png
           test -s screenshots/editor.png
+          timeout 55s xvfb-run -a target/debug/aurora-editor --project scripts/game-template/scenes/gallery.aurora-scene --play --screenshot screenshots/editor-game.png
+          test -s screenshots/editor-game.png
       - uses: actions/upload-artifact@v4
         with:
           name: aurora-screenshots

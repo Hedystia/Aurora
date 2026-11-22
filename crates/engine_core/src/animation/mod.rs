@@ -254,6 +254,12 @@ impl Playback {
         Ok(crossed.into_iter().map(|(_, code)| code).collect())
     }
 
+    /// Samples a bounded authored frame for non-playing editor preview.
+    pub fn seek(&self, scene: &mut Scene, frame: f64) -> Result<()> {
+        ensure!(frame.is_finite(), "Invalid animation cursor");
+        self.apply(scene, frame.clamp(0.0, f64::from(self.clip.duration)))
+    }
+
     fn apply(&self, scene: &mut Scene, frame: f64) -> Result<()> {
         for track in &self.clip.tracks {
             let node = self.nodes[track.node];

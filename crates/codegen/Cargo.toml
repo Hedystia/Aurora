@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[lib]
+path = "src/metadata/mod.rs"
+
 [[bin]]
 name = "aurora-codegen"
 path = "src/mod.rs"

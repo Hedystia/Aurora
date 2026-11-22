@@ -43,6 +43,7 @@ impl Runtime {
                 director: Director::new(scenario.scenes.to_vec(), cache)?,
                 script: None,
                 pending_scene: None,
+                script_node: scenario.script_node,
             })))
         }
     }
@@ -136,6 +137,7 @@ pub(super) struct Authored {
     director: Director,
     script: Option<Session>,
     pending_scene: Option<usize>,
+    script_node: usize,
 }
 
 impl Authored {
@@ -145,7 +147,7 @@ impl Authored {
         };
         let node = self
             .director
-            .primary()
+            .node(self.script_node)
             .context("The script needs a bound scene node")?;
         let transform = self.director.scene().transform(node)?;
         match script.exchange(kind, node.0, transform.position, detail)? {

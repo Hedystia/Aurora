@@ -18,3 +18,9 @@ eframe.workspace = true
 egui.workspace = true
 egui_dock.workspace = true
 image.workspace = true
+engine_core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+notify.workspace = true
+codegen = { path = "../codegen" }

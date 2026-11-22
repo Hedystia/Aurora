@@ -66,6 +66,51 @@ pub struct Sprite {
     pub size: [f32; 2],
 }
 
+/// Optional visual properties for an authored node.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SpriteAppearance {
+    /// Whether this node and its descendants are visible.
+    pub active: bool,
+    /// Quad origin as normalized left-to-right and bottom-to-top coordinates.
+    pub anchor: [f32; 2],
+    /// Horizontal and vertical shear coefficients.
+    pub skew: [f32; 2],
+    /// sRGBA tint channels.
+    pub color: [u8; 4],
+    /// Additional alpha multiplier.
+    pub opacity: u8,
+}
+
+impl Default for SpriteAppearance {
+    fn default() -> Self {
+        Self {
+            active: true,
+            anchor: [0.5; 2],
+            skew: [0.0; 2],
+            color: [255; 4],
+            opacity: 255,
+        }
+    }
+}
+
+impl SpriteAppearance {
+    /// The four local quad corners ordered top-left, bottom-left, top-right, bottom-right.
+    pub fn corners(self, [width, height]: [f32; 2]) -> [[f32; 2]; 4] {
+        let [x, y] = self.anchor;
+        let left = -width * x;
+        let right = width * (1.0 - x);
+        let bottom = -height * y;
+        let top = height * (1.0 - y);
+        [[left, top], [left, bottom], [right, top], [right, bottom]]
+            .map(|[x, y]| [x + self.skew[0] * y, y + self.skew[1] * x])
+    }
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
 /// A lifecycle event emitted by a scene operation or frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lifecycle {
@@ -84,6 +129,7 @@ struct Node {
     parent: Option<EntityId>,
     children: Vec<EntityId>,
     local: Transform2D,
+    appearance: Option<SpriteAppearance>,
 }
 
 /// Ordered scene graph whose component storage is backed by hecs.
@@ -111,6 +157,12 @@ pub struct NodeState {
     pub world: Affine2D,
     /// Sprite component, when present.
     pub sprite: Option<Sprite>,
+    /// Optional authored visual appearance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub appearance: Option<SpriteAppearance>,
+    /// Visibility inherited through the node tree.
+    #[serde(skip_serializing_if = "is_true")]
+    pub visible: bool,
 }
 
 impl Scene {
@@ -172,6 +224,7 @@ impl Scene {
             name,
             parent,
             local,
+            appearance: None,
             children: Vec::new(),
         },));
         self.entities.insert(id, entity);
@@ -187,6 +240,16 @@ impl Scene {
     /// Sets or replaces a node's sprite.
     pub fn set_sprite(&mut self, id: EntityId, sprite: Sprite) -> Result<()> {
         Ok(self.world.insert_one(self.entity(id)?, sprite)?)
+    }
+
+    /// Replaces the node's optional visual overrides.
+    pub fn set_appearance(
+        &mut self,
+        id: EntityId,
+        appearance: Option<SpriteAppearance>,
+    ) -> Result<()> {
+        self.world.get::<&mut Node>(self.entity(id)?)?.appearance = appearance;
+        Ok(())
     }
 
     /// Reads a node's local pose.
@@ -319,6 +382,7 @@ impl Scene {
     /// Resolves transforms and sprite state in deterministic scene order.
     pub fn snapshot(&self) -> Result<Vec<NodeState>> {
         let mut states = Vec::new();
+        let mut visibility = BTreeMap::new();
         self.walk(
             &self.roots,
             |id, node, world| {
@@ -328,6 +392,11 @@ impl Scene {
                     .ok()
                     .as_deref()
                     .copied();
+                let visible = node.appearance.is_none_or(|style| style.active)
+                    && node
+                        .parent
+                        .is_none_or(|parent| visibility.get(&parent).copied().unwrap_or(true));
+                visibility.insert(id, visible);
                 states.push(NodeState {
                     id,
                     name: node.name.clone(),
@@ -335,6 +404,8 @@ impl Scene {
                     local: node.local,
                     world,
                     sprite,
+                    appearance: node.appearance,
+                    visible,
                 });
                 Ok(())
             },

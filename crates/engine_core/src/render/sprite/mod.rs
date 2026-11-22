@@ -19,9 +19,11 @@ use crate::{
 struct Vertex {
     position: [f32; 2],
     uv: [f32; 2],
+    tint: [f32; 4],
 }
 
-const ATTRIBUTES: [VertexAttribute; 2] = vertex_attr_array![0 => Float32x2, 1 => Float32x2];
+const ATTRIBUTES: [VertexAttribute; 3] =
+    vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4];
 
 pub(super) struct SpriteBatch {
     pipeline: RenderPipeline,
@@ -118,7 +120,7 @@ impl SpriteBatch {
     ) -> Result<()> {
         self.vertices.clear();
         self.batches.clear();
-        for node in nodes {
+        for node in nodes.iter().filter(|node| node.visible) {
             let Some(sprite) = &node.sprite else { continue };
             let id = sprite.texture;
             if let Entry::Vacant(entry) = self.textures.entry(id) {
@@ -167,19 +169,20 @@ impl SpriteBatch {
                 }));
             }
             let start = u32::try_from(self.vertices.len())?;
-            let [w, h] = sprite.size.map(|extent| extent / 2.0);
-            let corners = [
-                ([-w, h], [0.0, 0.0]),
-                ([-w, -h], [0.0, 1.0]),
-                ([w, h], [1.0, 0.0]),
-                ([w, -h], [1.0, 1.0]),
+            let appearance = node.appearance.unwrap_or_default();
+            let corners = appearance.corners(sprite.size);
+            let uv = [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]];
+            let [r, g, b, a] = appearance.color.map(|value| f32::from(value) / 255.0);
+            let tint = [
+                linear(r),
+                linear(g),
+                linear(b),
+                a * (f32::from(appearance.opacity) / 255.0),
             ];
-            self.vertices.extend([0, 1, 2, 2, 1, 3].map(|index| {
-                let (point, uv) = corners[index];
-                Vertex {
-                    position: camera.project(node.world.point(point), viewport),
-                    uv,
-                }
+            self.vertices.extend([0, 1, 2, 2, 1, 3].map(|index| Vertex {
+                position: camera.project(node.world.point(corners[index]), viewport),
+                uv: uv[index],
+                tint,
             }));
             let end = u32::try_from(self.vertices.len())?;
             if let Some((last, range)) = self.batches.last_mut()
@@ -223,4 +226,12 @@ fn vertex_buffer(device: &Device, size: u64) -> Buffer {
         usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
+}
+
+fn linear(value: f32) -> f32 {
+    if value <= 0.04045 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    }
 }

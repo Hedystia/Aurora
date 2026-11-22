@@ -1,0 +1,13 @@
+# Aurora editor
+
+Build both binaries with `cargo build --locked --workspace`. Launch `target/debug/aurora-editor --project /path/to/project`. You can also pass an existing `.aurora-scene` or `.aurora-prefab` directly. A project directory without a scene opens an unsaved Canvas. Ctrl+S writes `main.aurora-scene`.
+
+- Select nodes in the hierarchy or click sprites in the Scene view. Use F2 and Enter to rename and Ctrl+D to duplicate. Drag a node onto another node to reparent it, or onto the root drop target to unparent it. Use the context menu to save a subtree as a prefab. Double-click a prefab asset to edit its isolated tree.
+- Drop PNGs onto the app to import them. Drag a PNG onto a node to attach or replace its sprite, or drop it into the viewport to place a new sprite. The viewport supports right-drag panning, scroll zoom, rulers and anchor markers.
+- Create a TypeScript component from the Assets menu. The template imports `aurora-cc` and exports static `registerComponent` metadata. Drag its asset onto a node or choose it from Add Component. The inspector uses metadata to accept node and prefab reference drops and persists the resulting values.
+- In Timeline, create a clip, choose a node and transform channel, and add keys at the cursor. Edit values in the track rows. Preview with the transport or scrub the time ruler. Autoplay selects the clip used on entering the scene.
+- Play builds the first attached script for Bun or Node and starts a separate player process. The player renders 640×384 offscreen using wgpu and publishes complete RGBA frames at up to 20 Hz. Game view scales that texture to fit its dock. The console receives child diagnostics. Changes to watched TypeScript files refresh metadata and rebuild the preview. Failed rebuilds leave the previous running preview available. Pause and Stop control the current child process.
+- Move and float the dock tabs. The Panel menu toggles them, and the Layout menu saves or resets the project arrangement. Layout is stored under the document directory in `.aurora/layout.json`.
+- Use `--screenshot PATH` to capture the editor. Add `--play` to wait for an embedded game frame before capturing.
+
+The current preview runtime binds one attached component per scene. Scalar inspector overrides are assigned before Start. Reference values reach the script as authored node indices or resolved prefab paths. Runtime reference objects and multiple active script components require additional scene-script binding work. Supported library entries are Empty Node, Sprite, and project prefabs. Specialized Label, Rich Text, particle and tile map renderers, sprite atlas and slicing controls, and group editing are outside the current editor implementation.

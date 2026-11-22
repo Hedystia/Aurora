@@ -41,3 +41,7 @@ Bincode `2.0.1` and nix `0.30.1` activate their existing pins. Memmap2 activates
 ## M3 physics and audio
 
 Rapier 2D activates at `0.35.3` with `enhanced-determinism`. This release does not publish the requested `simd-stable` feature. The same feature policy is set for the future Rapier 3D dependency. Kira `0.12.6` enables CPAL, WAV, PCM, and MP3 and requires Symphonia 0.6. The lockfile resolves Symphonia `0.6.1`; the workspace pin follows that line to keep one decoder stack.
+
+## M5 editor dependencies
+
+Notify activates the existing `8.1.0` workspace pin. Egui Dock stays at `0.20.1` and enables its Serde feature for saved layouts. The editor links the existing engine core and shared metadata parser.

@@ -35,3 +35,9 @@
 - JSON scene and prefab documents store stable document indices and source PNG paths. Resolved entity handles and asset hashes belong to the runtime. File writes stage in the destination directory before atomic replacement. A scene transition resolves its resources before replacing the active tree.
 - Pool checkout reuses the existing hecs allocations and issues fresh node handles. Pool return detaches the subtree, invalidates its handles, and removes it from processing and rendering. Scene-owned handles advance across transitions.
 - Authored clips use scalar transform tracks and sample-indexed markers. Clip playback advances at 60 Hz, supports held, linear and cubic segments, and applies once, loop or ping-pong wrapping. Director pause freezes scene ticks and leaves input available for resuming.
+
+## M5 editor integration
+
+- The editor edits the versioned scene document. Tree operations remap indexed bindings, and both the editor viewport and player resolve the same scene resources.
+- The preview owns a private frame directory and runs the normal player simulation in a separate process. A shared GPU pass renders windowed and offscreen frames. Atomic RGBA publication prevents partial frames from reaching egui. Preview commands travel downstream through the child input pipe.
+- Script builds run off the UI thread and reuse static SDK metadata. A successful rebuild replaces the running preview. The dock tree is serialized per document directory.

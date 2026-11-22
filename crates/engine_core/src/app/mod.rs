@@ -2,6 +2,8 @@
 
 mod clock;
 mod demo;
+/// Offscreen player frames for the editor preview.
+pub mod preview;
 mod runtime;
 
 use std::{
@@ -29,6 +31,8 @@ pub struct Scenario<'a> {
     pub bird: bool,
     /// Registered authored scene files. The first is active on startup.
     pub scenes: &'a [PathBuf],
+    /// Inline node index bound to the script in an authored scene.
+    pub script_node: usize,
     /// Input paired with the zero-based tick at which it is delivered.
     pub input: &'a [(u64, InputEvent)],
 }

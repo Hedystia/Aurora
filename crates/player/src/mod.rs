@@ -48,6 +48,12 @@ struct Options {
     /// Simulate this many ticks before capturing the frame.
     #[arg(long, requires = "screenshot")]
     capture_after: Option<u64>,
+    /// Stream offscreen frames for an editor session.
+    #[arg(long, conflicts_with_all = ["headless", "screenshot", "sprite"])]
+    preview_dir: Option<PathBuf>,
+    /// Bind the script to this authored node index.
+    #[arg(long, requires = "scene", default_value = "0")]
+    script_node: usize,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -75,8 +81,12 @@ fn main() -> anyhow::Result<()> {
     let scenario = Scenario {
         bird: options.bird,
         scenes: &options.scene,
+        script_node: options.script_node,
         input: &input,
     };
+    if let Some(dir) = options.preview_dir {
+        return engine_core::app::preview::run_preview(&dir, cache, script.as_ref(), scenario);
+    }
     if options.headless {
         let state = engine_core::app::run_headless(
             options.sprite.as_deref(),

@@ -14,7 +14,7 @@ use crate::{
     animation::{Clip, Playback},
     assets::{AssetId, Assets},
     ecs::EntityId,
-    scene::{Prefab, PrefabNode, Scene, Sprite, Transform2D},
+    scene::{NodeState, Prefab, PrefabNode, Scene, Sprite, SpriteAppearance, Transform2D},
 };
 
 /// Current scene and prefab document format version.
@@ -45,6 +45,35 @@ impl SpriteFile {
     }
 }
 
+/// Saved data for an attached script component.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptFile {
+    /// TypeScript asset path, relative to this document.
+    pub path: PathBuf,
+    /// Name of the exported component class.
+    pub component: String,
+    /// Inspector values keyed by their declared property name.
+    #[serde(default)]
+    pub values: BTreeMap<String, PropertyValue>,
+}
+
+/// One authored script property override.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum PropertyValue {
+    /// Numeric value.
+    Number(f64),
+    /// Boolean value.
+    Boolean(bool),
+    /// Text value.
+    String(String),
+    /// Inline scene node reference.
+    Node(usize),
+    /// Prefab asset path.
+    Prefab(PathBuf),
+}
+
 /// Parent-first serialized node description.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -60,6 +89,12 @@ pub struct NodeFile {
     /// Optional sprite asset binding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sprite: Option<SpriteFile>,
+    /// Optional visual overrides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub appearance: Option<SpriteAppearance>,
+    /// Attached TypeScript components.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scripts: Vec<ScriptFile>,
 }
 
 /// Reference to a prefab to add after the scene's inline nodes.
@@ -118,6 +153,8 @@ impl SceneFile {
                 parent,
                 transform: state.local,
                 sprite: capture_sprite(state.sprite, &path_for)?,
+                appearance: state.appearance,
+                scripts: Vec::new(),
             });
         }
         let document = Self {
@@ -168,6 +205,27 @@ impl SceneFile {
         Ok(())
     }
 
+    /// Resolves an authored scene for display. An optional clip and sample drives timeline scrubbing.
+    pub fn preview(
+        &self,
+        directory: &Path,
+        assets: &mut Assets,
+        cursor: Option<(usize, f64)>,
+    ) -> Result<Vec<NodeState>> {
+        let mut document = self.clone();
+        document.autoplay = None;
+        let mut loaded = document.instantiate(directory, assets, Scene::default())?;
+        if let Some((index, frame)) = cursor {
+            let clip = loaded
+                .clips
+                .get(index)
+                .context("Unknown preview clip")?
+                .clone();
+            Playback::new(clip, loaded.ids)?.seek(&mut loaded.scene, frame)?;
+        }
+        loaded.scene.snapshot()
+    }
+
     pub(crate) fn instantiate(
         self,
         directory: &Path,
@@ -182,6 +240,7 @@ impl SceneFile {
             if let Some(sprite) = &node.sprite {
                 scene.set_sprite(id, sprite.resolve(directory, assets)?)?;
             }
+            scene.set_appearance(id, node.appearance)?;
             ids.push(id);
         }
         let mut prefabs = BTreeMap::new();
@@ -237,6 +296,8 @@ impl PrefabFile {
                     parent: node.parent,
                     transform: node.pose,
                     sprite: capture_sprite(node.sprite, &path_for)?,
+                    appearance: node.appearance,
+                    scripts: Vec::new(),
                 })
             })
             .collect::<Result<_>>()?;
@@ -271,6 +332,7 @@ impl PrefabFile {
                 name: node.name.clone(),
                 parent: node.parent,
                 pose: node.transform,
+                appearance: node.appearance,
                 sprite: node
                     .sprite
                     .as_ref()
@@ -341,6 +403,33 @@ fn validate_nodes(version: u32, nodes: &[NodeFile]) -> Result<()> {
             node.parent.is_none_or(|parent| parent < index),
             "Node {index} has an invalid parent"
         );
+        for script in &node.scripts {
+            ensure!(
+                !script.path.as_os_str().is_empty() && !script.component.is_empty(),
+                "Invalid script attachment"
+            );
+            for value in script.values.values() {
+                match value {
+                    PropertyValue::Node(index) => {
+                        ensure!(*index < nodes.len(), "Invalid node reference")
+                    }
+                    PropertyValue::Number(value) => {
+                        ensure!(value.is_finite(), "Nonfinite script property")
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if let Some(appearance) = node.appearance {
+            ensure!(
+                appearance
+                    .anchor
+                    .into_iter()
+                    .chain(appearance.skew)
+                    .all(f32::is_finite),
+                "Invalid sprite appearance"
+            );
+        }
         let pose = node.transform;
         ensure!(
             pose.position

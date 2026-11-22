@@ -17,11 +17,9 @@ use sprite::SpriteBatch;
 pub(crate) struct Renderer {
     instance: Instance,
     surface: Surface<'static>,
-    device: Device,
-    queue: Queue,
+    gpu: GpuScene,
     config: SurfaceConfiguration,
     size: PhysicalSize<u32>,
-    sprites: SpriteBatch,
 }
 
 impl Renderer {
@@ -60,15 +58,13 @@ impl Renderer {
                 })
                 .context("No supported screenshot pixel format")?;
         }
-        let sprites = SpriteBatch::new(&device, config.format);
+        let gpu = GpuScene::new(device, queue, config.format);
         let mut renderer = Self {
             instance,
             surface,
-            device,
-            queue,
+            gpu,
             config,
             size,
-            sprites,
         };
         renderer.resize(size);
         Ok(renderer)
@@ -79,7 +75,7 @@ impl Renderer {
         if size.width > 0 && size.height > 0 {
             self.config.width = size.width;
             self.config.height = size.height;
-            self.surface.configure(&self.device, &self.config);
+            self.surface.configure(&self.gpu.device, &self.config);
         }
     }
 
@@ -116,8 +112,61 @@ impl Renderer {
             }
             CurrentSurfaceTexture::Validation => anyhow::bail!("Surface texture validation failed"),
         };
-        let extent = frame.texture.size();
-        let view = frame.texture.create_view(&TextureViewDescriptor::default());
+        let (encoder, readback) =
+            self.gpu
+                .encode(&frame.texture, assets, nodes, camera, screenshot.is_some())?;
+        self.gpu.queue.submit([encoder.finish()]);
+        window.pre_present_notify();
+        frame.present();
+        if let Some((path, readback)) = screenshot.zip(readback) {
+            let pixels = self.gpu.read(&readback)?;
+            image::save_buffer_with_format(
+                path,
+                &pixels,
+                readback.extent.width,
+                readback.extent.height,
+                image::ColorType::Rgba8,
+                image::ImageFormat::Png,
+            )?;
+        }
+        Ok(true)
+    }
+}
+
+struct Readback {
+    buffer: Buffer,
+    row: u32,
+    extent: Extent3d,
+}
+
+struct GpuScene {
+    device: Device,
+    queue: Queue,
+    format: TextureFormat,
+    sprites: SpriteBatch,
+}
+
+impl GpuScene {
+    fn new(device: Device, queue: Queue, format: TextureFormat) -> Self {
+        let sprites = SpriteBatch::new(&device, format);
+        Self {
+            device,
+            queue,
+            format,
+            sprites,
+        }
+    }
+
+    fn encode(
+        &mut self,
+        target: &Texture,
+        assets: &Assets,
+        nodes: &[NodeState],
+        camera: Camera2D,
+        capture: bool,
+    ) -> anyhow::Result<(CommandEncoder, Option<Readback>)> {
+        let extent = target.size();
+        let view = target.create_view(&TextureViewDescriptor::default());
         let mut encoder = self
             .device
             .create_command_encoder(&CommandEncoderDescriptor::default());
@@ -149,16 +198,16 @@ impl Renderer {
         });
         self.sprites.draw(&mut pass);
         drop(pass);
-        let readback = screenshot.map(|_| {
+        let readback = capture.then(|| {
             let row = (extent.width * 4).next_multiple_of(COPY_BYTES_PER_ROW_ALIGNMENT);
             let buffer = self.device.create_buffer(&BufferDescriptor {
-                label: Some("Player screenshot"),
+                label: Some("Frame readback"),
                 size: u64::from(row) * u64::from(extent.height),
                 usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
             encoder.copy_texture_to_buffer(
-                frame.texture.as_image_copy(),
+                target.as_image_copy(),
                 TexelCopyBufferInfo {
                     buffer: &buffer,
                     layout: TexelCopyBufferLayout {
@@ -169,25 +218,17 @@ impl Renderer {
                 },
                 extent,
             );
-            (buffer, row)
+            Readback {
+                buffer,
+                row,
+                extent,
+            }
         });
-        self.queue.submit([encoder.finish()]);
-        window.pre_present_notify();
-        frame.present();
-        if let Some((path, (buffer, row))) = screenshot.zip(readback) {
-            self.save_capture(path, &buffer, row, extent)?;
-        }
-        Ok(true)
+        Ok((encoder, readback))
     }
 
-    fn save_capture(
-        &self,
-        path: &Path,
-        buffer: &Buffer,
-        row: u32,
-        extent: Extent3d,
-    ) -> anyhow::Result<()> {
-        let slice = buffer.slice(..);
+    fn read(&self, readback: &Readback) -> anyhow::Result<Vec<u8>> {
+        let slice = readback.buffer.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(MapMode::Read, move |result| {
             let _ = tx.send(result);
@@ -195,26 +236,66 @@ impl Renderer {
         self.device.poll(PollType::wait_indefinitely())?;
         rx.recv()??;
         let mapped = slice.get_mapped_range();
-        let mut pixels = Vec::new();
-        for padded in mapped.chunks_exact(row as usize) {
-            pixels.extend_from_slice(&padded[..extent.width as usize * 4]);
+        let mut pixels = Vec::with_capacity(
+            readback.extent.width as usize * readback.extent.height as usize * 4,
+        );
+        for padded in mapped.chunks_exact(readback.row as usize) {
+            pixels.extend_from_slice(&padded[..readback.extent.width as usize * 4]);
         }
         if matches!(
-            self.config.format,
+            self.format,
             TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb
         ) {
             for pixel in pixels.as_chunks_mut::<4>().0 {
                 pixel.swap(0, 2);
             }
         }
-        image::save_buffer_with_format(
-            path,
-            &pixels,
-            extent.width,
-            extent.height,
-            image::ColorType::Rgba8,
-            image::ImageFormat::Png,
-        )?;
-        Ok(())
+        Ok(pixels)
+    }
+}
+
+pub(crate) struct Offscreen {
+    gpu: GpuScene,
+    target: Texture,
+}
+
+impl Offscreen {
+    pub(crate) async fn new([width, height]: [u32; 2]) -> anyhow::Result<Self> {
+        let instance = Instance::new(InstanceDescriptor::new_without_display_handle().with_env());
+        let adapter = instance
+            .request_adapter(&RequestAdapterOptions::default())
+            .await?;
+        let (device, queue) = adapter.request_device(&DeviceDescriptor::default()).await?;
+        let format = TextureFormat::Rgba8UnormSrgb;
+        let target = device.create_texture(&TextureDescriptor {
+            label: Some("Editor preview"),
+            size: Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format,
+            usage: TextureUsages::COPY_SRC | TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        Ok(Self {
+            gpu: GpuScene::new(device, queue, format),
+            target,
+        })
+    }
+
+    pub(crate) fn frame(
+        &mut self,
+        assets: &Assets,
+        nodes: &[NodeState],
+        camera: Camera2D,
+    ) -> anyhow::Result<Vec<u8>> {
+        let (encoder, readback) = self.gpu.encode(&self.target, assets, nodes, camera, true)?;
+        self.gpu.queue.submit([encoder.finish()]);
+        self.gpu
+            .read(&readback.context("Missing preview readback")?)
     }
 }

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, ensure};
 
-use super::{Entity, EntityId, Lifecycle, Node, Scene, Sprite, Transform2D};
+use super::{Entity, EntityId, Lifecycle, Node, Scene, Sprite, SpriteAppearance, Transform2D};
 
 /// One node in a prefab, indexed in parent-first order.
 #[derive(Clone, Debug)]
@@ -17,6 +17,8 @@ pub struct PrefabNode {
     pub pose: Transform2D,
     /// Resolved sprite, if present.
     pub sprite: Option<Sprite>,
+    /// Optional authored visual appearance.
+    pub appearance: Option<SpriteAppearance>,
 }
 
 /// Immutable, resolved template for one scene subtree.
@@ -65,6 +67,7 @@ impl Prefab {
                     parent,
                     pose: node.local,
                     sprite,
+                    appearance: node.appearance,
                 });
                 Ok(())
             },
@@ -103,6 +106,7 @@ impl Prefab {
                 name: template.name.clone(),
                 parent,
                 local: template.pose,
+                appearance: template.appearance,
                 children: Vec::new(),
             };
             let entity = if let Some(spare) = spare {
@@ -206,6 +210,7 @@ impl<'a> NodePool<'a> {
             {
                 let mut node = self.scene.world.get::<&mut Node>(entity)?;
                 node.local = template.pose;
+                node.appearance = template.appearance;
                 node.name.clone_from(&template.name);
             }
             if let Some(sprite) = template.sprite {
