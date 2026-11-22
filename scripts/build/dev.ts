@@ -1,5 +1,5 @@
 import { readSync, writeSync } from "node:fs";
-import { Hello } from "../game-template/hello.ts";
+import { Component } from "../aurora-cc/index.ts";
 import { run } from "./wire.ts";
 
 function receive(bytes: Uint8Array): number {
@@ -22,4 +22,6 @@ function reply(bytes: Uint8Array): number {
   return 1;
 }
 
-run(new Hello(), receive, reply);
+export function launch(component: Component): void {
+  run(component, receive, reply);
+}

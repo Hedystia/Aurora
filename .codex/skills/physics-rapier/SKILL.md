@@ -13,7 +13,7 @@ Step at 60 Hz using the simulation clock. Maintain stable node-to-body ownership
 
 ## Build and run
 
-`cargo test --locked -p aurora-engine-core`
+`cargo test --locked -p engine_core`
 
 Commands for later milestones apply once their implementation lands. Check AGENTS.md for current status.
 

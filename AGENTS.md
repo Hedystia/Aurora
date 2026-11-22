@@ -12,7 +12,11 @@ Read the project skills in `.codex/skills/` for the subsystem being changed.
 - Pass `--sprite path/to/image.png` to load a custom PNG in either player mode. Imported textures default to `.aurora/import`. Use `--asset-cache PATH` to redirect the cache.
 
 - Build scripts with `tools/build-script.sh native` or `tools/build-script.sh dev`. Pass the printed executable to `aurora-player --script PATH` or `aurora-player --script-dev PATH` respectively. Add `--headless --frames 120` to inspect the resulting scene state.
-- The script build emits inspector metadata and SDK declarations under `.aurora/scripts/metadata`.
+- The script build emits inspector metadata and SDK declarations under `.aurora/scripts/metadata/<sample>`.
+
+- Build the bird sample with `tools/build-script.sh native bird`. Run `cargo run --locked --bin aurora-player -- --bird --script .aurora/scripts/bird-native` and press Space or Up, or tap the window.
+- For deterministic verification use `--bird --headless --frames 140 --flap-at 0 --touch-at 75`. The JSON includes flap, pipe-hit, contact-exit, and one-shot counts. For a graphical capture replace `--headless --frames 140` with `--capture-after 140 --screenshot /tmp/aurora-bird.png`.
+- Linux build prerequisites include ALSA development headers for CPAL.
 
 ## Conventions
 
@@ -20,4 +24,4 @@ Use `src/mod.rs` for Cargo targets and subdirectory `mod.rs` files for modules. 
 
 ## Milestone status
 
-M1 adds the hecs scene tree, fixed-step player, headless scene snapshots, PNG import cache, camera and sprite renderer. M2 adds a frame-locked script child, native shared-memory IPC, a development socket backend and the TypeScript component SDK. Physics, audio and input start in M3. The Jumpy Bird golden baseline starts in M6.
+M1 adds the hecs scene tree, fixed-step player, headless scene snapshots, PNG import cache, camera and sprite renderer. M2 adds a frame-locked script child, native shared-memory IPC, a development socket backend and the TypeScript component SDK. M3 adds Rapier 2D, Kira one-shots, and fixed-tick keyboard/touch input. Prefabs, persistence, animation and director APIs start in M4. The Jumpy Bird golden baseline starts in M6.

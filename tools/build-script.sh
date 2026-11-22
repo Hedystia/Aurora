@@ -2,13 +2,16 @@
 set -euo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
+sample="${2:-hello}"
+case "$sample" in hello|bird) ;; *) printf 'Unknown sample %s\n' "$sample" >&2; exit 2 ;; esac
 output="$root/.aurora/scripts"
 mkdir -p "$output"
 stage="$(mktemp -d "$output/.build.XXXXXXXX")"
 trap 'rm -rf -- "$stage"' EXIT
 
 case "${1:-}" in native|dev)
-    cargo run --quiet --locked --bin aurora-codegen -- scripts/game-template/hello.ts "$output/metadata"
+    cargo run --quiet --locked --bin aurora-codegen -- scripts/game-template/"$sample.ts" "$output/metadata/$sample"
+    mv -f "$output/metadata/$sample/protocol.mts" "$output/metadata/protocol.mts"
     ;;
 esac
 
@@ -18,21 +21,21 @@ case "${1:-}" in
         clang -std=c11 -Wall -Wextra -Werror -O2 -c scripts/build/transport.c -o "$stage/transport.o"
         ar rcs "$stage/libaurora-transport.a" "$stage/transport.o"
         cp scripts/build/ffi.json "$stage/"
-        "$compiler" build scripts/build/native.ts --tier static-only --ffi "$stage/ffi.json" -o "$stage/hello" >&2
-        mv -f "$stage/hello" "$output/hello-native"
-        printf '%s\n' "$output/hello-native"
+        "$compiler" build scripts/build/"$sample-native.ts" --tier static-only --ffi "$stage/ffi.json" -o "$stage/hello" >&2
+        mv -f "$stage/hello" "$output/$sample-native"
+        printf '%s\n' "$output/$sample-native"
         ;;
     dev)
         runtime="$(tools/setup.sh --print-runtime)"
-        entry="$root/scripts/build/dev.ts"
+        entry="$root/scripts/build/$sample-dev.ts"
         if ! "$runtime" -e 'process.exit(process.versions.bun ? 0 : 1)' &&
            ! "$runtime" --experimental-strip-types -e '' >/dev/null 2>&1; then
             if [[ ! -x scripts/node_modules/.bin/esbuild ]]; then
                 npm install --prefix scripts --ignore-scripts --no-package-lock >&2
             fi
             scripts/node_modules/.bin/esbuild "$entry" --bundle --platform=node --format=esm --outfile="$stage/hello.mjs" >&2
-            mv -f "$stage/hello.mjs" "$output/hello.mjs"
-            entry="$output/hello.mjs"
+            mv -f "$stage/hello.mjs" "$output/$sample.mjs"
+            entry="$output/$sample.mjs"
         elif "$runtime" -e 'process.exit(process.versions.bun ? 1 : 0)'; then
             runtime_args=(--experimental-strip-types)
         fi
@@ -42,8 +45,8 @@ case "${1:-}" in
             printf '%q\n' "$entry"
         } > "$stage/hello"
         chmod +x "$stage/hello"
-        mv -f "$stage/hello" "$output/hello-dev"
-        printf '%s\n' "$output/hello-dev"
+        mv -f "$stage/hello" "$output/$sample-dev"
+        printf '%s\n' "$output/$sample-dev"
         ;;
-    *) printf 'Usage: %s native|dev\n' "$0" >&2; exit 2 ;;
+    *) printf 'Usage: %s native|dev [hello|bird]\n' "$0" >&2; exit 2 ;;
 esac

@@ -23,3 +23,9 @@
 - The current SDK binds one component to the demo sprite. It passes position snapshots and applies checked commands in frame order. The sample registers inspector metadata as a strict JSON literal in TypeScript, and codegen extracts that declaration at build time.
 - The player launches the child in a dedicated process group, bounds reply wait time, and reaps the group on session teardown. Automated headless runs surface protocol failures as command failures.
 - Both backend choices share the same child lifecycle and envelope validation. A backend enum selects the launch and transport configuration, so the runtime uses one session implementation.
+
+## M3 physics, input, and sound
+
+- Rapier owns body and collider state. Nodes keep stable body associations. Contact pairs are normalized by node ID, then diffed once per tick to report exits before entries. This covers removal and keeps callback order independent of Rapier iteration order.
+- The bird scene uses meters in physics and 32 pixels per meter in rendering. Window presses are queued for the next fixed tick. Headless and screenshot runs feed the same input queue with a tick-indexed schedule.
+- Kira decodes the two embedded WAV clips before opening the render loop. The default device services separate effects and music tracks. Headless verification runs the same mixer and effects commands against Kira's silent backend, which also provides a fallback when the default device is unavailable.

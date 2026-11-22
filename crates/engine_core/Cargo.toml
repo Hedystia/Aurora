@@ -23,6 +23,8 @@ serde_json.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
 script_api.workspace = true
+rapier2d.workspace = true
+kira.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nix.workspace = true

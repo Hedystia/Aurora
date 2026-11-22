@@ -17,24 +17,38 @@ use winit::{
     window::{Window, WindowId},
 };
 
-use crate::{render::Renderer, scripting::Script};
+use crate::{input::InputEvent, render::Renderer, scripting::Script};
 use clock::Clock;
 use demo::Demo;
 
-/// Opens the player window and optionally saves its first presented frame.
+/// Scenario selection and synthetic input for deterministic runs.
+#[derive(Default)]
+pub struct Scenario<'a> {
+    /// Load the bird and pipes scene.
+    pub bird: bool,
+    /// Input paired with the zero-based tick at which it is delivered.
+    pub input: &'a [(u64, InputEvent)],
+}
+
+/// Opens the player window and optionally saves a rendered frame after simulation.
 pub fn run(
     sprite: Option<&Path>,
     cache: Option<PathBuf>,
     screenshot: Option<PathBuf>,
     script: Option<&Script>,
+    scenario: Scenario<'_>,
+    capture_after: u64,
 ) -> anyhow::Result<()> {
-    let mut demo = Demo::new(sprite, cache)?;
+    let mut demo = Demo::new(sprite, cache, scenario.bird, screenshot.is_some())?;
     if let Err(error) = demo.attach_script(script) {
         if screenshot.is_some() {
             return Err(error);
         }
         eprintln!("Game script failed to start: {error:#}");
         demo.disconnect_script();
+    }
+    if screenshot.is_some() {
+        advance(&mut demo, capture_after, scenario.input)?;
     }
     let mut app = Player {
         display: None,
@@ -43,6 +57,7 @@ pub fn run(
         demo,
         clock: Clock::default(),
         last_update: None,
+        input: Vec::new(),
     };
     EventLoop::new()?.run_app(&mut app)?;
     app.result?;
@@ -59,21 +74,44 @@ pub fn run_headless(
     cache: Option<PathBuf>,
     ticks: u64,
     script: Option<&Script>,
+    scenario: Scenario<'_>,
 ) -> anyhow::Result<String> {
     #[derive(serde::Serialize)]
     struct Snapshot {
         ticks: u64,
         nodes: Vec<crate::scene::NodeState>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        bird: Option<serde_json::Value>,
     }
-    let mut demo = Demo::new(sprite, cache)?;
+    let mut demo = Demo::new(sprite, cache, scenario.bird, true)?;
     demo.attach_script(script)?;
-    for _ in 0..ticks {
-        demo.tick()?;
-    }
+    advance(&mut demo, ticks, scenario.input)?;
     Ok(serde_json::to_string(&Snapshot {
         ticks: demo.ticks,
         nodes: demo.scene.snapshot()?,
+        bird: demo.bird_stats()?,
     })?)
+}
+
+fn advance(demo: &mut Demo, ticks: u64, input: &[(u64, InputEvent)]) -> anyhow::Result<()> {
+    let mut input = input.to_vec();
+    input.sort_by_key(|&(tick, _)| tick);
+    anyhow::ensure!(
+        input.last().is_none_or(|&(tick, _)| tick < ticks),
+        "Scheduled input is outside the simulation"
+    );
+    let mut input = input.into_iter().peekable();
+    let mut pending = Vec::new();
+    for tick in 0..ticks {
+        pending.clear();
+        while input.peek().is_some_and(|&(at, _)| at == tick) {
+            if let Some((_, event)) = input.next() {
+                pending.push(event);
+            }
+        }
+        demo.tick(&pending)?;
+    }
+    Ok(())
 }
 
 struct Player {
@@ -83,6 +121,7 @@ struct Player {
     demo: Demo,
     clock: Clock,
     last_update: Option<Instant>,
+    input: Vec<InputEvent>,
 }
 
 impl Player {
@@ -90,7 +129,11 @@ impl Player {
         let window = Arc::new(
             event_loop.create_window(
                 Window::default_attributes()
-                    .with_title("Aurora Player")
+                    .with_title(if self.demo.is_bird() {
+                        "Aurora Bird · Space, ↑ or touch to flap"
+                    } else {
+                        "Aurora Player"
+                    })
                     .with_inner_size(LogicalSize::new(800, 480)),
             )?,
         );
@@ -126,7 +169,9 @@ impl ApplicationHandler for Player {
         };
         let ticks = self.clock.advance(now - previous);
         for _ in 0..ticks {
-            if let Err(error) = self.demo.tick() {
+            let result = self.demo.tick(&self.input);
+            self.input.clear();
+            if let Err(error) = result {
                 eprintln!("Game script stopped: {error:#}");
                 self.demo.disconnect_script();
                 break;
@@ -144,6 +189,11 @@ impl ApplicationHandler for Player {
         };
         if window.id() != id {
             return;
+        }
+        if self.input.len() < 64
+            && let Some(event) = InputEvent::from_window(&event)
+        {
+            self.input.push(event);
         }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),

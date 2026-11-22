@@ -13,7 +13,7 @@ Route one-shots to the SFX bus and music to its own bus. Decode resources away f
 
 ## Build and run
 
-`cargo test --locked -p aurora-engine-core`
+`cargo test --locked -p engine_core`
 
 Commands for later milestones apply once their implementation lands. Check AGENTS.md for current status.
 

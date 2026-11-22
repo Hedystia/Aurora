@@ -11,7 +11,7 @@ jobs:
       - name: Install Linux graphics dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang xauth xvfb libvulkan1 mesa-vulkan-drivers libxkbcommon-x11-0 libwayland-dev
+          sudo apt-get install -y clang xauth xvfb libvulkan1 libasound2-dev mesa-vulkan-drivers libxkbcommon-x11-0 libwayland-dev
       - name: Verify Bun provisioning without system runtimes
         shell: bash
         run: |
@@ -41,6 +41,14 @@ jobs:
           env -u DISPLAY -u WAYLAND_DISPLAY target/debug/aurora-player --headless --frames 120 --script-dev "$dev" > "$RUNNER_TEMP/dev.json"
           cmp "$RUNNER_TEMP/native.json" "$RUNNER_TEMP/dev.json"
           python3 -c 'import json,sys; scene=json.load(open(sys.argv[1])); assert scene["nodes"][1]["local"]["position"] == [76, 0]' "$RUNNER_TEMP/native.json"
+      - name: Verify bird input, contacts, and audio commands
+        run: |
+          native="$(tools/build-script.sh native bird)"
+          dev="$(tools/build-script.sh dev bird)"
+          env -u DISPLAY -u WAYLAND_DISPLAY target/debug/aurora-player --bird --headless --frames 140 --flap-at 0 --touch-at 75 --script "$native" > "$RUNNER_TEMP/bird-native.json"
+          env -u DISPLAY -u WAYLAND_DISPLAY target/debug/aurora-player --bird --headless --frames 140 --flap-at 0 --touch-at 75 --script-dev "$dev" > "$RUNNER_TEMP/bird-dev.json"
+          cmp "$RUNNER_TEMP/bird-native.json" "$RUNNER_TEMP/bird-dev.json"
+          python3 -c 'import json,sys; stats=json.load(open(sys.argv[1]))["bird"]; assert stats["flaps"] == 2 and stats["pipe_hits"] > 0 and stats["contact_exits"] > 0 and stats["one_shots"] > 2' "$RUNNER_TEMP/bird-native.json"
       - name: Capture editor and player
         env:
           WGPU_BACKEND: vulkan
@@ -50,7 +58,7 @@ jobs:
           env -u DISPLAY -u WAYLAND_DISPLAY target/debug/aurora-player --headless --frames 600 > "$RUNNER_TEMP/scene-second.json"
           cmp "$RUNNER_TEMP/scene-first.json" "$RUNNER_TEMP/scene-second.json"
           mkdir -p screenshots
-          timeout 45s xvfb-run -a target/debug/aurora-player --script .aurora/scripts/hello-native --screenshot screenshots/player.png
+          timeout 45s xvfb-run -a target/debug/aurora-player --bird --script .aurora/scripts/bird-native --capture-after 24 --flap-at 0 --screenshot screenshots/player.png
           timeout 45s xvfb-run -a target/debug/aurora-editor --screenshot screenshots/editor.png
           test -s screenshots/player.png
           test -s screenshots/editor.png

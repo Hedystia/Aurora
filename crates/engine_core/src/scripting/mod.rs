@@ -2,6 +2,12 @@
 
 use std::path::PathBuf;
 
+pub(crate) enum Command {
+    SetPosition([f32; 2]),
+    SetLinearVelocity([f32; 2]),
+    PlayOneShot(usize),
+}
+
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
@@ -29,7 +35,8 @@ impl Session {
         _: script_api::Kind,
         _: u64,
         _: [f32; 2],
-    ) -> anyhow::Result<Option<[f32; 2]>> {
+        _: u64,
+    ) -> anyhow::Result<Option<Command>> {
         anyhow::bail!("Script IPC is currently available on Linux")
     }
 }

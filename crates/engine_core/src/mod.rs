@@ -8,3 +8,7 @@ pub mod ecs;
 pub mod scene;
 
 pub mod scripting;
+
+pub mod audio;
+pub mod input;
+pub mod physics2d;

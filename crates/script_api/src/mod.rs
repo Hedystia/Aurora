@@ -6,9 +6,9 @@ pub mod transport;
 use bincode::{Decode, Encode};
 
 /// Current script protocol version.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 /// Fixed byte count of an encoded envelope.
-pub const ENVELOPE_BYTES: usize = 40;
+pub const ENVELOPE_BYTES: usize = 48;
 /// Size of the protocol, sequence and kind prefix.
 pub const HEADER_BYTES: usize = 16;
 /// Size of the unframed shared-memory payload.
@@ -27,6 +27,18 @@ pub enum Kind {
     Ack,
     /// Set the target node's local X and Y.
     SetPosition,
+    /// The bound body began touching another body identified by detail.
+    CollisionEnter,
+    /// The bound body stopped touching another body identified by detail.
+    CollisionExit,
+    /// A physical key was pressed, identified by detail.
+    KeyDown,
+    /// A finger touched the window.
+    TouchStart,
+    /// Set the bound rigid body velocity in meters per second.
+    SetLinearVelocity,
+    /// Play a clip from the bound audio source, indexed by detail.
+    PlayOneShot,
 }
 
 /// Wire message encoded with bincode 2 fixed-width, little-endian configuration.
@@ -40,10 +52,12 @@ pub struct Envelope {
     pub kind: Kind,
     /// Opaque node handle.
     pub node: u64,
-    /// Local X position.
+    /// Local X position or linear velocity X.
     pub x: f64,
-    /// Local Y position.
+    /// Local Y position or linear velocity Y.
     pub y: f64,
+    /// Kind-specific handle, key or clip index. Zero when unused.
+    pub detail: u64,
 }
 
 impl Envelope {
@@ -81,6 +95,7 @@ mod tests {
             node: 42,
             x: -3.5,
             y: 2.0,
+            detail: u64::MAX,
         };
         let mut bytes = message.encode()?;
         assert_eq!(bytes[..4], VERSION.to_le_bytes());
@@ -88,7 +103,8 @@ mod tests {
         assert_eq!(bytes[12..16], 4_u32.to_le_bytes());
         assert_eq!(bytes[16..24], 42_u64.to_le_bytes());
         assert_eq!(bytes[24..32], (-3.5_f64).to_le_bytes());
-        assert_eq!(bytes[32..], 2.0_f64.to_le_bytes());
+        assert_eq!(bytes[32..40], 2.0_f64.to_le_bytes());
+        assert_eq!(bytes[40..], u64::MAX.to_le_bytes());
         assert_eq!(Envelope::decode(&bytes)?, message);
         bytes[12] = 255;
         assert!(Envelope::decode(&bytes).is_err());

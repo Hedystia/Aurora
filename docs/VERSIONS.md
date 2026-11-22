@@ -37,3 +37,7 @@ Serde activates at `1.0.229`, matching the patch already resolved transitively i
 ## M2 scripting dependencies
 
 Bincode `2.0.1` and nix `0.30.1` activate their existing pins. Memmap2 activates at `0.9.12`, matching the patch previously resolved transitively. The native script uses the existing scriptc `0.4.16` pin.
+
+## M3 physics and audio
+
+Rapier 2D activates at `0.35.3` with `enhanced-determinism`. This release does not publish the requested `simd-stable` feature. The same feature policy is set for the future Rapier 3D dependency. Kira `0.12.6` enables CPAL, WAV, PCM, and MP3 and requires Symphonia 0.6. The lockfile resolves Symphonia `0.6.1`; the workspace pin follows that line to keep one decoder stack.

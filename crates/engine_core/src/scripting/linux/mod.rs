@@ -21,7 +21,7 @@ use script_api::{
     transport::{Link, Mode},
 };
 
-use super::Script;
+use super::{Command as ScriptCommand, Script};
 
 pub(crate) struct Session {
     child: Child,
@@ -82,7 +82,8 @@ impl Session {
         kind: Kind,
         node: u64,
         [x, y]: [f32; 2],
-    ) -> Result<Option<[f32; 2]>> {
+        detail: u64,
+    ) -> Result<Option<ScriptCommand>> {
         let reply = self
             .link
             .exchange(Envelope {
@@ -92,6 +93,7 @@ impl Session {
                 node,
                 x: x.into(),
                 y: y.into(),
+                detail,
             })
             .with_context(|| format!("Script transaction {} ({kind:?})", self.seq))?;
         ensure!(
@@ -115,14 +117,19 @@ impl Session {
             .context("Script sequence exhausted")?;
         match reply.kind {
             Kind::Ack => Ok(None),
-            Kind::SetPosition => {
-                let position = [reply.x as f32, reply.y as f32];
+            Kind::SetPosition | Kind::SetLinearVelocity => {
+                let vector = [reply.x as f32, reply.y as f32];
                 ensure!(
-                    position.iter().all(|value| value.is_finite()),
-                    "Script position must be finite"
+                    vector.iter().all(|value| value.is_finite()),
+                    "Script vector must be finite"
                 );
-                Ok(Some(position))
+                if reply.kind == Kind::SetPosition {
+                    Ok(Some(ScriptCommand::SetPosition(vector)))
+                } else {
+                    Ok(Some(ScriptCommand::SetLinearVelocity(vector)))
+                }
             }
+            Kind::PlayOneShot => Ok(Some(ScriptCommand::PlayOneShot(reply.detail.try_into()?))),
             _ => anyhow::bail!("Unexpected script reply kind {:?}", reply.kind),
         }
     }
