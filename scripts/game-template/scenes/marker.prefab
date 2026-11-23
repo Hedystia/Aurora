@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "nodes": [
+    {
+      "name": "Marker",
+      "sprite": {
+        "png": "../../../crates/engine_core/src/app/demo/aurora.png",
+        "size": [96, 96]
+      }
+    },
+    {
+      "name": "Satellite",
+      "parent": 0,
+      "transform": { "position": [84, 0], "rotation": 0, "scale": [0.45, 0.45] },
+      "sprite": {
+        "png": "../../../crates/engine_core/src/app/demo/aurora.png",
+        "size": [96, 96]
+      }
+    }
+  ]
+}

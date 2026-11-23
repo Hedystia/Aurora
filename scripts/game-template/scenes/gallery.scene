@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "nodes": [{ "name": "Gallery" }],
+  "instances": [{ "prefab": "marker.prefab", "parent": 0 }],
+  "animations": [
+    {
+      "name": "Drift",
+      "sample_rate": 60,
+      "duration": 60,
+      "speed": 1,
+      "wrap": "ping_pong",
+      "tracks": [
+        {
+          "node": 1,
+          "property": "x",
+          "interpolation": "cubic",
+          "keys": [{ "frame": 0, "value": -150 }, { "frame": 60, "value": 100 }]
+        }
+      ],
+      "events": [{ "frame": 30, "code": 7 }]
+    }
+  ],
+  "autoplay": 0
+}
