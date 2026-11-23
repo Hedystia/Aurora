@@ -1,4 +1,8 @@
-[[package]]
+[package]
 name = "codegen"
 version = "0.1"
-path = "crates/codegen"
+edition = "2021"
+
+[lib]
+path = "src/mod.rs"
+
