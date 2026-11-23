@@ -110,13 +110,23 @@ impl Assets {
         Ok(id)
     }
 
+    pub(crate) fn generated(&mut self, image: RgbaImage) -> AssetId {
+        let mut hash = Sha256::new_with_prefix(b"aurora-generated-rgba8-v1");
+        hash.update(image.width().to_le_bytes());
+        hash.update(image.height().to_le_bytes());
+        hash.update(image.as_raw());
+        let id = AssetId(hash.finalize().into());
+        self.textures.entry(id).or_insert(image);
+        id
+    }
+
     /// Gets the decoded sRGB texture pixels.
     pub fn texture(&self, id: AssetId) -> Option<&RgbaImage> {
         self.textures.get(&id)
     }
 }
 
-fn read_bounded(path: &Path, max: usize) -> Result<Vec<u8>> {
+pub(crate) fn read_bounded(path: &Path, max: usize) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     fs::File::open(path)
         .with_context(|| format!("Opening {}", path.display()))?

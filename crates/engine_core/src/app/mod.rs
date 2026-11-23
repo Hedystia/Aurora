@@ -1,10 +1,13 @@
 //! Runtime window and event loop.
 
+/// Portable native scene bundle format.
+pub mod bundle;
 mod clock;
 mod demo;
 /// Offscreen player frames for the editor preview.
 pub mod preview;
 mod runtime;
+mod script_lifecycle;
 
 use std::{
     path::{Path, PathBuf},
@@ -15,14 +18,27 @@ use std::{
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
-    event::WindowEvent,
+    event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     window::{Window, WindowId},
 };
 
-use crate::{input::InputEvent, render::Renderer, scripting::Script};
+use crate::{
+    input::{InputEvent, PointerPhase},
+    render::Renderer,
+    scripting::Script,
+};
 use clock::Clock;
 use runtime::Runtime;
+
+/// Native program and authored binding order belonging to one packaged scene.
+#[derive(Clone)]
+pub struct SceneProgram {
+    /// Native executable, or no program for a scene without script bindings.
+    pub executable: Option<PathBuf>,
+    /// Authored node indices in native program binding order.
+    pub bindings: Vec<usize>,
+}
 
 /// Scenario selection and synthetic input for deterministic runs.
 #[derive(Default)]
@@ -33,8 +49,10 @@ pub struct Scenario<'a> {
     pub spatial: Option<crate::physics3d::Backend>,
     /// Registered authored scene files. The first is active on startup.
     pub scenes: &'a [PathBuf],
-    /// Inline node index bound to the script in an authored scene.
-    pub script_node: usize,
+    /// Authored node indices in script binding order. An empty slice defaults to node zero.
+    pub script_nodes: &'a [usize],
+    /// Per-scene native programs, in the same order as `scenes`. Empty uses the shared script.
+    pub scene_programs: &'a [SceneProgram],
     /// Optional best-score file for an authored game.
     pub profile: Option<&'a Path>,
     /// Input paired with the zero-based tick at which it is delivered.
@@ -52,7 +70,7 @@ pub fn run(
 ) -> anyhow::Result<()> {
     let mut demo = Runtime::new(sprite, cache, &scenario, screenshot.is_some())?;
     if let Err(error) = demo.attach_script(script) {
-        if screenshot.is_some() {
+        if screenshot.is_some() || !scenario.scene_programs.is_empty() {
             return Err(error);
         }
         eprintln!("Game script failed to start: {error:#}");
@@ -69,9 +87,12 @@ pub fn run(
         clock: Clock::default(),
         last_update: None,
         input: Vec::new(),
+        cursor: None,
+        mouse_down: false,
     };
     EventLoop::new()?.run_app(&mut app)?;
     app.result?;
+    app.demo.stop_script()?;
     anyhow::ensure!(
         app.screenshot.is_none(),
         "Player closed before screenshot capture"
@@ -104,14 +125,16 @@ pub fn run_headless(
     let mut demo = Runtime::new(sprite, cache, &scenario, true)?;
     demo.attach_script(script)?;
     advance(&mut demo, ticks, scenario.input)?;
-    Ok(serde_json::to_string(&Snapshot {
+    let snapshot = serde_json::to_string(&Snapshot {
         ticks: demo.ticks(),
         nodes: demo.node_states()?,
         bird: demo.bird_stats()?,
         spatial: demo
             .spatial_state()
             .map(|(backend, cubes)| SpatialSnapshot { backend, cubes }),
-    })?)
+    })?;
+    demo.stop_script()?;
+    Ok(snapshot)
 }
 
 fn advance(demo: &mut Runtime, ticks: u64, input: &[(u64, InputEvent)]) -> anyhow::Result<()> {
@@ -143,6 +166,10 @@ struct Player {
     clock: Clock,
     last_update: Option<Instant>,
     input: Vec<InputEvent>,
+    /// Last cursor position inside the window in normalized coordinates.
+    cursor: Option<[f32; 2]>,
+    /// Whether the primary mouse button is currently held.
+    mouse_down: bool,
 }
 
 impl Player {
@@ -212,8 +239,86 @@ impl ApplicationHandler for Player {
         if window.id() != id {
             return;
         }
-        if self.input.len() < 64
-            && let Some(event) = InputEvent::from_window(&event)
+        let viewport = [window.inner_size().width, window.inner_size().height];
+        // The window backend reports mouse input separately from touch. Mouse
+        // contacts use the same pointer events as a single finger.
+        let mut pushed = false;
+        match &event {
+            WindowEvent::CursorMoved { position, .. } if viewport[0] > 0 && viewport[1] > 0 => {
+                let normalized = [
+                    (position.x / f64::from(viewport[0])) as f32,
+                    (position.y / f64::from(viewport[1])) as f32,
+                ];
+                if (0.0..=1.0).contains(&normalized[0]) && (0.0..=1.0).contains(&normalized[1]) {
+                    self.cursor = Some(normalized);
+                    if self.mouse_down
+                        && self.input.len() < 64
+                        && let Some(event) =
+                            InputEvent::mouse(PointerPhase::Move, normalized, viewport)
+                    {
+                        self.input.push(event);
+                        pushed = true;
+                    }
+                }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } if !self.mouse_down => {
+                self.mouse_down = true;
+                if let Some(position) = self.cursor
+                    && self.input.len() < 64
+                    && let Some(event) = InputEvent::mouse(PointerPhase::Start, position, viewport)
+                {
+                    self.input.push(event);
+                    pushed = true;
+                }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            } if self.mouse_down => {
+                self.mouse_down = false;
+                if let Some(position) = self.cursor
+                    && self.input.len() < 64
+                    && let Some(event) = InputEvent::mouse(PointerPhase::End, position, viewport)
+                {
+                    self.input.push(event);
+                    pushed = true;
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                if let Some(position) = self.cursor {
+                    let delta = match delta {
+                        MouseScrollDelta::LineDelta(x, y) => [*x, *y],
+                        MouseScrollDelta::PixelDelta(position) => {
+                            [position.x as f32, position.y as f32]
+                        }
+                    };
+                    if self.input.len() < 64 {
+                        self.input.push(InputEvent::Wheel {
+                            position,
+                            delta,
+                            viewport,
+                        });
+                        pushed = true;
+                    }
+                }
+            }
+            WindowEvent::Focused(false) => {
+                // Losing focus can interrupt the mouse and any number of fingers.
+                self.mouse_down = false;
+                if self.input.len() < 64 {
+                    self.input.push(InputEvent::CancelPointers);
+                }
+            }
+            _ => {}
+        }
+        if !pushed
+            && self.input.len() < 64
+            && let Some(event) = InputEvent::from_window_in_view(&event, viewport)
         {
             self.input.push(event);
         }

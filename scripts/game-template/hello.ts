@@ -1,20 +1,19 @@
-import { Component, registerComponent } from "../aurora-cc/index.ts";
+import { Component, ccclass, property } from "aurora";
 
+@ccclass('Hello')
 export class Hello extends Component {
+  @property({ type: Number, tooltip: 'Local pixels per second.' })
   speed = 30;
 
-  onStart(): void {
-    this.node.setPosition(16, 0);
+  onLoad(): void {
+    this.node.setPosition(8, 0);
   }
 
-  onUpdate(dt: number): void {
+  start(): void {
+    this.node.setPosition(this.node.x * 2, this.node.y);
+  }
+
+  update(dt: number): void {
     this.node.setPosition(this.node.x + this.speed * dt, this.node.y);
   }
 }
-
-export const metadata =
-registerComponent(["Hello", {
-  "props": {
-    "speed": { "type": "number", "tooltip": "Local pixels per second." }
-  }
-}]);

@@ -7,6 +7,7 @@ use std::{
         unix::process::CommandExt,
     },
     process::{Child, Command, Stdio},
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, ensure};
@@ -17,11 +18,11 @@ use nix::{
     unistd::Pid,
 };
 use script_api::{
-    Envelope, Kind, VERSION,
+    BINDING_ENABLED, Envelope, Kind, VERSION,
     transport::{Link, Mode},
 };
 
-use super::{Command as ScriptCommand, Script};
+use super::{Command as ScriptCommand, Reply, Script};
 
 pub(crate) struct Session {
     child: Child,
@@ -77,13 +78,31 @@ impl Session {
         })
     }
 
+    pub(crate) fn begin_shutdown(&mut self) {
+        self.link
+            .limit_until(Instant::now() + Duration::from_millis(180));
+    }
+
     pub(crate) fn exchange(
         &mut self,
         kind: Kind,
+        binding: u32,
         node: u64,
         [x, y]: [f32; 2],
         detail: u64,
-    ) -> Result<Option<ScriptCommand>> {
+    ) -> Result<Reply> {
+        self.exchange_control(kind, binding, node, [x.into(), y.into()], detail)
+    }
+
+    pub(crate) fn exchange_control(
+        &mut self,
+        kind: Kind,
+        binding: u32,
+        node: u64,
+        [x, y]: [f64; 2],
+        detail: u64,
+    ) -> Result<Reply> {
+        ensure!(binding < BINDING_ENABLED, "Too many script bindings");
         let reply = self
             .link
             .exchange(Envelope {
@@ -91,9 +110,10 @@ impl Session {
                 seq: self.seq,
                 kind,
                 node,
-                x: x.into(),
-                y: y.into(),
+                x,
+                y,
                 detail,
+                binding,
             })
             .with_context(|| format!("Script transaction {} ({kind:?})", self.seq))?;
         ensure!(
@@ -111,11 +131,16 @@ impl Session {
             "Unknown script target handle {}",
             reply.node
         );
+        ensure!(
+            reply.binding & !BINDING_ENABLED == binding,
+            "Unexpected script reply binding {}",
+            reply.binding
+        );
         self.seq = self
             .seq
             .checked_add(1)
             .context("Script sequence exhausted")?;
-        match reply.kind {
+        let command: Result<Option<ScriptCommand>> = match reply.kind {
             Kind::Ack => Ok(None),
             Kind::SetPosition | Kind::SetLinearVelocity => {
                 let vector = [reply.x as f32, reply.y as f32];
@@ -144,6 +169,25 @@ impl Session {
                     position,
                 )))
             }
+            Kind::ScaleNode => {
+                let scale = [reply.x as f32, reply.y as f32];
+                ensure!(
+                    scale.iter().all(|value| value.is_finite()),
+                    "Invalid node scale"
+                );
+                Ok(Some(ScriptCommand::ScaleNode(
+                    reply.detail.try_into()?,
+                    scale,
+                )))
+            }
+            Kind::RotateNode => {
+                let angle = reply.x as f32;
+                ensure!(angle.is_finite(), "Invalid node rotation");
+                Ok(Some(ScriptCommand::RotateNode(
+                    reply.detail.try_into()?,
+                    angle,
+                )))
+            }
             Kind::ShowNode if reply.x == 0.0 || reply.x == 1.0 => Ok(Some(
                 ScriptCommand::ShowNode(reply.detail.try_into()?, reply.x == 1.0),
             )),
@@ -157,8 +201,52 @@ impl Session {
             }
             Kind::QueueSound => Ok(Some(ScriptCommand::QueueSound(reply.detail.try_into()?))),
             Kind::RecordScore => Ok(Some(ScriptCommand::RecordScore(reply.detail.try_into()?))),
+            Kind::QueueCreateNode => Ok(Some(ScriptCommand::CreateNode(
+                reply.detail.try_into()?,
+                optional_index(reply.x)?,
+            ))),
+            Kind::QueueInstantiatePrefab => Ok(Some(ScriptCommand::InstantiatePrefab(
+                reply.detail.try_into()?,
+                optional_index(reply.x)?,
+                index(reply.y)?,
+            ))),
+            Kind::QueueReparentNode => Ok(Some(ScriptCommand::ReparentNode(
+                reply.detail.try_into()?,
+                optional_index(reply.x)?,
+            ))),
+            Kind::QueueDestroyNode => {
+                Ok(Some(ScriptCommand::DestroyNode(reply.detail.try_into()?)))
+            }
+            Kind::QueueAddComponent => Ok(Some(ScriptCommand::AddComponent(
+                reply.detail.try_into()?,
+                index(reply.x)?,
+            ))),
+            Kind::QueueRemoveComponent => Ok(Some(ScriptCommand::RemoveComponent(
+                reply.detail.try_into()?,
+                index(reply.x)?,
+            ))),
             _ => anyhow::bail!("Unexpected script reply kind {:?}", reply.kind),
-        }
+        };
+        Ok(Reply {
+            command: command?,
+            enabled: reply.binding & BINDING_ENABLED != 0,
+        })
+    }
+}
+
+fn index(value: f64) -> Result<u32> {
+    ensure!(
+        (0.0..=f64::from(u32::MAX)).contains(&value) && value.fract() == 0.0,
+        "Invalid script index"
+    );
+    Ok(value as u32)
+}
+
+fn optional_index(value: f64) -> Result<Option<u32>> {
+    if value == -1.0 {
+        Ok(None)
+    } else {
+        index(value).map(Some)
     }
 }
 

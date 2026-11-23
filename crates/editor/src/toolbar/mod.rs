@@ -5,7 +5,7 @@ use egui::Ui;
 use crate::{
     Editor,
     docks::{self, Dock},
-    strings, theme,
+    icons, strings, theme,
 };
 
 pub(super) fn menus(ui: &mut Ui, editor: &mut Editor) {
@@ -55,6 +55,16 @@ pub(super) fn menus(ui: &mut Ui, editor: &mut Editor) {
             }
         });
         ui.menu_button(strings::PROJECT, |ui| {
+            if ui
+                .add_enabled(
+                    !editor.project.prefab,
+                    egui::Button::new(strings::DISPLAY_SETTINGS),
+                )
+                .clicked()
+            {
+                editor.display_dialog = true;
+                ui.close();
+            }
             if ui.button(strings::EXPLORER).clicked() {
                 let result = crate::open_external(&editor.project.root);
                 editor.report(result);
@@ -101,7 +111,7 @@ pub(super) fn menus(ui: &mut Ui, editor: &mut Editor) {
 }
 
 pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
-    ui.horizontal_wrapped(|ui| {
+    ui.horizontal(|ui| {
         ui.menu_button(strings::BROWSER, |ui| {
             if ui.button(strings::RESET_LAYOUT).clicked() {
                 editor.layout = docks::initial_layout();
@@ -113,66 +123,60 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
                 ui.close();
             }
         });
-        if ui.button(strings::PLAY).clicked() {
-            editor.play();
-        }
-        if ui
-            .add_enabled(
-                editor.preview.is_playing(),
-                egui::Button::new(if editor.preview.paused {
-                    strings::RESUME
-                } else {
-                    strings::PAUSE
-                }),
-            )
-            .clicked()
-        {
-            editor.preview.pause();
-        }
-        if ui
-            .add_enabled(
-                editor.preview.is_playing(),
-                egui::Button::new(strings::STOP),
-            )
-            .clicked()
-        {
-            editor.preview.stop();
-            editor.preview.game_view = false;
-        }
-        if ui.button(strings::OPEN_PROJECT).clicked() {
+        if ui.button(strings::PROJECTS).clicked() {
             editor.open_dialog = true;
         }
-        if ui.button(strings::OPEN_APP).clicked() {
-            let result = crate::open_external(&editor.project.root);
-            editor.report(result);
-        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.colored_label(theme::ACCEPT, env!("CARGO_PKG_VERSION"));
+            let running = editor.preview.is_playing();
+            if icons::action(ui, icons::Icon::Stop, strings::STOP_SHORTCUT, None, running).clicked()
+            {
+                editor.stop_play();
+            }
+            let (icon, tip) = if editor.preview.paused {
+                (icons::Icon::Play, strings::RESUME)
+            } else {
+                (icons::Icon::Pause, strings::PAUSE)
+            };
+            if icons::action(ui, icon, tip, None, running).clicked() {
+                editor.preview.pause();
+            }
+            if icons::action(
+                ui,
+                icons::Icon::Play,
+                strings::PLAY_SHORTCUT,
+                Some(theme::PRIMARY),
+                !running,
+            )
+            .clicked()
+            {
+                editor.play();
+            }
+            ui.separator();
         });
     });
 }
 
 pub(super) fn status(ui: &mut Ui, editor: &Editor) {
-    ui.horizontal(|ui| {
-        let asset = editor
-            .selected_asset
-            .as_ref()
-            .unwrap_or(&editor.project.path);
-        let path = editor.project.relative(asset);
-        let dirty = if editor.project.dirty {
-            strings::DIRTY
-        } else {
-            ""
-        };
-        ui.label(format!("{}{}{}", strings::DATABASE, path.display(), dirty));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(env!("CARGO_PKG_VERSION"));
-            if editor.error_count != 0 {
-                ui.colored_label(
-                    theme::REJECT,
-                    format!("{} {}", editor.error_count, strings::ERRORS),
-                );
-            }
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.label(egui::RichText::new(env!("CARGO_PKG_VERSION")).weak());
+        if editor.error_count != 0 {
+            ui.colored_label(
+                theme::REJECT,
+                format!("{} {}", editor.error_count, strings::ERRORS),
+            );
+        }
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            let asset = editor
+                .selected_asset
+                .as_ref()
+                .unwrap_or(&editor.project.path);
+            let path = editor.project.relative(asset);
+            let dirty = if editor.project.dirty {
+                strings::DIRTY
+            } else {
+                ""
+            };
+            ui.add(egui::Label::new(format!("{}{dirty}", path.display())).truncate());
         });
     });
 }

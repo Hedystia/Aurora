@@ -4,9 +4,12 @@ set -euo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 work="${1:?Preview workspace required}"
 runtime="$("$root/tools/setup.sh" --print-runtime)"
-cargo run --quiet --locked --manifest-path "$root/Cargo.toml" --bin aurora-codegen -- "$work/entry.ts" "$work/metadata"
-mkdir -p "$root/.aurora/scripts/metadata"
-cp "$work/metadata/protocol.mts" "$root/.aurora/scripts/metadata/protocol.mts"
+protocol_dir="$root/.aurora/scripts/metadata"
+mkdir -p "$protocol_dir"
+stage="$(mktemp -d "$protocol_dir/.editor.XXXXXXXX")"
+trap 'rmdir -- "$stage" 2>/dev/null || rm -rf -- "$stage"' EXIT
+cp "$work/protocol.mts" "$stage/protocol.mts"
+mv -f "$stage/protocol.mts" "$protocol_dir/protocol.mts"
 if "$runtime" -e 'process.exit(process.versions.bun ? 0 : 1)'; then
     "$runtime" build "$work/entry.ts" --target=node --tsconfig-override "$work/tsconfig.json" --outfile="$work/entry.mjs" >&2
 else

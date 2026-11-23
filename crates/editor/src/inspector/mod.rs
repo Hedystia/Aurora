@@ -1,12 +1,26 @@
 //! Live transform editing and type-checked script properties.
 
-use std::collections::BTreeMap;
+mod physics;
+
+pub(crate) mod visual;
+
+pub(crate) mod spatial;
+
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use codegen::PropertyType;
 use egui::{DragValue, Ui};
 use engine_core::save::{FrameFile, PropertyValue, SensorFile};
 
-use crate::{Editor, node_tree::Drag, project::extension, strings, theme};
+use crate::{
+    Editor, icons,
+    node_tree::Drag,
+    project::{extension, is_audio, is_frame, is_prefab},
+    strings, theme,
+};
 
 pub(super) fn value_matches(kind: PropertyType, value: &PropertyValue) -> bool {
     matches!(
@@ -16,14 +30,37 @@ pub(super) fn value_matches(kind: PropertyType, value: &PropertyValue) -> bool {
             | (PropertyType::String, PropertyValue::String(_))
             | (PropertyType::Node, PropertyValue::Node(_))
             | (PropertyType::Prefab, PropertyValue::Prefab(_))
+            | (PropertyType::AudioClip, PropertyValue::AudioClip(_))
+            | (PropertyType::SpriteFrame, PropertyValue::SpriteFrame(_))
+            | (PropertyType::Component, PropertyValue::Component { .. })
+            | (PropertyType::NumberArray, PropertyValue::Numbers(_))
+            | (PropertyType::BooleanArray, PropertyValue::Booleans(_))
+            | (PropertyType::StringArray, PropertyValue::Strings(_))
+            | (PropertyType::NodeArray, PropertyValue::Nodes(_))
+            | (PropertyType::PrefabArray, PropertyValue::Prefabs(_))
+            | (PropertyType::AudioClipArray, PropertyValue::AudioClips(_))
+            | (
+                PropertyType::SpriteFrameArray,
+                PropertyValue::SpriteFrames(_)
+            )
     )
 }
 
 fn reference(kind: PropertyType, payload: &Drag) -> Option<PropertyValue> {
     match (kind, payload) {
         (PropertyType::Node, Drag::Node(index)) => Some(PropertyValue::Node(*index)),
-        (PropertyType::Prefab, Drag::Asset(path)) if extension(path) == "aurora-prefab" => {
+        (PropertyType::Prefab, Drag::Asset(path)) if is_prefab(path) => {
             Some(PropertyValue::Prefab(path.clone()))
+        }
+        (PropertyType::NodeArray, Drag::Node(index)) => Some(PropertyValue::Nodes(vec![*index])),
+        (PropertyType::PrefabArray, Drag::Asset(path)) if is_prefab(path) => {
+            Some(PropertyValue::Prefabs(vec![path.clone()]))
+        }
+        (PropertyType::AudioClipArray, Drag::Asset(path)) if is_audio(path) => {
+            Some(PropertyValue::AudioClips(vec![path.clone()]))
+        }
+        (PropertyType::SpriteFrameArray, Drag::Asset(path)) if is_frame(path) => {
+            Some(PropertyValue::SpriteFrames(vec![path.clone()]))
         }
         _ => None,
     }
@@ -41,22 +78,118 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         .iter()
         .map(|node| node.name.clone())
         .collect();
+    let components: Vec<_> = editor
+        .project
+        .document
+        .nodes
+        .iter()
+        .enumerate()
+        .flat_map(|(index, node)| {
+            node.scripts
+                .iter()
+                .map(move |script| (index, script.component.clone()))
+        })
+        .collect();
+    let audio_assets: Vec<PathBuf> = editor
+        .project
+        .document
+        .gameplay
+        .as_ref()
+        .map(|gameplay| gameplay.sounds.clone())
+        .unwrap_or_default();
+    let prefab_assets: Vec<PathBuf> = editor
+        .asset_paths
+        .iter()
+        .filter(|path| is_prefab(path))
+        .cloned()
+        .collect();
+    let frame_assets: Vec<PathBuf> = editor
+        .project
+        .document
+        .gameplay
+        .as_ref()
+        .map(|gameplay| {
+            gameplay
+                .frames
+                .iter()
+                .flat_map(|bank| bank.png.clone())
+                .collect()
+        })
+        .unwrap_or_default();
     let root = editor.project.root.clone();
+    let parent = editor.project.document.nodes[selected].parent;
+    let parent_name = parent
+        .and_then(|index| names.get(index).cloned())
+        .unwrap_or_else(|| strings::ROOT_PARENT.to_owned());
+    let parent_valid: Vec<bool> = (0..editor.project.document.nodes.len())
+        .map(|target| editor.reparent_allowed(selected, Some(target)))
+        .collect();
     let mut changed = false;
+    let mut reparent = None;
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         let node = &mut editor.project.document.nodes[selected];
+        if let Some(spatial) = &mut node.spatial { changed |= spatial::show(ui, spatial); }
         let mut appearance = node.appearance.unwrap_or_default();
         ui.horizontal(|ui| {
-            if ui
-                .checkbox(&mut appearance.active, "")
-                .on_hover_text(strings::ACTIVE)
-                .changed()
+            icons::inline(
+                ui,
+                if node.sprite.is_some() {
+                    icons::Icon::Sprite
+                } else {
+                    icons::Icon::Node
+                },
+                theme::ACCENT,
+            );
+            let width = (ui.available_width() - theme::ICON_BUTTON - 8.0).max(60.0);
+            changed |= ui
+                .add_sized(
+                    [width, theme::ROW_HEIGHT],
+                    egui::TextEdit::singleline(&mut node.name),
+                )
+                .changed();
+            if icons::button(
+                ui,
+                if appearance.active {
+                    icons::Icon::Eye
+                } else {
+                    icons::Icon::EyeOff
+                },
+                strings::ACTIVE,
+            )
+            .clicked()
             {
+                appearance.active = !appearance.active;
                 node.appearance = Some(appearance);
                 changed = true;
             }
-            changed |= ui.text_edit_singleline(&mut node.name).changed();
+        });
+        ui.horizontal(|ui| {
+            ui.label(strings::PARENT);
+            let response = ui
+                .add(egui::Button::new(parent_name.clone()).min_size(egui::vec2(
+                    (ui.available_width() - 30.0).max(40.0),
+                    theme::ROW_HEIGHT,
+                )))
+                .on_hover_text(strings::SET_PARENT);
+            if let Some(payload) = response.dnd_hover_payload::<Drag>() {
+                let valid = match payload.as_ref() {
+                    Drag::Node(target) => parent_valid.get(*target).copied().unwrap_or(false),
+                    _ => false,
+                };
+                icons::paint_drop_frame(ui.painter(), response.rect, valid);
+            }
+            if parent.is_some()
+                && icons::button(ui, icons::Icon::Parent, strings::MOVE_TO_ROOT).clicked()
+            {
+                reparent = Some(None);
+            }
+            if let Some(payload) = response.dnd_release_payload::<Drag>()
+                && let Drag::Node(target) = payload.as_ref()
+                && parent_valid.get(*target).copied().unwrap_or(false)
+            {
+                reparent = Some(Some(*target));
+            }
         });
         egui::CollapsingHeader::new(strings::NODE)
             .default_open(true)
@@ -106,7 +239,7 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
                 }
                 remove_sprite = ui.button(strings::REMOVE).clicked();
             });
-        } else {
+        } else if editor.project.document.nodes[selected].visual.is_none() {
             let response = ui.button(strings::DROP_PNG);
             if let Some(payload) = response.dnd_release_payload::<Drag>()
                 && let Drag::Asset(path) = payload.as_ref()
@@ -125,6 +258,8 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
             }
             changed = true;
         }
+        changed |= physics::show(ui, &mut editor.project.document.nodes[selected].physics2d);
+        changed |= visual::show(ui, &mut editor.project.document.nodes[selected].visual, &root);
         changed |= gameplay(ui, editor, selected);
         let mut remove_script = None;
         for (index, script) in editor.project.document.nodes[selected]
@@ -141,7 +276,17 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
                     .default_open(true)
                     .show(ui, |ui| {
                         if let Some(definitions) = definitions {
-                            changed |= fields(ui, definitions, &mut script.values, &names, &root);
+                            changed |= fields(
+                                ui,
+                                definitions,
+                                &mut script.values,
+                                &names,
+                                &components,
+                                &prefab_assets,
+                                &audio_assets,
+                                &frame_assets,
+                                &root,
+                            );
                         } else {
                             ui.label(strings::MISSING_METADATA);
                         }
@@ -162,6 +307,11 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
             editor.component_search.clear();
         }
     });
+    if let Some(parent) = reparent {
+        let result = editor.project.reparent(selected, parent);
+        editor.report(result);
+        changed = true;
+    }
     if changed {
         editor.project.changed();
     }
@@ -304,11 +454,16 @@ fn entry_list(ui: &mut Ui, paths: &mut Vec<std::path::PathBuf>) -> bool {
     false
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fields(
     ui: &mut Ui,
     metadata: &codegen::Metadata,
     values: &mut BTreeMap<String, PropertyValue>,
     names: &[String],
+    components: &[(usize, String)],
+    prefab_assets: &[std::path::PathBuf],
+    audio_assets: &[std::path::PathBuf],
+    frame_assets: &[std::path::PathBuf],
     root: &std::path::Path,
 ) -> bool {
     let mut changed = false;
@@ -382,6 +537,128 @@ fn fields(
                                 _ => value,
                             })
                     }
+                    PropertyType::AudioClip => {
+                        let current = match current {
+                            Some(PropertyValue::AudioClip(path)) => Some(path.as_path()),
+                            _ => None,
+                        };
+                        match asset_picker(ui, ("audio", name), audio_assets, current, root) {
+                            Some(None) => {
+                                changed |= values.remove(name).is_some();
+                                None
+                            }
+                            Some(Some(path)) => Some(PropertyValue::AudioClip(path)),
+                            None => None,
+                        }
+                    }
+                    PropertyType::SpriteFrame => {
+                        let current = match current {
+                            Some(PropertyValue::SpriteFrame(path)) => Some(path.as_path()),
+                            _ => None,
+                        };
+                        match asset_picker(ui, ("frame", name), frame_assets, current, root) {
+                            Some(None) => {
+                                changed |= values.remove(name).is_some();
+                                None
+                            }
+                            Some(Some(path)) => Some(PropertyValue::SpriteFrame(path)),
+                            None => None,
+                        }
+                    }
+                    PropertyType::Component => {
+                        let expected = property.component.as_deref();
+                        let selected = match current {
+                            Some(PropertyValue::Component { node, component }) => {
+                                Some((*node, component.clone()))
+                            }
+                            _ => None,
+                        };
+                        let caption = selected.as_ref().map_or_else(
+                            || strings::EMPTY_REFERENCE.to_owned(),
+                            |(node, component)| {
+                                format!(
+                                    "{} · {component}",
+                                    names.get(*node).map_or("?", String::as_str)
+                                )
+                            },
+                        );
+                        let mut picked = None;
+                        egui::ComboBox::from_id_salt(("component", name))
+                            .selected_text(caption)
+                            .show_ui(ui, |ui| {
+                                for (node, component) in components {
+                                    if expected.is_some_and(|expected| expected != component) {
+                                        continue;
+                                    }
+                                    let is_selected = selected.as_ref().is_some_and(|selected| {
+                                        selected.0 == *node && selected.1 == *component
+                                    });
+                                    let label = format!(
+                                        "{} · {component}",
+                                        names.get(*node).map_or("?", String::as_str)
+                                    );
+                                    if ui.selectable_label(is_selected, label).clicked() {
+                                        picked = Some((*node, component.clone()));
+                                    }
+                                }
+                            });
+                        if ui.small_button(strings::CLEAR).clicked() {
+                            changed |= values.remove(name).is_some();
+                        }
+                        picked.map(|(node, component)| PropertyValue::Component { node, component })
+                    }
+                    PropertyType::NumberArray => {
+                        let mut items = match current {
+                            Some(PropertyValue::Numbers(items)) => items.clone(),
+                            _ => Vec::new(),
+                        };
+                        number_array(ui, &mut items).then_some(PropertyValue::Numbers(items))
+                    }
+                    PropertyType::BooleanArray => {
+                        let mut items = match current {
+                            Some(PropertyValue::Booleans(items)) => items.clone(),
+                            _ => Vec::new(),
+                        };
+                        boolean_array(ui, &mut items).then_some(PropertyValue::Booleans(items))
+                    }
+                    PropertyType::StringArray => {
+                        let mut items = match current {
+                            Some(PropertyValue::Strings(items)) => items.clone(),
+                            _ => Vec::new(),
+                        };
+                        string_array(ui, &mut items).then_some(PropertyValue::Strings(items))
+                    }
+                    PropertyType::NodeArray => {
+                        let mut items = match current {
+                            Some(PropertyValue::Nodes(items)) => items.clone(),
+                            _ => Vec::new(),
+                        };
+                        node_array(ui, &mut items, names).then_some(PropertyValue::Nodes(items))
+                    }
+                    PropertyType::PrefabArray => {
+                        let mut items = match current {
+                            Some(PropertyValue::Prefabs(items)) => items.clone(),
+                            _ => Vec::new(),
+                        };
+                        asset_array(ui, ("prefabs", name), prefab_assets, &mut items, root)
+                            .then_some(PropertyValue::Prefabs(items))
+                    }
+                    PropertyType::AudioClipArray => {
+                        let mut items = match current {
+                            Some(PropertyValue::AudioClips(items)) => items.clone(),
+                            _ => Vec::new(),
+                        };
+                        asset_array(ui, ("audio", name), audio_assets, &mut items, root)
+                            .then_some(PropertyValue::AudioClips(items))
+                    }
+                    PropertyType::SpriteFrameArray => {
+                        let mut items = match current {
+                            Some(PropertyValue::SpriteFrames(items)) => items.clone(),
+                            _ => Vec::new(),
+                        };
+                        asset_array(ui, ("frames", name), frame_assets, &mut items, root)
+                            .then_some(PropertyValue::SpriteFrames(items))
+                    }
                 };
                 if let Some(next) = next {
                     values.insert(name.clone(), next);
@@ -390,6 +667,207 @@ fn fields(
             });
         });
     }
+    changed
+}
+
+fn asset_array(
+    ui: &mut Ui,
+    id: (&str, &String),
+    options: &[PathBuf],
+    items: &mut Vec<PathBuf>,
+    root: &Path,
+) -> bool {
+    let mut changed = false;
+    ui.vertical(|ui| {
+        let mut remove = None;
+        for (index, item) in items.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(item.display().to_string());
+                if ui.small_button("-").clicked() {
+                    remove = Some(index);
+                }
+            });
+        }
+        if let Some(index) = remove {
+            items.remove(index);
+            changed = true;
+        }
+        if items.len() >= 128 {
+            return;
+        }
+        let mut picked = None;
+        egui::ComboBox::from_id_salt(id)
+            .selected_text("+")
+            .show_ui(ui, |ui| {
+                for option in options {
+                    let relative = option.strip_prefix(root).unwrap_or(option);
+                    if items.iter().any(|item| item == relative) {
+                        continue;
+                    }
+                    if ui
+                        .selectable_label(false, relative.display().to_string())
+                        .clicked()
+                    {
+                        picked = Some(relative.to_path_buf());
+                    }
+                }
+            });
+        if let Some(path) = picked {
+            items.push(path);
+            changed = true;
+        }
+    });
+    changed
+}
+
+/// Picks a scene-registered asset path. Outer `None` means unchanged,
+/// `Some(None)` clears the value and `Some(Some(path))` selects it.
+fn asset_picker(
+    ui: &mut Ui,
+    id: (&str, &String),
+    options: &[PathBuf],
+    current: Option<&Path>,
+    root: &Path,
+) -> Option<Option<PathBuf>> {
+    let current = current.map(|path| path.strip_prefix(root).unwrap_or(path));
+    let caption = current.map_or_else(
+        || strings::EMPTY_REFERENCE.to_owned(),
+        |path| path.display().to_string(),
+    );
+    let mut picked = None;
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(caption)
+        .show_ui(ui, |ui| {
+            for option in options {
+                let relative = option.strip_prefix(root).unwrap_or(option);
+                if ui
+                    .selectable_label(current == Some(relative), relative.display().to_string())
+                    .clicked()
+                {
+                    picked = Some(relative.to_path_buf());
+                }
+            }
+        });
+    if picked.is_some() {
+        return picked.map(Some);
+    }
+    ui.small_button(strings::CLEAR).clicked().then_some(None)
+}
+
+fn number_array(ui: &mut Ui, items: &mut Vec<f64>) -> bool {
+    let mut changed = false;
+    ui.vertical(|ui| {
+        let mut remove = None;
+        for (index, value) in items.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                changed |= ui
+                    .add(DragValue::new(value).speed(theme::VALUE_SPEED))
+                    .changed();
+                if ui.small_button("-").clicked() {
+                    remove = Some(index);
+                }
+            });
+        }
+        if let Some(index) = remove {
+            items.remove(index);
+            changed = true;
+        }
+        if ui.small_button("+").clicked() {
+            items.push(0.0);
+            changed = true;
+        }
+    });
+    changed
+}
+
+fn boolean_array(ui: &mut Ui, items: &mut Vec<bool>) -> bool {
+    let mut changed = false;
+    ui.vertical(|ui| {
+        let mut remove = None;
+        for (index, value) in items.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                changed |= ui.checkbox(value, "").changed();
+                if ui.small_button("-").clicked() {
+                    remove = Some(index);
+                }
+            });
+        }
+        if let Some(index) = remove {
+            items.remove(index);
+            changed = true;
+        }
+        if ui.small_button("+").clicked() {
+            items.push(false);
+            changed = true;
+        }
+    });
+    changed
+}
+
+fn string_array(ui: &mut Ui, items: &mut Vec<String>) -> bool {
+    let mut changed = false;
+    ui.vertical(|ui| {
+        let mut remove = None;
+        for (index, value) in items.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                changed |= ui.text_edit_singleline(value).changed();
+                if ui.small_button("-").clicked() {
+                    remove = Some(index);
+                }
+            });
+        }
+        if let Some(index) = remove {
+            items.remove(index);
+            changed = true;
+        }
+        if ui.small_button("+").clicked() {
+            items.push(String::new());
+            changed = true;
+        }
+    });
+    changed
+}
+
+fn node_array(ui: &mut Ui, items: &mut Vec<usize>, names: &[String]) -> bool {
+    let mut changed = false;
+    ui.vertical(|ui| {
+        let mut remove = None;
+        for (index, value) in items.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(
+                    names
+                        .get(*value)
+                        .map_or(strings::EMPTY_REFERENCE, String::as_str),
+                );
+                if ui.small_button("-").clicked() {
+                    remove = Some(index);
+                }
+            });
+        }
+        if let Some(index) = remove {
+            items.remove(index);
+            changed = true;
+        }
+        let response = ui.button("+ node");
+        if let Some(payload) = response.dnd_hover_payload::<Drag>() {
+            let valid = matches!(payload.as_ref(), Drag::Node(_));
+            ui.painter().rect_stroke(
+                response.rect,
+                theme::ROUND,
+                (
+                    theme::OUTLINE,
+                    if valid { theme::ACCEPT } else { theme::REJECT },
+                ),
+                egui::StrokeKind::Inside,
+            );
+        }
+        if let Some(payload) = response.dnd_release_payload::<Drag>()
+            && let Drag::Node(index) = payload.as_ref()
+        {
+            items.push(*index);
+            changed = true;
+        }
+    });
     changed
 }
 
@@ -412,6 +890,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn asset_property_values_match_only_their_kind() {
+        assert!(value_matches(
+            PropertyType::AudioClip,
+            &PropertyValue::AudioClip("audio/confirm.wav".into())
+        ));
+        assert!(value_matches(
+            PropertyType::SpriteFrame,
+            &PropertyValue::SpriteFrame("art/hero.png".into())
+        ));
+        assert!(!value_matches(
+            PropertyType::AudioClip,
+            &PropertyValue::SpriteFrame("art/hero.png".into())
+        ));
+        assert!(!value_matches(
+            PropertyType::SpriteFrame,
+            &PropertyValue::Prefab("Marker.prefab".into())
+        ));
+        assert!(value_matches(
+            PropertyType::PrefabArray,
+            &PropertyValue::Prefabs(vec!["Marker.prefab".into()])
+        ));
+        assert!(value_matches(
+            PropertyType::AudioClipArray,
+            &PropertyValue::AudioClips(vec!["audio/confirm.wav".into()])
+        ));
+        assert!(value_matches(
+            PropertyType::SpriteFrameArray,
+            &PropertyValue::SpriteFrames(vec!["art/hero.png".into()])
+        ));
+        assert!(!value_matches(
+            PropertyType::AudioClipArray,
+            &PropertyValue::AudioClip("audio/confirm.wav".into())
+        ));
+    }
+
+    #[test]
     fn references_reject_wrong_drag_types() {
         assert!(reference(PropertyType::Node, &Drag::Node(4)).is_some());
         assert!(
@@ -426,6 +940,27 @@ mod tests {
             reference(
                 PropertyType::Prefab,
                 &Drag::Asset("marker.aurora-prefab".into())
+            )
+            .is_some()
+        );
+        assert!(
+            reference(
+                PropertyType::AudioClipArray,
+                &Drag::Asset("audio/confirm.wav".into())
+            )
+            .is_some()
+        );
+        assert!(
+            reference(
+                PropertyType::AudioClipArray,
+                &Drag::Asset("art/hero.png".into())
+            )
+            .is_none()
+        );
+        assert!(
+            reference(
+                PropertyType::SpriteFrameArray,
+                &Drag::Asset("art/hero.png".into())
             )
             .is_some()
         );

@@ -295,6 +295,19 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
                             f64::from(key.frame) / f64::from(clip.sample_rate)
                         ));
                         changed |= ui.add(DragValue::new(&mut key.value)).changed();
+                        if matches!(track.interpolation, Interpolation::Cubic) {
+                            let mut slopes = key.tangents.unwrap_or_default();
+                            let incoming = ui
+                                .add(DragValue::new(&mut slopes[0]).speed(0.01).prefix("In "))
+                                .on_hover_text("Incoming slope per frame");
+                            let outgoing = ui
+                                .add(DragValue::new(&mut slopes[1]).speed(0.01).prefix("Out "))
+                                .on_hover_text("Outgoing slope per frame");
+                            if incoming.changed() || outgoing.changed() {
+                                key.tangents = (slopes != [0.0; 2]).then_some(slopes);
+                                changed = true;
+                            }
+                        }
                         if ui
                             .small_button(strings::CLEAR)
                             .on_hover_text(strings::REMOVE_KEY)
@@ -308,6 +321,9 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
                         changed = true;
                     }
                 });
+                ui.collapsing("Curve editor", |ui| {
+                    changed |= curve_editor(ui, track, clip.duration);
+                });
             });
         }
     });
@@ -315,6 +331,94 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         clip.tracks.retain(|track| !track.keys.is_empty());
         editor.project.changed();
     }
+}
+
+fn curve_editor(ui: &mut Ui, track: &mut Track, duration: u32) -> bool {
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width().clamp(180.0, 800.0), 100.0),
+        egui::Sense::hover(),
+    );
+    let rect = rect.shrink(6.0);
+    let painter = ui.painter_at(rect.expand(6.0));
+    painter.rect_filled(rect.expand(6.0), theme::ROUND, theme::VIEWPORT);
+    let minimum = track
+        .keys
+        .iter()
+        .map(|key| key.value as f64)
+        .fold(f64::INFINITY, f64::min);
+    let maximum = track
+        .keys
+        .iter()
+        .map(|key| key.value as f64)
+        .fold(f64::NEG_INFINITY, f64::max);
+    if track.keys.is_empty() {
+        return false;
+    }
+    let padding = ((maximum - minimum) * 0.15).max(1.0);
+    // Keep the coordinate system fixed while a handle is moving.
+    let bounds_id = ui.id().with("drag-bounds");
+    let (lo, hi) = ui
+        .data(|data| data.get_temp::<(f64, f64)>(bounds_id))
+        .unwrap_or((minimum - padding, maximum + padding));
+    let point = |frame: f64, value: f32| {
+        egui::pos2(
+            rect.left() + rect.width() * (frame / f64::from(duration)) as f32,
+            rect.bottom() - rect.height() * ((f64::from(value) - lo) / (hi - lo)) as f32,
+        )
+    };
+    let mut previous = None;
+    for pixel in 0..=rect.width().ceil() as u32 {
+        let frame = (f64::from(pixel) / f64::from(rect.width())).min(1.0) * f64::from(duration);
+        if let Some(value) = track.sample(frame) {
+            let next = point(frame, value);
+            if let Some(last) = previous {
+                painter.line_segment([last, next], (1.5, theme::ANIMATION));
+            }
+            previous = Some(next);
+        }
+    }
+    let mut changed = false;
+    for i in 0..track.keys.len() {
+        let key = &track.keys[i];
+        let pos = point(f64::from(key.frame), key.value);
+        let response = ui.interact(
+            egui::Rect::from_center_size(pos, egui::vec2(12.0, 12.0)),
+            ui.id().with(i),
+            egui::Sense::drag(),
+        );
+        painter.circle_filled(
+            pos,
+            4.0,
+            if response.dragged() {
+                theme::ACCENT
+            } else {
+                theme::WARNING
+            },
+        );
+        if response.drag_started() {
+            ui.data_mut(|data| data.insert_temp(bounds_id, (lo, hi)));
+        }
+        if response.dragged()
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            let first = i
+                .checked_sub(1)
+                .map_or(0, |prev| track.keys[prev].frame + 1);
+            let last = track
+                .keys
+                .get(i + 1)
+                .map_or(duration, |next| next.frame - 1);
+            let frame = f64::from((pointer.x - rect.left()) / rect.width()) * f64::from(duration);
+            let value = lo + f64::from((rect.bottom() - pointer.y) / rect.height()) * (hi - lo);
+            track.keys[i].frame = (frame.round() as u32).clamp(first, last);
+            track.keys[i].value = value.clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32;
+            changed = true;
+        }
+        if response.drag_stopped() {
+            ui.data_mut(|data| data.remove::<(f64, f64)>(bounds_id));
+        }
+    }
+    changed
 }
 
 fn ruler(ui: &mut Ui, clip: &Clip, frame: f64) -> Option<f64> {
@@ -393,7 +497,14 @@ fn record(clip: &mut Clip, node: usize, property: Property, frame: u32, value: f
     let keys = &mut clip.tracks[index].keys;
     match keys.binary_search_by_key(&frame, |key| key.frame) {
         Ok(index) => keys[index].value = value,
-        Err(index) => keys.insert(index, Key { frame, value }),
+        Err(index) => keys.insert(
+            index,
+            Key {
+                frame,
+                value,
+                tangents: None,
+            },
+        ),
     }
 }
 

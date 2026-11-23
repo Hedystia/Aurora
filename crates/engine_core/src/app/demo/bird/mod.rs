@@ -176,6 +176,7 @@ fn sprite(
     scene.set_sprite(
         node,
         Sprite {
+            emitter: None,
             texture,
             size: size.map(|side| side * PIXELS_PER_METER),
         },

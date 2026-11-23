@@ -1,5 +1,9 @@
 //! Fixed-step Rapier world with node-owned bodies and ordered contacts.
 
+mod authored;
+pub(crate) use authored::AuthoredPhysics;
+pub use authored::{Body2D, BodyMode, Collider2D};
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, ensure};
@@ -83,10 +87,18 @@ impl Physics2D {
             .narrow_phase
             .contact_pairs()
             .filter(|pair| pair.has_any_active_contact())
-            .map(|pair| {
+            .map(|pair| (pair.collider1, pair.collider2))
+            .chain(
+                self.world
+                    .narrow_phase
+                    .intersection_pairs()
+                    .filter(|(_, _, touching)| *touching)
+                    .map(|(a, b, _)| (a, b)),
+            )
+            .map(|(a, b)| {
                 let mut nodes = [
-                    EntityId(self.world.colliders[pair.collider1].user_data as u64),
-                    EntityId(self.world.colliders[pair.collider2].user_data as u64),
+                    EntityId(self.world.colliders[a].user_data as u64),
+                    EntityId(self.world.colliders[b].user_data as u64),
                 ];
                 nodes.sort_unstable();
                 nodes

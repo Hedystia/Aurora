@@ -1,5 +1,6 @@
-import { Component, registerComponent } from "../aurora-cc/index.ts";
+import { Component, ccclass } from "aurora";
 
+@ccclass('SceneDemo')
 export class SceneDemo extends Component {
   onAnimationEvent(code: number): void {
     if (code === 7) this.director.changeScene(1);
@@ -10,8 +11,3 @@ export class SceneDemo extends Component {
     this.director.resume();
   }
 }
-
-export const metadata =
-registerComponent(["SceneDemo", {
-  "props": {}
-}]);

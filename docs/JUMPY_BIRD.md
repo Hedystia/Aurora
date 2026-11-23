@@ -10,7 +10,7 @@ The TypeScript component owns gravity, flaps, scrolling, pillar placement and re
 cargo build --locked --workspace
 script="$(tools/build-script.sh native jumpy)"
 target/debug/aurora-player \
-  --scene scripts/game-template/jumpy/main.aurora-scene \
+  --scene scripts/game-template/jumpy/main.scene \
   --script-node 5 --script "$script" --profile .aurora/jumpy-best
 ```
 

@@ -3,11 +3,16 @@
 mod assets_browser;
 mod console;
 mod docks;
+mod export;
+mod icons;
 mod inspector;
 mod node_library;
 mod node_tree;
 mod preview;
 mod project;
+mod project_manager;
+mod project_types;
+mod script_assets;
 mod strings;
 mod theme;
 mod timeline;
@@ -27,7 +32,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use clap::Parser;
 use egui::{Event, Ui, UserData, ViewportBuilder, ViewportCommand};
-use egui_dock::{DockArea, DockState, Style};
+use egui_dock::{DockArea, DockState};
 use engine_core::{
     animation::Property,
     save::{InstanceFile, PrefabFile, PropertyValue, VERSION},
@@ -46,21 +51,22 @@ struct Options {
     #[arg(long)]
     screenshot: Option<PathBuf>,
     /// Open a project directory or authored scene file.
-    #[arg(long, default_value = ".")]
-    project: PathBuf,
-    /// Start the player immediately, including for screenshot capture.
     #[arg(long)]
+    project: Option<PathBuf>,
+    /// Start the player immediately, including for screenshot capture.
+    #[arg(long, requires = "project")]
     play: bool,
+    /// Export saved scenes, their assets, and native scripts to a new directory.
+    #[arg(long, requires = "project", conflicts_with_all = ["screenshot", "play"])]
+    export: Option<PathBuf>,
+    /// Include another saved scene from the project. Repeat to set the switch order.
+    #[arg(long, requires = "export", value_name = "PATH")]
+    include_scene: Vec<PathBuf>,
 }
 
 struct Editor {
     project: Project,
     layout: DockState<docks::Dock>,
-    screenshot: Option<PathBuf>,
-    requested_size: Option<[usize; 2]>,
-    capture_result: Capture,
-    capture_game: bool,
-    start_deadline: Instant,
     preview: preview::Preview,
     viewport: viewport::Viewport,
     timeline: timeline::Timeline,
@@ -75,34 +81,34 @@ struct Editor {
     asset_search: String,
     tree_search: String,
     selected_asset: Option<PathBuf>,
+    asset_directory: PathBuf,
+    asset_grid: bool,
+    asset_delete: Option<PathBuf>,
     custom_nodes: bool,
     rename: Option<(usize, String)>,
     focus_rename: bool,
+    focus_tree: bool,
     create_node: bool,
     new_node_search: String,
-    new_asset: Option<bool>,
+    new_asset: Option<assets_browser::AssetKind>,
     asset_name: String,
     component_picker: bool,
     component_search: String,
     open_dialog: bool,
+    display_dialog: bool,
     pending_open: Option<PathBuf>,
-    open_path: String,
     close_dialog: bool,
     logs: Vec<String>,
+    types_installed: bool,
     error_count: usize,
 }
 
 impl Editor {
-    fn new(project: Project, options: Options, capture_result: Capture) -> Self {
+    fn new(project: Project, play: bool) -> Self {
         let (watcher, watch_events) = make_watcher();
         let mut editor = Self {
             layout: load_layout(&project),
             project,
-            screenshot: options.screenshot,
-            requested_size: None,
-            capture_result,
-            capture_game: options.play,
-            start_deadline: Instant::now() + Duration::from_secs(20),
             preview: preview::Preview::default(),
             viewport: viewport::Viewport::default(),
             timeline: timeline::Timeline::default(),
@@ -117,9 +123,13 @@ impl Editor {
             asset_search: String::new(),
             tree_search: String::new(),
             selected_asset: None,
+            asset_directory: PathBuf::new(),
+            asset_grid: true,
+            asset_delete: None,
             custom_nodes: false,
             rename: None,
             focus_rename: false,
+            focus_tree: false,
             create_node: false,
             new_node_search: String::new(),
             new_asset: None,
@@ -127,14 +137,15 @@ impl Editor {
             component_picker: false,
             component_search: String::new(),
             open_dialog: false,
+            display_dialog: false,
             pending_open: None,
-            open_path: String::new(),
             close_dialog: false,
             logs: Vec::new(),
+            types_installed: false,
             error_count: 0,
         };
         editor.refresh_assets();
-        if options.play {
+        if play {
             editor.play();
         }
         editor
@@ -142,6 +153,11 @@ impl Editor {
 
     fn play(&mut self) {
         self.preview.start(&self.project);
+    }
+
+    fn stop_play(&mut self) {
+        self.preview.stop();
+        self.preview.game_view = false;
     }
 
     fn report(&mut self, result: Result<()>) {
@@ -163,6 +179,21 @@ impl Editor {
 
     fn refresh_assets(&mut self) {
         self.asset_paths = self.project.assets();
+        if !self.asset_directory.starts_with(&self.project.root) || !self.asset_directory.is_dir() {
+            let assets = self.project.root.join("assets");
+            self.asset_directory = if assets.is_dir() {
+                assets
+            } else {
+                self.project.root.clone()
+            };
+        }
+        if self
+            .selected_asset
+            .as_ref()
+            .is_some_and(|path| !path.exists())
+        {
+            self.selected_asset = None;
+        }
         self.metadata.clear();
         for path in self
             .asset_paths
@@ -180,6 +211,7 @@ impl Editor {
                 std::iter::once((self.project.root.clone(), RecursiveMode::NonRecursive)).chain(
                     [
                         "assets",
+                        "resources",
                         "scenes",
                         "prefabs",
                         "scripts",
@@ -211,7 +243,7 @@ impl Editor {
                     && event
                         .paths
                         .iter()
-                        .any(|path| project::extension(path) == "ts")
+                        .any(|path| project::extension(path) == "ts" || project::is_prefab(path))
                 {
                     self.preview.reload_at = self.watcher_due;
                 }
@@ -233,16 +265,17 @@ impl Editor {
     }
 
     fn open_asset(&mut self, path: &Path) -> Result<()> {
-        if matches!(project::extension(path), "aurora-scene" | "aurora-prefab") || path.is_dir() {
+        if (project::is_scene(path) || project::is_prefab(path)) || path.is_dir() {
             ensure!(!self.project.dirty, "{}", strings::SAVE_FIRST);
             let project = Project::open(path)?;
             self.save_layout()?;
-            self.preview.stop();
-            self.preview.game_view = false;
+            self.stop_play();
             self.timeline = timeline::Timeline::default();
             self.animation_display = None;
             self.viewport = viewport::Viewport::default();
             self.selected_asset = None;
+            self.asset_directory = PathBuf::new();
+            self.asset_delete = None;
             self.rename = None;
             self.layout = load_layout(&project);
             self.project = project;
@@ -301,7 +334,7 @@ impl Editor {
             .collect();
         let directory = self.project.root.join("prefabs");
         fs::create_dir_all(&directory)?;
-        let path = directory.join(format!("{name}.aurora-prefab"));
+        let path = directory.join(format!("{name}.prefab"));
         ensure!(!path.exists(), "Prefab {} already exists", path.display());
         PrefabFile {
             version: VERSION,
@@ -310,6 +343,89 @@ impl Editor {
         .save(&path)?;
         self.refresh_assets();
         Ok(())
+    }
+
+    fn reparent_allowed(&self, id: usize, parent: Option<usize>) -> bool {
+        let nodes = &self.project.document.nodes;
+        if id >= nodes.len() || (self.project.prefab && id == 0) {
+            return false;
+        }
+        let mut cursor = parent;
+        while let Some(anchor) = cursor {
+            if anchor == id {
+                return false;
+            }
+            let Some(node) = nodes.get(anchor) else {
+                return false;
+            };
+            cursor = node.parent;
+        }
+        true
+    }
+
+    fn drop_allowed(&self, payload: &Drag, parent: Option<usize>) -> bool {
+        match payload {
+            Drag::Node(index) => self.reparent_allowed(*index, parent),
+            Drag::New(name) => {
+                *name == strings::EMPTY_NODE
+                    || *name == strings::SPRITE_NODE
+                    || crate::inspector::spatial::preset(name).is_some()
+                    || crate::inspector::visual::NAMES.contains(name)
+            }
+            Drag::Asset(path) => match project::extension(path) {
+                "png" | "ts" => true,
+                _ => project::is_prefab(path) && !self.project.prefab,
+            },
+        }
+    }
+
+    fn drag_preview(&self, ctx: &egui::Context) {
+        if !ctx.input(|input| input.pointer.any_down()) {
+            return;
+        }
+        let Some(payload) = egui::DragAndDrop::payload::<Drag>(ctx) else {
+            return;
+        };
+        let Some(position) = ctx.input(|input| input.pointer.hover_pos()) else {
+            return;
+        };
+        let label = node_tree::drag_label(self, payload.as_ref());
+        let icon = match payload.as_ref() {
+            Drag::Node(index) => {
+                let sprite = self
+                    .project
+                    .document
+                    .nodes
+                    .get(*index)
+                    .is_some_and(|node| node.sprite.is_some());
+                icons::node(sprite)
+            }
+            Drag::Asset(path) => icons::file(path),
+            Drag::New(name) => {
+                if *name == strings::SPRITE_NODE {
+                    icons::Icon::Sprite
+                } else {
+                    icons::Icon::Node
+                }
+            }
+        };
+        egui::Area::new(egui::Id::new("editor-drag-preview"))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(position + egui::vec2(14.0, 12.0))
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(theme::SHELL)
+                    .stroke(egui::Stroke::new(theme::LINE, theme::ACCENT))
+                    .corner_radius(theme::ROUND)
+                    .inner_margin(egui::Margin::symmetric(8, 4))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            icons::inline(ui, icon, theme::ACCENT);
+                            ui.label(egui::RichText::new(label).color(theme::FOREGROUND));
+                        });
+                    });
+            });
     }
 
     fn drop_into(&mut self, payload: &Drag, parent: Option<usize>) {
@@ -325,7 +441,7 @@ impl Editor {
             Drag::Asset(path) if project::extension(path) == "ts" => {
                 self.attach_default(path, parent)
             }
-            Drag::Asset(path) if project::extension(path) == "aurora-prefab" => {
+            Drag::Asset(path) if project::is_prefab(path) => {
                 if self.project.prefab {
                     Err(anyhow::anyhow!(
                         "Prefab documents contain a single inline subtree"
@@ -383,6 +499,14 @@ impl Editor {
                 self.report(result);
             }
         }
+        if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::F5))
+            && !self.preview.is_playing()
+        {
+            self.play();
+        }
+        if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::F8)) {
+            self.stop_play();
+        }
         let dropped = ctx.input(|input| input.raw.dropped_files.clone());
         for path in dropped.into_iter().filter_map(|file| file.path) {
             let result = assets_browser::import(&self.project.root, &path);
@@ -392,22 +516,31 @@ impl Editor {
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
-        if self.open_dialog {
-            egui::Window::new(strings::OPEN_PROJECT).show(ctx, |ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.open_path)
-                        .hint_text(strings::PROJECT_PATH),
-                );
-                if ui.button(strings::OPEN).clicked() {
-                    let path = PathBuf::from(self.open_path.trim());
-                    let result = self.open_asset(&path);
-                    self.open_dialog = result.is_err();
-                    self.report(result);
-                }
-                if ui.button(strings::CANCEL).clicked() {
-                    self.open_dialog = false;
-                }
-            });
+        if self.display_dialog {
+            use engine_core::scene::{Display2D, Fit};
+            egui::Window::new(strings::DISPLAY_SETTINGS)
+                .open(&mut self.display_dialog)
+                .show(ctx, |ui| {
+                    let mut display = self.project.document.display.unwrap_or_default();
+                    let previous = display;
+                    ui.label(strings::DESIGN_RESOLUTION);
+                    for (axis, label) in [strings::WIDTH, strings::HEIGHT].into_iter().enumerate() {
+                        ui.add(
+                            egui::DragValue::new(&mut display.resolution[axis])
+                                .prefix(label)
+                                .range(1..=Display2D::MAX_DIMENSION),
+                        );
+                    }
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut display.fit, Fit::Contain, strings::CONTAIN);
+                        ui.selectable_value(&mut display.fit, Fit::Cover, strings::COVER);
+                        ui.selectable_value(&mut display.fit, Fit::Stretch, strings::STRETCH);
+                    });
+                    if display != previous {
+                        self.project.document.display = Some(display);
+                        self.project.changed();
+                    }
+                });
         }
         if self.create_node {
             egui::Window::new(strings::CREATE_NODE).show(ctx, |ui| {
@@ -430,27 +563,83 @@ impl Editor {
                 }
             });
         }
-        if let Some(script) = self.new_asset {
-            egui::Window::new(if script {
-                strings::NEW_SCRIPT
-            } else {
-                strings::NEW_FOLDER
-            })
-            .show(ctx, |ui| {
-                ui.text_edit_singleline(&mut self.asset_name);
+        if let Some(kind) = self.new_asset {
+            let root = self.project.root.clone();
+            let directory = self.asset_directory.clone();
+            egui::Window::new(kind.label()).show(ctx, |ui| {
+                let relative = directory.strip_prefix(&root).unwrap_or(&directory);
+                ui.label(
+                    egui::RichText::new(format!("in {}", relative.display())).color(theme::TEXT),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.asset_name)
+                        .hint_text(strings::NAME)
+                        .margin(egui::Margin::symmetric(6, 3)),
+                );
                 if ui.button(strings::CREATE).clicked() {
                     let result =
-                        assets_browser::create(&self.project.root, self.asset_name.trim(), script);
-                    if result.is_ok() {
-                        self.new_asset = None;
-                        self.refresh_assets();
+                        assets_browser::create(&root, &directory, self.asset_name.trim(), kind);
+                    match result {
+                        Ok(path) => {
+                            self.selected_asset = Some(path);
+                            self.new_asset = None;
+                            self.refresh_assets();
+                        }
+                        Err(error) => self.report(Err(error)),
                     }
-                    self.report(result);
                 }
                 if ui.button(strings::CANCEL).clicked() {
                     self.new_asset = None;
                 }
             });
+        }
+        if let Some(path) = self.asset_delete.clone() {
+            if !path.exists() {
+                self.asset_delete = None;
+            } else {
+                egui::Window::new(strings::DELETE_CONFIRM).show(ctx, |ui| {
+                    ui.label(
+                        egui::RichText::new(path.file_name().unwrap_or_default().to_string_lossy())
+                            .strong(),
+                    );
+                    ui.colored_label(
+                        theme::REJECT,
+                        if path.is_dir() {
+                            strings::DELETE_FOLDER_WARNING
+                        } else {
+                            strings::DELETE_WARNING
+                        },
+                    );
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add(egui::Button::new(strings::DELETE).fill(theme::PRIMARY))
+                            .clicked()
+                        {
+                            let deleted_dir = path.is_dir();
+                            let result = assets_browser::remove(&self.project.root, &path);
+                            if result.is_ok() {
+                                if self
+                                    .selected_asset
+                                    .as_ref()
+                                    .is_some_and(|selected| selected.starts_with(&path))
+                                {
+                                    self.selected_asset = None;
+                                }
+                                if deleted_dir && self.asset_directory.starts_with(&path) {
+                                    self.asset_directory =
+                                        path.parent().unwrap_or(&self.project.root).to_path_buf();
+                                }
+                                self.asset_delete = None;
+                                self.refresh_assets();
+                            }
+                            self.report(result);
+                        }
+                        if ui.button(strings::CANCEL).clicked() {
+                            self.asset_delete = None;
+                        }
+                    });
+                });
+            }
         }
         if self.component_picker {
             egui::Window::new(strings::ADD_COMPONENT).show(ctx, |ui| {
@@ -498,12 +687,69 @@ impl Editor {
             });
         }
     }
+}
+
+struct PendingUpgrade {
+    project: Project,
+    version: String,
+    play: bool,
+}
+
+struct Workbench {
+    editor: Option<Box<Editor>>,
+    manager: project_manager::Manager,
+    upgrade: Option<PendingUpgrade>,
+    managing: bool,
+    screenshot: Option<PathBuf>,
+    requested_size: Option<[usize; 2]>,
+    capture_result: Capture,
+    capture_game: bool,
+    start_deadline: Instant,
+}
+
+impl Workbench {
+    fn new(project: Option<Project>, options: Options, capture_result: Capture) -> Self {
+        let mut workbench = Self {
+            managing: true,
+            editor: None,
+            manager: project_manager::Manager::new(),
+            upgrade: None,
+            screenshot: options.screenshot,
+            requested_size: None,
+            capture_result,
+            capture_game: options.play,
+            start_deadline: Instant::now() + Duration::from_secs(20),
+        };
+        if let Some(project) = project
+            && let Err(error) = workbench.prepare_project(project, options.play)
+        {
+            workbench.manager.error = Some(format!("{error:#}"));
+        }
+        workbench
+    }
 
     fn capture(&mut self, ui: &Ui, ctx: &egui::Context) {
-        if self.capture_game && self.preview.texture.is_none() {
-            if Instant::now() >= self.start_deadline || !self.preview.is_playing() {
+        if self.screenshot.is_none() {
+            return;
+        }
+        if self.capture_game && self.editor.is_none() {
+            let reason = if self.upgrade.is_some() {
+                "The project requires an SDK update before Play".into()
+            } else {
+                self.manager.error.clone().unwrap_or_else(|| "Open a project before capturing Game view".into())
+            };
+            self.capture_result.set(Some(Err(image::ImageError::IoError(std::io::Error::other(reason)))));
+            self.screenshot = None;
+            ctx.send_viewport_cmd(ViewportCommand::Close);
+            return;
+        }
+        if self.capture_game
+            && let Some(editor) = &self.editor
+            && editor.preview.texture.is_none()
+        {
+            if Instant::now() >= self.start_deadline || !editor.preview.is_playing() {
                 self.capture_result.set(Some(Err(image::ImageError::IoError(
-                    std::io::Error::other(self.logs.join("\n")),
+                    std::io::Error::other(editor.logs.join("\n")),
                 ))));
                 self.screenshot = None;
                 ctx.send_viewport_cmd(ViewportCommand::Close);
@@ -553,6 +799,116 @@ impl Editor {
     }
 }
 
+impl eframe::App for Workbench {
+    fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        // An active dirty document still owns the close confirmation.
+        if self.managing
+            && ctx.input(|input| input.viewport().close_requested())
+            && self
+                .editor
+                .as_ref()
+                .is_some_and(|editor| editor.project.dirty)
+        {
+            self.managing = false;
+        }
+        if self.managing {
+            let dirty = self
+                .editor
+                .as_ref()
+                .is_some_and(|editor| editor.project.dirty);
+            let upgrade = self
+                .upgrade
+                .as_ref()
+                .map(|pending| (pending.project.path.as_path(), pending.version.as_str()));
+            if let Some(action) = self.manager.show(ui, self.editor.is_some(), dirty, upgrade) {
+                match action {
+                    project_manager::Action::Back => self.managing = false,
+                    project_manager::Action::Open(path) => self.open(path, None),
+                    project_manager::Action::Create(path, kind) => self.open(path, Some(kind)),
+                    project_manager::Action::ApproveUpgrade => self.approve_upgrade(),
+                    project_manager::Action::CancelUpgrade => {
+                        self.upgrade = None;
+                    }
+                }
+                ctx.request_repaint();
+            }
+        } else if let Some(editor) = &mut self.editor {
+            editor.ui(ui, frame);
+            if std::mem::take(&mut editor.open_dialog) {
+                self.managing = true;
+                ctx.request_repaint();
+            }
+        }
+        self.capture(ui, &ctx);
+    }
+}
+
+impl Workbench {
+    fn open(&mut self, path: PathBuf, create: Option<project::ProjectKind>) {
+        let result = (|| {
+            if let Some(editor) = &self.editor {
+                ensure!(!editor.project.dirty, "{}", strings::SAVE_FIRST);
+            }
+            let project = if let Some(kind) = create {
+                Project::create(&path, kind)?
+            } else {
+                Project::open_existing(&path)?
+            };
+            self.prepare_project(project, false)
+        })();
+        if let Err(error) = result {
+            self.manager.error = Some(format!("{error:#}"));
+        }
+    }
+
+    fn prepare_project(&mut self, project: Project, play: bool) -> Result<()> {
+        if project.path.is_file() && !project.prefab {
+            let root = project_types::root(&project.root);
+            let missing = match project_types::status(root)? {
+                project_types::Status::Different(version) => {
+                    self.upgrade = Some(PendingUpgrade {
+                        project,
+                        version,
+                        play,
+                    });
+                    self.manager.prepare_upgrade();
+                    return Ok(());
+                }
+                project_types::Status::Missing => true,
+                project_types::Status::Current => false,
+            };
+            project_types::refresh(root, None)?;
+            self.activate(project, play, missing);
+        } else {
+            self.activate(project, play, false);
+        }
+        Ok(())
+    }
+
+    fn approve_upgrade(&mut self) {
+        if let Some(pending) = self.upgrade.take() {
+            let root = project_types::root(&pending.project.root);
+            match project_types::refresh(root, Some(&pending.version)) {
+                Ok(()) => self.activate(pending.project, pending.play, false),
+                Err(error) => {
+                    self.manager.error = Some(format!("{error:#}"));
+                    self.upgrade = Some(pending);
+                }
+            }
+        }
+    }
+
+    fn activate(&mut self, project: Project, play: bool, types_installed: bool) {
+        self.manager.remember(&project);
+        let mut editor = Editor::new(project, play);
+        editor.types_installed = types_installed;
+        self.editor = Some(Box::new(editor));
+        self.start_deadline = Instant::now() + Duration::from_secs(20);
+        self.managing = false;
+    }
+}
+
 impl eframe::App for Editor {
     fn ui(&mut self, ui: &mut Ui, _: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
@@ -577,24 +933,40 @@ impl eframe::App for Editor {
             self.logs.drain(..excess);
         }
         self.shortcuts(&ctx);
-        egui::Panel::top("editor-menu").show(ui, |ui| {
-            toolbar::menus(ui, self);
-            toolbar::show(ui, self);
-        });
-        egui::Panel::bottom("editor-status").show(ui, |ui| toolbar::status(ui, self));
-        let style = Style::from_egui(ui.style().as_ref());
+        let chrome = egui::Frame::new()
+            .fill(theme::SHELL)
+            .inner_margin(theme::TOOLBAR_MARGIN);
+        egui::Panel::top("editor-menu")
+            .frame(chrome)
+            .show(ui, |ui| {
+                toolbar::menus(ui, self);
+                ui.separator();
+                toolbar::show(ui, self);
+                if self.types_installed {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.colored_label(theme::WARNING, strings::TYPES_INSTALLED);
+                        if ui.small_button(strings::DISMISS).clicked() {
+                            self.types_installed = false;
+                        }
+                    });
+                }
+            });
+        egui::Panel::bottom("editor-status")
+            .frame(chrome)
+            .show(ui, |ui| toolbar::status(ui, self));
+        let style = theme::dock_style(ui.style());
         let mut layout = std::mem::replace(&mut self.layout, DockState::new(Vec::new()));
         DockArea::new(&mut layout)
             .style(style)
             .show_leaf_close_all_buttons(false)
             .show_inside(ui, &mut docks::Viewer(self));
         self.layout = layout;
+        self.drag_preview(&ctx);
         if let Some(path) = self.pending_open.take() {
             let result = self.open_asset(&path);
             self.report(result);
         }
         self.dialogs(&ctx);
-        self.capture(ui, &ctx);
     }
 }
 
@@ -637,9 +1009,29 @@ fn open_external(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Finds the SDK shipped beside the editor, or the workspace SDK in a development build.
+fn engine_resources() -> anyhow::Result<std::path::PathBuf> {
+    let packaged = std::env::current_exe()?.with_file_name("sdk");
+    if packaged.is_dir() {
+        Ok(packaged)
+    } else {
+        Ok(std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()?)
+    }
+}
+
 fn main() -> Result<()> {
     let options = Options::parse();
-    let project = Project::open(&options.project)?;
+    if let Some(output) = &options.export {
+        let source = options
+            .project
+            .as_deref()
+            .context("Export requires a project")?;
+        let project = Project::open_existing(source)?;
+        return export::export(&project, &options.include_scene, output);
+    }
+    let project = options.project.as_deref().map(Project::open).transpose()?;
     let capture_requested = options.screenshot.is_some();
     let capture_result = Capture::default();
     let result = capture_result.clone();
@@ -653,7 +1045,7 @@ fn main() -> Result<()> {
         },
         Box::new(move |context| {
             theme::apply(&context.egui_ctx);
-            Ok(Box::new(Editor::new(project, options, result)))
+            Ok(Box::new(Workbench::new(project, options, result)))
         }),
     )
     .map_err(|error| anyhow::anyhow!("{error}"))?;

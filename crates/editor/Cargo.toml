@@ -12,6 +12,9 @@ path = "src/mod.rs"
 workspace = true
 
 [dependencies]
+gltf.workspace = true
+base64.workspace = true
+glam.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 eframe.workspace = true

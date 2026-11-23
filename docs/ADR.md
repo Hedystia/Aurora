@@ -53,3 +53,76 @@
 - Rapier remains the default 3D solver. The optional Jolt implementation is selected at runtime in a build that enables `physics-jolt`. Both expose the same cuboid pose and velocity shape and advance once per existing fixed tick.
 - The 3D preview and windowed player share their existing GPU device, surface management and frame readback. The new opaque pass owns a perspective camera, an instanced unit cuboid and a depth attachment sized to the active target.
 - The spatial snapshot adds an optional 3D section. The 2D state schema and scripting protocol stay compatible with the earlier samples.
+
+## Scene component bindings
+
+- The editor generates one ordered component list from the scene's inline attachments. The player sends a binding index alongside the node handle in protocol 5, so several components can own distinct state while accessing the same node. One child still handles the full scene, and queued edits finish before the next component receives that event.
+
+## Project preferences and TypeScript SDK
+
+- Project manager preferences are per user, while the project catalog retains its existing Linux data location. New projects use the configured parent folder and claim a fresh child directory before writing.
+- The editor and CLI share the same embedded declarations and protocol generator. The editor refreshes its generated TypeScript config and stamps the declarations with its version. Existing root configs belong to the project. A cross-version stamp requires confirmation, while matching versions refresh changed generated contents on open.
+
+## TypeScript authoring decorators
+
+- The editor and native staging share a TypeScript syntax parser. Authored decorators declare Inspector fields and component names, and native staging erases these annotations before scriptc. Legacy script metadata remains readable.
+- Protocol 6 adds ordered load and late-update phases. The scene player completes one phase across all bindings before starting the next. Each attachment retains its own component and command queue.
+
+## Script lifecycle, authored bindings, and native export
+
+- Protocol 7 reports component enable state in reply binding flags and adds lifecycle phases and validated scene mutation commands. Dynamic handles occupy a separate range. The player alone resolves assets from the scene's ordered prefab catalog.
+- The editor builds a single ordered binding list for preview and native export. It expands authored prefab bindings in player order and applies stable execution priority. A native scene export stages source and resources, uses static-only scriptc, and publishes a new directory after compilation succeeds.
+
+## Scene-local native programs and runtime prefab bindings
+
+- Native bundles retain each scene's resource and component binding order and start a scene-local native process when switching. A manifest names scenes while member paths derive from validated indices.
+- Protocol 8 synchronizes prefab descendants and factory bindings after a script command batch. The player owns descendant handles and runs lifecycle teardown before destroying a subtree.
+- Resource callbacks resolve the authored scene's catalog and run in a separate simulation phase. Scripts receive typed handles, while decoding and rendering remain in the player.
+
+## Scene resources and runtime components
+
+- Protocol 9 adds scene-registered resource callbacks, component factories by registered name, runtime removal of dynamic components, and pointer press hit testing. Resource decoding and ownership remain in the player; scripts receive typed handles.
+
+## Node transforms and tweens
+
+- Protocol 12 sends NodeTransform and NodeScaleRotation for each scene node once per scene, after SceneStart. The script caches parent-relative position, scale and angle, so `NodeRef` getters and tween start values do not need a synchronous query. Newly created or prefab-cloned nodes enter the stream on a later tick.
+- Node-targeted pointer transactions carry the hit point in the node's local pixels. The script recovers the normalized frame position from the global pointer notification that precedes the node transaction for the same identity, so `event.x`/`event.y` stay frame-normalized while `event.nodeX`/`event.nodeY` are node-local. The player computes the local point while it still owns the captured node's world matrix.
+- Tweens advance on the player's fixed tick through the Tween kind rather than script-side timers. A tween emits MoveNode edits through the existing command queue, so authored and script-created nodes share the same movement path.
+- Node transforms are local, not world transforms. `prepare`/`perform` style matrix control and tweening scale or rotation still need new commands.
+
+## Scale, rotation and component references
+
+- Protocol 13 sends local scale and rotation changes as queued ScaleNode and RotateNode edits instead of an immediate command. A fixed reply carries one command, so position, scale, and rotation changes from the same callback would otherwise conflict. Draining queued edits through FlushCommands keeps the existing ordering and callback settlement semantics.
+- `angle` is exposed in degrees because Cocos uses degrees for node angles. The protocol and player keep radians, and the SDK converts at the boundary.
+- Asset property arrays use the same catalog keys as scalars and preserve authored order. Prefab arrays join the existing prefab dependency catalog, so dynamic factories and exports see every referenced prefab. Unregistered audio or frame entries are dropped from the generated array instead of aborting scene load.
+- Audio clip and sprite frame properties resolve through the scene's registered resource banks rather than raw file paths. The player exposes those banks to scripts, so listing them in the Inspector prevents authoring handles the scene cannot resolve. The generated entry calls `requireAudioClip`/`requireSpriteFrame`; every instance and prefab clone resolves the same catalog key. An unregistered path is skipped rather than crashing scene load.
+- Component references are stored as a local node index plus the `@ccclass` name. The generated entry constructs every instance before assigning properties, then points the field at the live instance. Prefab builders create all of a clone's components first and the script caches the array per clone, so an internal reference resolves to the same clone rather than to another instance.
+
+## Mouse events and wheel input
+
+- Protocol 11 sends wheel movement as deltas in the position slots. The player hit-tests before dispatching, so a handler that moves the scene does not change the wheel target. Every running binding receives MouseWheel, then a running binding on the hit node receives PointerNodeWheel for capture, target, and bubbling delivery.
+- Mouse pointer contacts also emit mouse-specific node and input event names. Touch phases remain available for code that treats the mouse as one finger. Wheel events carry deltas instead of pointer coordinates, so node wheel events do not expose a position.
+- Generated editor and export entries register each compiled component class with its factory name. This lets scripts pass a class constructor to `addComponent`; the instance still arrives after the callback because the player allocates the binding.
+
+## Pointer phases and scene reset
+
+- Protocol 10 tracks pointer contacts by identity. A press hit-tests and captures the topmost visible sprite; movement, release, and cancellation keep the captured reference so a drag remains coherent outside the sprite. Mouse contacts use identity zero and touch contacts use one-based identities. The player sends a global phase to every running binding and a node-targeted transaction for capture, target, and bubbling delivery.
+- Pointer coordinates occupy the envelope's position slots, so pointer transactions do not overwrite the cached node transform in the script runtime. Pointer identity shares the detail word with the node reference.
+- `SceneStart` starts every scene. It resets node listeners, dynamic prefab state, and removed-binding markers before score restoration and load callbacks, which lets an explicit CLI script reuse authored instances across scene changes.
+- Authored attachments share the dynamic teardown path for removal. The script marks an authored binding removed immediately so lookup stops returning it, while the player completes disable and destroy callbacks before dropping the binding. Bindings removed this way return on the next scene start.
+- Resource handles are component-local. Releasing a clip or frame on one component no longer discards another component's handle, and teardown releases the owning component's handles only.
+- The editor forwards real multi-touch contacts from egui to the preview pipe with editor-local ids, and the preview reader maps them to one-based touch identities. Focus loss emits one cancel-all event, which the runtime expands into a cancellation for every tracked pointer. The standalone player uses the same cancel-all path on `WindowEvent::Focused(false)`, so mouse and finger contacts cannot remain captured.
+
+## Authored 2D body ownership
+
+Scenes and prefab templates store an optional body and collider on each node. The director owns one Rapier world per active scene. After animation sampling it synchronizes external pose edits, advances the solver at 60 Hz, and writes dynamic poses back in parent-first order. Handles stay in the player. Enter and exit events use the existing collision callback path and the union of solid, trigger and legacy overlap pairs. An absent physics component has no serialized representation, which keeps old scenes and golden snapshots compatible.
+
+## Authored 2D visuals
+
+Text runs, atlas cells, tile grids and nine-slice panels resolve to content-addressed RGBA textures at their authored pixel dimensions. They use the existing sprite pass for transforms, alpha compositing, draw order and picking. Scene and prefab documents retain their editable source and asset reference. Fixed-tick particle emitters instead generate local quads at draw time. Their particles share one texture and leave entity handles and simulation order intact.
+
+## Mixed 2D and 3D authoring
+
+A scene or prefab can place an optional `spatial` component on any node. Metre-space transforms compose through spatial ancestors. Pixel-space transforms and sprite ordering keep their existing interpretation. The first visible camera and directional light in traversal order drive the depth-tested mesh pass, then the existing sprite pass overlays the scene. The Director owns the authored Rapier world and replaces it together with a successfully loaded scene. A 3D project starter uses the same scene format as a 2D project.
+
+The editor converts static glTF 2.0 triangle primitives to an ordinary Aurora prefab, including hierarchy, local TRS, geometry and material base colors. The import publishes a new prefab without replacing an existing file. Its meshes are self-contained for Play and export.

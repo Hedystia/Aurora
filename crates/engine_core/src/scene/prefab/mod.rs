@@ -15,8 +15,14 @@ pub struct PrefabNode {
     pub parent: Option<usize>,
     /// Local pose restored on checkout.
     pub pose: Transform2D,
+    /// Optional spatial components.
+    pub spatial: Option<super::spatial::SpatialNode>,
+    /// Editable source for generated sprites.
+    pub visual: Option<crate::save::visual::Visual>,
     /// Resolved sprite, if present.
     pub sprite: Option<Sprite>,
+    /// Optional authored 2D physics component.
+    pub physics2d: Option<crate::physics2d::Body2D>,
     /// Optional authored visual appearance.
     pub appearance: Option<SpriteAppearance>,
 }
@@ -66,6 +72,9 @@ impl Prefab {
                     name: node.name.clone(),
                     parent,
                     pose: node.local,
+                    physics2d: scene.body2d(id)?.as_deref().cloned(),
+                    spatial: node.spatial.clone(),
+                    visual: scene.visual(id)?,
                     sprite,
                     appearance: node.appearance,
                 });
@@ -106,6 +115,7 @@ impl Prefab {
                 name: template.name.clone(),
                 parent,
                 local: template.pose,
+                spatial: template.spatial.clone(),
                 appearance: template.appearance,
                 children: Vec::new(),
             };
@@ -118,6 +128,8 @@ impl Prefab {
             };
             scene.entities.insert(ids[index], entity);
             scene.siblings(parent)?.push(ids[index]);
+            scene.set_visual(ids[index],template.visual.clone())?;
+            scene.set_body2d(ids[index], template.physics2d.clone())?;
             if let Some(sprite) = template.sprite {
                 scene.set_sprite(ids[index], sprite)?;
             } else if scene.world.get::<&Sprite>(entity).is_ok() {

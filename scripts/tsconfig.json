@@ -1,10 +1,14 @@
 {
   "compilerOptions": {
     "strict": true,
+    "skipLibCheck": true,
+    "types": ["node"],
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "allowImportingTsExtensions": true,
+    "experimentalDecorators": true,
+    "paths": { "aurora": ["./aurora/index.ts"] },
     "noEmit": true
   }
 }

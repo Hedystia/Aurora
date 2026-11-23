@@ -53,3 +53,40 @@ Insta activates the existing `1.43.2` workspace pin. The golden runner uses exis
 ## M7 3D dependencies
 
 Rapier 3D activates at the workspace pin `0.35.3` with enhanced determinism. The optional Jolt backend resolves `oxijolt 0.6.0+jolt-5.6.0`. Glam `0.33.12` matches the version already used by Rapier's math API.
+
+## 2026-11-22 · TypeScript tooling update
+
+| Component | Pin | Reason |
+| --- | --- | --- |
+| TypeScript | 7.0.2 | Update from 5.9.3 to the stable npm release for workspace and project type checking. |
+| Node declarations | 20.19.43 | Type-check the socket launcher against Node 20, the development fallback’s minimum. |
+
+The npm TypeScript pin applies to the standalone checker. The pinned scriptc distribution supplies its own compiler for native game builds. Bun and Node remain the development launchers.
+
+## 2026-11-22 · Scripting authoring
+
+Tree-sitter `0.27.2` and its TypeScript grammar `0.23.2` are pinned for syntax-based editor metadata extraction and native decorator lowering.
+
+## 2026-11-23 · Script protocol 10
+
+Protocol 10 adds key release, identity-tracked pointer phases, node-targeted pointer delivery, and a scene-start reset. Existing native scripts must be rebuilt because the player rejects older protocol versions. The development launcher and the SDK declarations are regenerated from the same protocol definitions.
+
+## 2026-11-23 · Script protocol 11
+
+Protocol 11 adds global and hit-tested mouse wheel events, emits mouse-specific event names alongside the pointer phases, and registers component classes so `addComponent` accepts constructors. Existing native scripts must be rebuilt. `aurora-codegen` and the SDK declarations are regenerated from the same protocol definitions.
+
+## 2026-11-23 · Script protocol 12
+
+Protocol 12 streams local node transforms to the script and adds a per-tick tween phase. `NodeRef` now reads cached position, scale and angle; `tween` interpolates node positions on the fixed tick. Node-targeted pointer transactions now carry node-local pixels, which the SDK exposes as `event.nodeX`/`event.nodeY` while the normalized frame coordinates stay on `event.x`/`event.y`. Existing native scripts must be rebuilt.
+
+## 2026-11-23 · Script protocol 13
+
+Protocol 13 adds queued ScaleNode and RotateNode edits, so scripts and tweens can change local scale and rotation alongside position. `NodeRef` and `Node` gain `setScale`, `setAngle`, and writable `scaleX`, `scaleY`, and `angle` (degrees), and `tween` drives all three channels. The demo launcher now advances tweens and drains queued edits. `@property` accepts component classes and the editor serializes component references. Existing native scripts must be rebuilt.
+
+## Authored static mesh import
+
+The editor uses gltf 1.4.1 for validated glTF 2.0 accessors, base64 0.22.1 for embedded buffers and the existing glam pin for coordinate conversion. Runtime mesh rendering uses the existing wgpu pipeline. Serde's rc feature shares immutable mesh geometry across scene snapshots and prefab instances.
+
+## Authored text rasterization
+
+The runtime activates the workspace pin for `ab_glyph 0.2.32` and the locked `epaint_default_fonts 0.35.0` font-data crate. Ubuntu Light provides a portable default when the scene has no project font. Custom TrueType and OpenType fonts use the same rasterizer.

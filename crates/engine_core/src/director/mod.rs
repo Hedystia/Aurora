@@ -1,8 +1,13 @@
 //! Scene selection and pause state for authored game scenes.
 
+mod script_scene;
+
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+
+pub(crate) use self::script_scene::ScriptClone;
+use self::script_scene::ScriptScene;
 
 use crate::{
     assets::Assets,
@@ -16,6 +21,8 @@ pub struct Director {
     paths: Vec<PathBuf>,
     current: usize,
     loaded: Loaded,
+    physics: crate::physics2d::AuthoredPhysics,
+    script_scene: ScriptScene,
     assets: Assets,
     paused: bool,
     ticks: u64,
@@ -36,6 +43,8 @@ impl Director {
             paths,
             current: 0,
             loaded,
+            physics: Default::default(),
+            script_scene: ScriptScene::default(),
             assets,
             paused: false,
             ticks: 0,
@@ -92,6 +101,11 @@ impl Director {
         self.loaded.ids.get(index).copied()
     }
 
+    /// Display policy of the active 2D document.
+    pub fn display(&self) -> crate::scene::Display2D {
+        self.loaded.display
+    }
+
     /// Returns textures shared by the current scene and renderer.
     pub fn assets(&self) -> &Assets {
         &self.assets
@@ -107,6 +121,14 @@ impl Director {
 
     /// Loads the requested scene before replacing the previous one.
     pub fn change_scene(&mut self, index: usize) -> Result<Vec<Lifecycle>> {
+        let (next, entered) = self.prepare_scene_change(index)?;
+        self.commit_scene_change(index, next, entered)
+    }
+
+    pub(crate) fn prepare_scene_change(
+        &mut self,
+        index: usize,
+    ) -> Result<(Loaded, Vec<Lifecycle>)> {
         let path = self.paths.get(index).context("Unknown scene index")?;
         let mut next = SceneFile::load(path)?.instantiate(
             parent_dir(path),
@@ -114,11 +136,35 @@ impl Director {
             self.loaded.scene.successor(),
         )?;
         let entered = next.scene.activate()?;
+        Ok((next, entered))
+    }
+
+    pub(crate) fn commit_scene_change(
+        &mut self,
+        index: usize,
+        next: Loaded,
+        entered: Vec<Lifecycle>,
+    ) -> Result<Vec<Lifecycle>> {
         let mut events = self.loaded.scene.deactivate()?;
         events.extend(entered);
         self.loaded = next;
+        self.physics = Default::default();
+        self.script_scene = self.script_scene.successor();
         self.current = index;
         Ok(events)
+    }
+
+    pub(crate) fn set_linear_velocity(&mut self, node: EntityId, velocity: [f32; 2]) -> Result<()> {
+        self.physics
+            .set_velocity(&self.loaded.scene, node, velocity)
+    }
+
+    pub(crate) fn physics_overlaps(&self, target: EntityId) -> impl Iterator<Item = EntityId> + '_ {
+        self.physics.overlaps(target)
+    }
+
+    pub(crate) fn physics_contacts(&self) -> &[crate::physics2d::Contact] {
+        &self.physics.contacts
     }
 
     /// Starts an authored clip from its first sample.
@@ -135,6 +181,8 @@ impl Director {
         if let Some(playback) = &mut self.loaded.playback {
             events.extend(playback.step(&mut self.loaded.scene)?);
         }
+        self.physics.step(&mut self.loaded.scene)?;
+        self.loaded.spatial_physics.step(&mut self.loaded.scene)?;
         self.ticks = self
             .ticks
             .checked_add(1)
@@ -167,11 +215,11 @@ mod tests {
                 ..Default::default()
             },
         )?;
-        PrefabFile::capture(&scene, child, |_| None)?.save(&base.join("sample.aurora-prefab"))?;
+        PrefabFile::capture(&scene, child, |_| None)?.save(&base.join("sample.prefab"))?;
         scene.remove(child)?;
         let mut document = SceneFile::capture(&scene, |_| None)?;
         document.instances.push(InstanceFile {
-            prefab: "sample.aurora-prefab".into(),
+            prefab: "sample.prefab".into(),
             parent: Some(0),
         });
         document.animations.push(Clip {
@@ -188,24 +236,26 @@ mod tests {
                     Key {
                         frame: 0,
                         value: 0.0,
+                        tangents: None,
                     },
                     Key {
                         frame: 2,
                         value: 4.0,
+                        tangents: None,
                     },
                 ],
             }],
             events: vec![Marker { frame: 1, code: 42 }],
         });
         document.autoplay = Some(0);
-        let first = base.join("first.aurora-scene");
-        let second = base.join("second.aurora-scene");
-        let broken = base.join("broken.aurora-scene");
+        let first = base.join("first.scene");
+        let second = base.join("second.scene");
+        let broken = base.join("broken.scene");
         document.save(&first)?;
         let mut reloaded = SceneFile::load(&first)?;
         reloaded.nodes[0].name = "Lookout".into();
         reloaded.save(&second)?;
-        reloaded.instances[0].prefab = "absent.aurora-prefab".into();
+        reloaded.instances[0].prefab = "absent.prefab".into();
         reloaded.save(&broken)?;
 
         let mut director = Director::new(vec![first, second, broken], None)?;

@@ -1,13 +1,45 @@
 # Authored scenes and prefabs
 
-`.aurora-scene` and `.aurora-prefab` are UTF-8 JSON documents with a numeric `version` of 1. Nodes appear in parent-first order and use zero-based indices. Omit a node's `parent` for a root. Prefabs have exactly one root. A sprite describes a PNG path and a local width and height. Paths resolve relative to the document that declares them. Omitting the whole transform gives the identity pose. Authored positions are in pixels, Y points up, rotation is in radians, and scale is unitless.
+`.scene` and `.prefab` are UTF-8 JSON documents with a numeric `version` of 1. Older `.aurora-scene` and `.aurora-prefab` files use the same format and still load. Nodes appear in parent-first order and use zero-based indices. Omit a node's `parent` for a root. Prefabs have exactly one root. A sprite describes a PNG path and a local width and height. Paths resolve relative to the document that declares them. Omitting the whole transform gives the identity pose. Authored positions are in pixels, Y points up, rotation is in radians, and scale is unitless.
+
+The optional `script_prefabs` array lists prefab assets available for script instantiation. Array indices identify these assets over IPC. The player resolves and caches registered prefab data on the first instantiation. Dynamically created roots have separate runtime references, and destroying one invalidates its descendant references. Authored node indices keep their existing meaning.
 
 A scene can append prefab instances. Each instance can attach to an inline scene node. Track targets use the inline nodes followed by the nodes from each instance in authored order. Runtime handles are opaque and are reallocated after a scene change or pool checkout.
 
-Use `SceneFile::capture` or `PrefabFile::capture` with a callback that resolves texture IDs to document paths, then call `save` to write the file. To edit an existing scene without losing its clips or prefab references, use `SceneFile::load`, edit the document, and save it. See the [gallery scene](../scripts/game-template/scenes/gallery.aurora-scene) and [marker prefab](../scripts/game-template/scenes/marker.aurora-prefab) for examples.
+Use `SceneFile::capture` or `PrefabFile::capture` with a callback that resolves texture IDs to document paths, then call `save` to write the file. To edit an existing scene without losing its clips or prefab references, use `SceneFile::load`, edit the document, and save it. See the [gallery scene](../scripts/game-template/scenes/gallery.scene) and [marker prefab](../scripts/game-template/scenes/marker.prefab) for examples.
 
 ## Playback and pooling
 
 A clip describes its sample rate, duration in samples, speed, wrap mode, property tracks, and optional markers. Each track targets one local transform channel and uses strictly increasing keys. Cubic interpolation eases between keys with zero tangents. An autoplay index selects the clip that starts on scene entry. The director can play another clip by index and pause or resume simulation without resetting playback.
 
 A Rust `NodePool` borrows the owning scene and prefab. `get` checks out a reset subtree, `reset` restores an active instance's authored pose and sprites, and `put` detaches it. The pool rejects a return if the prefab instance's topology changed. A returned instance's handles are stale even if a later checkout reuses its ECS allocations. TypeScript currently controls the director and receives animation events. Prefab instantiation and pooling are available through authored scene references and the Rust APIs.
+
+List scene-local prefab paths in `script_prefabs` to make them available to native or development script entries. The list order determines prefab IDs. Editor preview and native export assemble this catalog from project prefab assets and typed Inspector references. Runtime node and prefab operations are described in [Scripting](SCRIPTING.md).
+
+## Authored 2D physics
+
+Select a node in a scene or prefab, open **2D Physics** in the Inspector and enable **Rigid body**. Choose **Fixed** for scenery, **Kinematic** for an animated platform, or **Dynamic** for a falling object. Choose **Trigger** to report overlap without applying a collision impulse. Enter box width and height, circle radius, or polygon boundary points in world pixels. A polygon accepts 3–128 points in either winding order, including concave outlines. The closing edge is implicit.
+
+A node stores the component as an optional field, for example `"physics2d": {"mode":"dynamic","collider":{"shape":"circle","radius":12.0}}`. The player uses 32 pixels per meter and advances Rapier after fixed updates and animation sampling. Body position follows the scene hierarchy. Collider dimensions are independent of sprite scale, and body angle is the sum of parent and local rotations. A dynamic body needs an invertible parent transform for writing its pose back to the scene.
+
+A component bound to a dynamic body can call the existing SDK’s `this.body.setLinearVelocity(x, y)` in meters per second. The next physics step applies the most recent command. Physics pairs feed the existing collision enter and exit callbacks. Inactive subtrees leave the physics world and start with fresh bodies when enabled. Removing a touching body delivers an exit to its surviving counterpart. Scene changes discard the previous solver and its contact pairs. Existing `gameplay.sensors` keep their rectangle-overlap behavior and may coexist with body contacts.
+
+## Text, particles, and textured 2D nodes
+
+In the Node Library, click or drag **Text**, **Rich Text**, **Particles**, **Tile Map**, **Atlas Sprite**, or **Nine-Slice**. Edit the selected node in the Inspector. Each node uses its existing 2D transform, layer, tint, opacity and visibility. The Scene view shows the same geometry as Play. The timeline cursor can sample particle motion while editing a clip.
+
+- **Text and Rich Text** use the same component. Each run has text, a local pixel size and an RGBA color. Add runs for mixed styling and enter a newline for an explicit line break. Drop a project TTF or OTF on **Drop font** to replace the bundled font. The rasterizer supports kerning. Text uses glyph-by-glyph layout with explicit line breaks.
+- **Atlas Sprite** selects one uniformly sized cell by row-major index, starting at the top left. Drop a PNG sheet and set cell size and frame.
+- **Tile Map** uses the same atlas indexing. Set the grid's column count, then edit row-major cells, using −1 for empty. The file stores an empty cell as JSON null. Tile dimensions and the output image are limited to 4096 pixels per axis.
+- **Nine-Slice** takes four source border widths in left, top, right, bottom order. Set output dimensions in the Inspector to stretch the center and preserve the corners. Transform scaling applies afterward to the entire result.
+- **Particles** distributes timed particles around a radial emitter. Lifetime is in 60 Hz ticks, speed is in pixels per second and gravity acts downward. Position, rotation and scale are local to the node.
+
+Resources are document-relative, including inside prefabs. Projects using these visual components require a player and editor that understand the optional `visual` node field. Older scenes retain their original sprite bindings.
+
+### Spatial nodes and mixed scenes
+
+Choose **3D** under **Starting scene** when creating a project to get a pivot, cube, camera and directional light. Either starter accepts 2D and 3D nodes. Add **Node 3D**, **Cube 3D**, **Camera 3D** or **Directional Light** from the Node Library. Use the spatial Inspector to edit translation in metres, XYZ rotation in degrees, positive scale, cube material or physics, and camera field of view. In the Scene view, click a projected bounding box and drag the selected object in the camera plane. Play shows shaded geometry with 2D sprites composited on top.
+
+Cameras look down local −Z. The first visible camera and directional light in tree order take effect. A unit cube is one metre on each side. Fixed and dynamic cuboids share the scene's 60 Hz Rapier world. Use uniform parent scale for a rotating body to keep its shape representable as a cuboid.
+
+Drop a static GLB or glTF file onto the editor window. Aurora creates `assets/<model>.prefab`, which can be opened for editing or dragged from the Node Library into a scene. Buffers can be embedded, stored in the GLB chunk, or kept under the source file’s directory. Import supports indexed and unindexed triangle geometry, local transforms with positive scales, and base color factors. Texture maps, skinning, animations, and PBR lighting are outside this importer. Importing a second time requires a new destination name or deliberate removal of the previous prefab.

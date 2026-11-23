@@ -25,7 +25,7 @@ pub enum Interpolation {
     Step,
     /// Blend linearly.
     Linear,
-    /// Cubic ease with zero tangents at both keys.
+    /// Cubic Hermite interpolation with optional per-key slopes.
     Cubic,
 }
 
@@ -53,6 +53,9 @@ pub struct Key {
     pub frame: u32,
     /// Channel value.
     pub value: f32,
+    /// Incoming and outgoing slopes in channel units per frame. Omitted slopes are zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tangents: Option<[f32; 2]>,
 }
 
 /// A single channel's keys for one scene node.
@@ -70,16 +73,17 @@ pub struct Track {
 }
 
 impl Track {
-    fn sample(&self, frame: f64) -> f32 {
+    /// Evaluates the track in authored frames. An empty track has no value.
+    pub fn sample(&self, frame: f64) -> Option<f32> {
         let index = self
             .keys
             .partition_point(|key| f64::from(key.frame) <= frame);
         if index == 0 {
-            return self.keys[0].value;
+            return self.keys.first().map(|key| key.value);
         }
         let current = &self.keys[index - 1];
         let Some(next) = self.keys.get(index) else {
-            return current.value;
+            return Some(current.value);
         };
         let t = (frame - f64::from(current.frame)) / f64::from(next.frame - current.frame);
         let blend = match self.interpolation {
@@ -87,7 +91,16 @@ impl Track {
             Interpolation::Linear => t,
             Interpolation::Cubic => t * t * (3.0 - 2.0 * t),
         };
-        (f64::from(current.value) * (1.0 - blend) + f64::from(next.value) * blend) as f32
+        let mut value = f64::from(current.value) * (1.0 - blend) + f64::from(next.value) * blend;
+        if matches!(self.interpolation, Interpolation::Cubic) {
+            let outgoing = f64::from(current.tangents.unwrap_or_default()[1]);
+            let incoming = f64::from(next.tangents.unwrap_or_default()[0]);
+            value += f64::from(next.frame - current.frame)
+                * t
+                * (1.0 - t)
+                * ((1.0 - t) * outgoing - t * incoming);
+        }
+        Some(value.clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32)
     }
 }
 
@@ -138,10 +151,11 @@ impl Clip {
             );
             ensure!(
                 !track.keys.is_empty()
-                    && track
-                        .keys
-                        .iter()
-                        .all(|key| key.frame <= self.duration && key.value.is_finite()),
+                    && track.keys.iter().all(|key| key.frame <= self.duration
+                        && key.value.is_finite()
+                        && key
+                            .tangents
+                            .is_none_or(|slopes| slopes.into_iter().all(f32::is_finite))),
                 "Invalid animation keys"
             );
             ensure!(
@@ -264,7 +278,9 @@ impl Playback {
         for track in &self.clip.tracks {
             let node = self.nodes[track.node];
             let mut transform = scene.transform(node)?;
-            let value = track.sample(frame);
+            let Some(value) = track.sample(frame) else {
+                continue;
+            };
             match track.property {
                 Property::X => transform.position[0] = value,
                 Property::Y => transform.position[1] = value,
@@ -305,10 +321,12 @@ mod tests {
                         Key {
                             frame: 0,
                             value: 0.0,
+                            tangents: None,
                         },
                         Key {
                             frame: 2,
                             value: 2.0,
+                            tangents: None,
                         },
                     ],
                 }],

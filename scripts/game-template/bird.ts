@@ -1,5 +1,6 @@
-import { Component, Collider2D, registerComponent } from "../aurora-cc/index.ts";
+import { Component, Collider2D, ccclass } from "aurora";
 
+@ccclass('Bird')
 export class Bird extends Component {
   private soundPending = false;
 
@@ -16,7 +17,7 @@ export class Bird extends Component {
     this.flap();
   }
 
-  onFixedUpdate(_dt: number): void {
+  fixedUpdate(_dt: number): void {
     if (this.soundPending) {
       this.audio.playOneShot(0);
       this.soundPending = false;
@@ -27,8 +28,3 @@ export class Bird extends Component {
     this.audio.playOneShot(1);
   }
 }
-
-export const metadata =
-registerComponent(["Bird", {
-  "props": {}
-}]);

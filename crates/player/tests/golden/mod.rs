@@ -18,7 +18,7 @@ fn jumpy_bird() -> Result<()> {
     let cache = tempfile::tempdir()?;
     let output = Command::new(env!("CARGO_BIN_EXE_aurora-player"))
         .arg("--scene")
-        .arg(project.join("main.aurora-scene"))
+        .arg(project.join("main.scene"))
         .args(["--script-node", "5", "--headless", "--frames", "600"])
         .args([
             "--touch-at",

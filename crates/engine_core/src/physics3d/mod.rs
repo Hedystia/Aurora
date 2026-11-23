@@ -1,5 +1,7 @@
 //! Fixed-step cuboid physics shared by the Rapier and optional Jolt backends.
 
+pub(crate) mod authored;
+
 use anyhow::{Context, Result, ensure};
 use glam::{Quat, Vec3};
 use serde::Serialize;

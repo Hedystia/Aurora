@@ -1,5 +1,6 @@
 struct Camera {
     view_projection: mat4x4f,
+    light: vec4f,
 }
 @group(0) @binding(0) var<uniform> camera: Camera;
 
@@ -19,8 +20,8 @@ fn vertex(
     @location(6) tint: vec4f,
 ) -> Varyings {
     let model = mat4x4f(model_x, model_y, model_z, model_w);
-    let world_normal = normalize((model * vec4f(normal, 0.0)).xyz);
-    let sun = normalize(vec3f(-0.4, 0.8, 0.5));
+    let world_normal = normalize(cross(model_y.xyz, model_z.xyz) * normal.x + cross(model_z.xyz, model_x.xyz) * normal.y + cross(model_x.xyz, model_y.xyz) * normal.z);
+    let sun = camera.light.xyz;
     let light = 0.28 + 0.72 * max(dot(world_normal, sun), 0.0);
     return Varyings(camera.view_projection * model * vec4f(position, 1.0), tint.rgb * light);
 }

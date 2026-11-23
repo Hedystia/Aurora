@@ -1,5 +1,5 @@
 import { readSync, writeSync } from "node:fs";
-import { Component } from "../aurora-cc/index.ts";
+import { Component } from "../aurora/index.ts";
 import { run } from "./wire.ts";
 
 function receive(bytes: Uint8Array): number {
@@ -23,5 +23,9 @@ function reply(bytes: Uint8Array): number {
 }
 
 export function launch(component: Component): void {
-  run(component, receive, reply);
+  launchMany([component]);
+}
+
+export function launchMany(components: Component[]): void {
+  run(components, receive, reply);
 }

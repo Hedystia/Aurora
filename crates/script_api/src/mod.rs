@@ -6,13 +6,15 @@ pub mod transport;
 use bincode::{Decode, Encode};
 
 /// Current script protocol version.
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 13;
 /// Fixed byte count of an encoded envelope.
-pub const ENVELOPE_BYTES: usize = 48;
+pub const ENVELOPE_BYTES: usize = 52;
 /// Size of the protocol, sequence and kind prefix.
 pub const HEADER_BYTES: usize = 16;
 /// Size of the unframed shared-memory payload.
 pub const PAYLOAD_BYTES: usize = ENVELOPE_BYTES - HEADER_BYTES;
+/// Reply-only flag carrying the script component's current enabled setting.
+pub const BINDING_ENABLED: u32 = 1 << 31;
 
 /// Events sent by the player and commands returned by the script.
 #[derive(Clone, Copy, Debug, Encode, Decode, PartialEq, Eq)]
@@ -61,6 +63,78 @@ pub enum Kind {
     RecordScore,
     /// Delivers the current best score.
     RestoreScore,
+    /// Run initialization before any Start callbacks.
+    Load,
+    /// Run the component after every Update callback for the tick.
+    LateUpdate,
+    /// Creates a script-owned node under optional parent X (-1 means scene root).
+    QueueCreateNode,
+    /// Instantiates the registered prefab at Y under optional parent X.
+    QueueInstantiatePrefab,
+    /// Reparents a script-owned root under optional parent X.
+    QueueReparentNode,
+    /// Destroys a script-owned root and invalidates its descendants' handles.
+    QueueDestroyNode,
+    /// Notify a loaded component that it can start receiving gameplay callbacks.
+    Enable,
+    /// Notify a component that it stopped receiving gameplay callbacks.
+    Disable,
+    /// Tear down a loaded component and clear its scheduled callbacks and listeners.
+    Destroy,
+    /// Advance the component's timers separately from its update callbacks.
+    Schedule,
+    /// Read the enabled setting of a previously disabled component.
+    PollEnabled,
+    /// Registers a script-created root or prefab node before its components bind.
+    RegisterPrefabNode,
+    /// Attaches a compiled prefab component factory to a runtime binding.
+    RegisterPrefabComponent,
+    /// Removes a script-created node from script lookup and event routing.
+    ReleasePrefabNode,
+    /// Releases a dynamic binding after its teardown callbacks.
+    ReleasePrefabComponent,
+    /// Updates a script-created node's parent in the script hierarchy.
+    UpdatePrefabParent,
+    /// Delivers one pending resource completion to the active component.
+    ProcessResources,
+    /// Request a compiled component factory on a scene node.
+    QueueAddComponent,
+    /// Request removal of one dynamically added component.
+    QueueRemoveComponent,
+    /// Instantiate a registered factory for a newly assigned binding.
+    RegisterComponent,
+    /// Dispatch a pointer press to a hit-tested node. Detail holds the reference and pointer ID.
+    PointerTouch,
+    /// A physical key was released, identified by detail.
+    KeyUp,
+    /// A pointer moved. X and Y carry normalized coordinates and detail the pointer ID.
+    PointerMove,
+    /// A pointer contact ended. X and Y carry normalized coordinates and detail the pointer ID.
+    PointerEnd,
+    /// A pointer contact was cancelled. Detail holds the pointer ID.
+    PointerCancel,
+    /// Node-targeted pointer movement after hit testing.
+    PointerNodeMove,
+    /// Node-targeted pointer release after hit testing.
+    PointerNodeEnd,
+    /// Node-targeted pointer cancellation after hit testing.
+    PointerNodeCancel,
+    /// Marks the start of a scene before its bindings load, resetting script scene state.
+    SceneStart,
+    /// Mouse wheel movement for all running bindings. X is horizontal and Y vertical delta.
+    MouseWheel,
+    /// Mouse wheel movement over a hit-tested node. Detail holds the node reference.
+    PointerNodeWheel,
+    /// Local position of a scene node. Detail holds the reference.
+    NodeTransform,
+    /// Local scale in X and Y and rotation in the high detail bits of a scene node.
+    NodeScaleRotation,
+    /// Advances script tweens once per simulation tick.
+    Tween,
+    /// Queues a local scale change for an authored node.
+    ScaleNode,
+    /// Queues a local rotation change for an authored node.
+    RotateNode,
 }
 
 /// Wire message encoded with bincode 2 fixed-width, little-endian configuration.
@@ -80,6 +154,8 @@ pub struct Envelope {
     pub y: f64,
     /// Kind-specific handle, key or clip index. Zero when unused.
     pub detail: u64,
+    /// Zero-based component binding. Reply values also carry the enabled flag.
+    pub binding: u32,
 }
 
 impl Envelope {
@@ -118,6 +194,7 @@ mod tests {
             x: -3.5,
             y: 2.0,
             detail: u64::MAX,
+            binding: 12,
         };
         let mut bytes = message.encode()?;
         assert_eq!(bytes[..4], VERSION.to_le_bytes());
@@ -126,10 +203,32 @@ mod tests {
         assert_eq!(bytes[16..24], 42_u64.to_le_bytes());
         assert_eq!(bytes[24..32], (-3.5_f64).to_le_bytes());
         assert_eq!(bytes[32..40], 2.0_f64.to_le_bytes());
-        assert_eq!(bytes[40..], u64::MAX.to_le_bytes());
+        assert_eq!(bytes[40..48], u64::MAX.to_le_bytes());
+        assert_eq!(bytes[48..], 12_u32.to_le_bytes());
         assert_eq!(Envelope::decode(&bytes)?, message);
         bytes[12] = 255;
         assert!(Envelope::decode(&bytes).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn pointer_and_scene_kinds_match_generated_script_constants() {
+        assert_eq!(Kind::PointerTouch as u32, 42);
+        assert_eq!(Kind::KeyUp as u32, 43);
+        assert_eq!(Kind::PointerMove as u32, 44);
+        assert_eq!(Kind::PointerEnd as u32, 45);
+        assert_eq!(Kind::PointerCancel as u32, 46);
+        assert_eq!(Kind::PointerNodeMove as u32, 47);
+        assert_eq!(Kind::PointerNodeEnd as u32, 48);
+        assert_eq!(Kind::PointerNodeCancel as u32, 49);
+        assert_eq!(Kind::SceneStart as u32, 50);
+        assert_eq!(VERSION, 13);
+        assert_eq!(Kind::MouseWheel as u32, 51);
+        assert_eq!(Kind::PointerNodeWheel as u32, 52);
+        assert_eq!(Kind::NodeTransform as u32, 53);
+        assert_eq!(Kind::NodeScaleRotation as u32, 54);
+        assert_eq!(Kind::Tween as u32, 55);
+        assert_eq!(Kind::ScaleNode as u32, 56);
+        assert_eq!(Kind::RotateNode as u32, 57);
     }
 }

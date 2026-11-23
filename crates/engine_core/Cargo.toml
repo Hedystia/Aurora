@@ -16,6 +16,8 @@ physics-jolt = ["dep:oxijolt"]
 [dependencies]
 anyhow.workspace = true
 image.workspace = true
+ab_glyph.workspace = true
+epaint_default_fonts.workspace = true
 pollster.workspace = true
 wgpu.workspace = true
 winit.workspace = true

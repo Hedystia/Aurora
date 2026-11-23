@@ -1,5 +1,7 @@
 //! Versioned, human-readable scene and prefab documents.
 
+pub mod visual;
+
 use std::{
     collections::BTreeMap,
     fs::File,
@@ -14,13 +16,16 @@ use crate::{
     animation::{Clip, Playback},
     assets::{AssetId, Assets},
     ecs::EntityId,
-    scene::{NodeState, Prefab, PrefabNode, Scene, Sprite, SpriteAppearance, Transform2D},
+    scene::{
+        Display2D, NodeState, Prefab, PrefabNode, Scene, Sprite, SpriteAppearance, Transform2D,
+    },
 };
 
 /// Current scene and prefab document format version.
 pub const VERSION: u32 = 1;
 const MAX_DOCUMENT: u64 = 8 * 1024 * 1024;
-const MAX_NODES: usize = 100_000;
+/// Maximum number of nodes in a loaded scene, including authored prefab instances.
+pub const MAX_NODES: usize = 100_000;
 
 /// Texture path and local dimensions for a serialized sprite.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -39,6 +44,7 @@ impl SpriteFile {
             "Invalid sprite size"
         );
         Ok(Sprite {
+            emitter: None,
             texture: assets.import_file(&directory.join(&self.png))?,
             size: self.size,
         })
@@ -72,6 +78,31 @@ pub enum PropertyValue {
     Node(usize),
     /// Prefab asset path.
     Prefab(PathBuf),
+    /// Audio clip path, registered in the scene's sound bank.
+    AudioClip(PathBuf),
+    /// Sprite frame PNG path, registered in the scene's frame banks.
+    SpriteFrame(PathBuf),
+    /// Numeric array.
+    Numbers(Vec<f64>),
+    /// Boolean array.
+    Booleans(Vec<bool>),
+    /// Text array.
+    Strings(Vec<String>),
+    /// Inline scene node reference array.
+    Nodes(Vec<usize>),
+    /// Prefab asset path array.
+    Prefabs(Vec<PathBuf>),
+    /// Audio clip path array, registered in the scene's sound bank.
+    AudioClips(Vec<PathBuf>),
+    /// Sprite frame PNG path array, registered in the scene's frame banks.
+    SpriteFrames(Vec<PathBuf>),
+    /// Reference to a script component on an inline scene node.
+    Component {
+        /// Node index in this document.
+        node: usize,
+        /// Component name as declared by `@ccclass`.
+        component: String,
+    },
 }
 
 /// Parent-first serialized node description.
@@ -86,15 +117,33 @@ pub struct NodeFile {
     /// Authored local transform.
     #[serde(default)]
     pub transform: Transform2D,
+    /// Optional independent 3D pose and components.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial: Option<crate::scene::spatial::SpatialNode>,
     /// Optional sprite asset binding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sprite: Option<SpriteFile>,
+    /// Authored visual generated from a text, atlas, tile map or emitter definition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visual: Option<visual::Visual>,
     /// Optional visual overrides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub appearance: Option<SpriteAppearance>,
+    /// Optional solid or trigger collider with its owning body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub physics2d: Option<crate::physics2d::Body2D>,
     /// Attached TypeScript components.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scripts: Vec<ScriptFile>,
+}
+
+impl NodeFile {
+    fn resolve_visual(&self, directory: &Path, assets: &mut Assets) -> Result<Option<Sprite>> {
+        match &self.visual {
+            Some(visual) => Ok(Some(visual.resolve(directory, assets)?)),
+            None => self.sprite.as_ref().map(|sprite| sprite.resolve(directory, assets)).transpose(),
+        }
+    }
 }
 
 /// Reference to a prefab to add after the scene's inline nodes.
@@ -172,7 +221,7 @@ impl GameplayFile {
     }
 }
 
-/// Versioned .aurora-scene document.
+/// Versioned .scene document.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SceneFile {
@@ -183,6 +232,9 @@ pub struct SceneFile {
     /// Additional prefab instances in document order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub instances: Vec<InstanceFile>,
+    /// Prefab files available for scripts to instantiate. Their order defines the runtime IDs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub script_prefabs: Vec<PathBuf>,
     /// Clips available for the loaded scene.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub animations: Vec<Clip>,
@@ -192,9 +244,12 @@ pub struct SceneFile {
     /// Optional scene-level gameplay resources.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gameplay: Option<GameplayFile>,
+    /// Optional authored design size and fit policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<Display2D>,
 }
 
-/// Versioned .aurora-prefab document describing one subtree.
+/// Versioned .prefab document describing one subtree.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrefabFile {
@@ -215,12 +270,16 @@ impl SceneFile {
         for state in scene.snapshot()? {
             let parent = state.parent.and_then(|id| indices.get(&id).copied());
             indices.insert(state.id, nodes.len());
+            let visual = scene.visual(state.id)?;
             nodes.push(NodeFile {
                 name: state.name,
                 parent,
                 transform: state.local,
-                sprite: capture_sprite(state.sprite, &path_for)?,
+                spatial: state.spatial,
+                sprite: capture_sprite(state.sprite.filter(|_|visual.is_none()), &path_for)?,
+                visual,
                 appearance: state.appearance,
+                physics2d: scene.body2d(state.id)?.as_deref().cloned(),
                 scripts: Vec::new(),
             });
         }
@@ -228,9 +287,11 @@ impl SceneFile {
             version: VERSION,
             nodes,
             instances: Vec::new(),
+            script_prefabs: Vec::new(),
             animations: Vec::new(),
             autoplay: None,
             gameplay: None,
+            display: None,
         };
         document.validate()?;
         Ok(document)
@@ -253,10 +314,22 @@ impl SceneFile {
     fn validate(&self) -> Result<()> {
         validate_nodes(self.version, &self.nodes)?;
         ensure!(
+            self.display.is_none_or(Display2D::is_valid),
+            "Unsupported design resolution"
+        );
+        ensure!(
             self.instances
                 .iter()
                 .all(|instance| instance.parent.is_none_or(|p| p < self.nodes.len())),
             "Invalid prefab instance parent"
+        );
+        ensure!(
+            self.script_prefabs.len() <= MAX_NODES
+                && self.script_prefabs.iter().all(|path| matches!(
+                    path.extension().and_then(|extension| extension.to_str()),
+                    Some("prefab" | "aurora-prefab")
+                )),
+            "Invalid script prefab list"
         );
         ensure!(
             self.autoplay
@@ -295,7 +368,7 @@ impl SceneFile {
                 .clone();
             Playback::new(clip, loaded.ids)?.seek(&mut loaded.scene, frame)?;
         }
-        loaded.scene.snapshot()
+        visual::draw_nodes(loaded.scene.snapshot()?, cursor.map_or(0, |(_, frame)|frame.max(0.0) as u64))
     }
 
     pub(crate) fn instantiate(
@@ -309,10 +382,13 @@ impl SceneFile {
         for node in &self.nodes {
             let parent = node.parent.map(|index| ids[index]);
             let (id, _) = scene.spawn(&node.name, parent, node.transform)?;
-            if let Some(sprite) = &node.sprite {
-                scene.set_sprite(id, sprite.resolve(directory, assets)?)?;
+            if let Some(sprite) = node.resolve_visual(directory, assets)? {
+                scene.set_sprite(id, sprite)?;
             }
+            scene.set_visual(id, node.visual.clone())?;
             scene.set_appearance(id, node.appearance)?;
+            scene.set_body2d(id, node.physics2d.clone())?;
+                scene.set_spatial(id, node.spatial.clone())?;
             ids.push(id);
         }
         let mut prefabs = BTreeMap::new();
@@ -341,8 +417,15 @@ impl SceneFile {
             gameplay.validate(ids.len())?;
         }
         let mut loaded = Loaded {
+            spatial_physics: Default::default(),
+            display: self.display.unwrap_or_default(),
             scene,
             ids,
+            script_prefabs: self
+                .script_prefabs
+                .into_iter()
+                .map(|path| directory.join(path))
+                .collect(),
             clips: self.animations,
             playback: None,
             entry_markers: Vec::new(),
@@ -370,7 +453,10 @@ impl PrefabFile {
                     name: node.name.clone(),
                     parent: node.parent,
                     transform: node.pose,
-                    sprite: capture_sprite(node.sprite, &path_for)?,
+                    physics2d: node.physics2d.clone(),
+                spatial: node.spatial.clone(),
+                    visual: node.visual.clone(),
+                    sprite: capture_sprite(node.sprite.filter(|_|node.visual.is_none()), &path_for)?,
                     appearance: node.appearance,
                     scripts: Vec::new(),
                 })
@@ -407,12 +493,11 @@ impl PrefabFile {
                 name: node.name.clone(),
                 parent: node.parent,
                 pose: node.transform,
+                physics2d: node.physics2d.clone(),
+                spatial: node.spatial.clone(),
                 appearance: node.appearance,
-                sprite: node
-                    .sprite
-                    .as_ref()
-                    .map(|sprite| sprite.resolve(directory, assets))
-                    .transpose()?,
+                visual: node.visual.clone(),
+                sprite: node.resolve_visual(directory, assets)?,
             });
         }
         Prefab::new(nodes)
@@ -430,8 +515,11 @@ impl PrefabFile {
 }
 
 pub(crate) struct Loaded {
+    pub spatial_physics: crate::physics3d::authored::AuthoredWorld,
+    pub display: Display2D,
     pub scene: Scene,
     pub ids: Vec<EntityId>,
+    pub script_prefabs: Vec<PathBuf>,
     clips: Vec<Clip>,
     pub playback: Option<Playback>,
     pub entry_markers: Vec<u32>,
@@ -474,10 +562,16 @@ fn validate_nodes(version: u32, nodes: &[NodeFile]) -> Result<()> {
     );
     ensure!(nodes.len() <= MAX_NODES, "Document has too many nodes");
     for (index, node) in nodes.iter().enumerate() {
+        if let Some(body) = &node.physics2d {
+            body.validate().with_context(|| format!("Physics on node {index}"))?;
+        }
         ensure!(
             node.parent.is_none_or(|parent| parent < index),
             "Node {index} has an invalid parent"
         );
+        ensure!(node.visual.is_none() || node.sprite.is_none(), "Choose one visual for node {index}");
+        if let Some(visual) = &node.visual { visual.validate()?; }
+        if let Some(spatial) = &node.spatial { spatial.validate()?; }
         for script in &node.scripts {
             ensure!(
                 !script.path.as_os_str().is_empty() && !script.component.is_empty(),
@@ -490,6 +584,36 @@ fn validate_nodes(version: u32, nodes: &[NodeFile]) -> Result<()> {
                     }
                     PropertyValue::Number(value) => {
                         ensure!(value.is_finite(), "Nonfinite script property")
+                    }
+                    PropertyValue::Numbers(values) => {
+                        ensure!(
+                            values.iter().all(|value| value.is_finite()),
+                            "Nonfinite script property"
+                        );
+                    }
+                    PropertyValue::Nodes(values) => {
+                        ensure!(
+                            values.iter().all(|index| *index < nodes.len()),
+                            "Invalid node reference"
+                        );
+                    }
+                    PropertyValue::Component { node, component } => {
+                        ensure!(*node < nodes.len(), "Invalid component reference node");
+                        ensure!(
+                            !component.trim().is_empty(),
+                            "Invalid component reference name"
+                        );
+                    }
+                    PropertyValue::AudioClip(path) | PropertyValue::SpriteFrame(path) => {
+                        ensure!(!path.as_os_str().is_empty(), "Invalid asset property path")
+                    }
+                    PropertyValue::Prefabs(paths)
+                    | PropertyValue::AudioClips(paths)
+                    | PropertyValue::SpriteFrames(paths) => {
+                        ensure!(
+                            paths.iter().all(|path| !path.as_os_str().is_empty()),
+                            "Invalid asset property path"
+                        )
                     }
                     _ => {}
                 }

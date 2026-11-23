@@ -12,12 +12,23 @@ use engine_core::{
     save::{NodeFile, PrefabFile, PropertyValue, SceneFile, ScriptFile, SpriteFile, VERSION},
 };
 
+mod jumpy;
+
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProjectKind {
+    #[default]
+    TwoD,
+    ThreeD,
+    Jumpy,
+}
+
 #[derive(Clone)]
 pub(super) struct Project {
     pub path: PathBuf,
     pub root: PathBuf,
     pub document: SceneFile,
     pub selected: Option<usize>,
+    pub group_selection: BTreeSet<usize>,
     pub dirty: bool,
     pub revision: u64,
     pub prefab: bool,
@@ -25,9 +36,13 @@ pub(super) struct Project {
 
 impl Project {
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_document(path, true)
+    }
+
+    fn open_document(path: &Path, allow_new: bool) -> Result<Self> {
         let (root, path) = if path.is_dir() {
             let root = path.canonicalize()?;
-            let file = root.join("main.aurora-scene");
+            let file = main_scene(&root);
             (root, file)
         } else {
             let root = path
@@ -38,9 +53,9 @@ impl Project {
             let file = root.join(path.file_name().context("Scene filename is missing")?);
             (root, file)
         };
-        let prefab = extension(&path) == "aurora-prefab";
+        let prefab = is_prefab(&path);
         ensure!(
-            prefab || extension(&path) == "aurora-scene",
+            prefab || is_scene(&path),
             "Choose a project directory or an Aurora document"
         );
         let document = if prefab {
@@ -48,7 +63,7 @@ impl Project {
                 nodes: PrefabFile::load(&path)?.nodes,
                 ..empty()
             }
-        } else if path.exists() {
+        } else if !allow_new || path.exists() {
             SceneFile::load(&path)?
         } else {
             SceneFile {
@@ -62,10 +77,58 @@ impl Project {
             root,
             document,
             selected,
+            group_selection: BTreeSet::new(),
             dirty: false,
             revision: 1,
             prefab,
         })
+    }
+
+    pub fn open_existing(path: &Path) -> Result<Self> {
+        Self::open_document(path, false)
+    }
+
+    pub fn create(path: &Path, kind: ProjectKind) -> Result<Self> {
+        ensure!(path.file_name().is_some(), "Choose a new project folder");
+        // Claim the directory exclusively before saving any project files.
+        fs::create_dir(path)
+            .with_context(|| format!("Creating new project folder {}", path.display()))?;
+        let result = (|| {
+            let mut project = Self::open(path)?;
+            if kind == ProjectKind::ThreeD {
+                project.document.nodes = vec![
+                    node("Node 3D", None),
+                    node("Cube 3D", Some(0)),
+                    node("Camera 3D", Some(0)),
+                    node("Directional Light", Some(0)),
+                ];
+                project.selected = Some(1);
+                project.changed();
+            }
+            let assets = project.root.join("assets");
+            fs::create_dir(&assets)?;
+            let mut initialize = || -> Result<()> {
+                crate::project_types::refresh(&project.root, None)?;
+                if kind == ProjectKind::Jumpy {
+                    jumpy::create(&project.root)?;
+                    project = Self::open_existing(path)?;
+                } else {
+                    project.save()?;
+                }
+                Ok(())
+            };
+            if let Err(error) = initialize()
+            {
+                crate::project_types::clean_incomplete_creation(&project.root);
+                let _ = fs::remove_dir(assets);
+                return Err(error);
+            }
+            Ok(project)
+        })();
+        if result.is_err() {
+            let _ = fs::remove_dir(path);
+        }
+        result
     }
 
     pub fn changed(&mut self) {
@@ -109,6 +172,23 @@ impl Project {
         self.selected = Some(id);
         self.changed();
         id
+    }
+
+    pub fn group_siblings(&mut self) -> Result<()> {
+        let mut selection = self.group_selection.iter().copied();
+        let first = selection.next().context("Select sibling nodes to group")?;
+        let parent = self.document.nodes[first].parent;
+        ensure!(
+            self.group_selection.len() >= 2
+                && selection.all(|index| self.document.nodes[index].parent == parent),
+            "Select at least two nodes with the same parent"
+        );
+        let group = self.add("Group", parent);
+        for index in std::mem::take(&mut self.group_selection) {
+            self.document.nodes[index].parent = Some(group);
+        }
+        self.reorder(&BTreeSet::new());
+        Ok(())
     }
 
     pub fn reparent(&mut self, id: usize, parent: Option<usize>) -> Result<()> {
@@ -241,12 +321,18 @@ impl Project {
                 node.parent = node.parent.and_then(|parent| map[parent]);
                 for script in &mut node.scripts {
                     script.values.retain(|_, value| {
-                        if let PropertyValue::Node(index) = value {
-                            if let Some(target) = map[*index] {
+                        match value {
+                            PropertyValue::Node(index)
+                            | PropertyValue::Component { node: index, .. } => {
+                                let Some(target) = map[*index] else {
+                                    return false;
+                                };
                                 *index = target;
-                            } else {
-                                return false;
                             }
+                            PropertyValue::Nodes(indices) => {
+                                *indices = indices.iter().filter_map(|index| map[*index]).collect();
+                            }
+                            _ => {}
                         }
                         true
                     });
@@ -294,6 +380,11 @@ impl Project {
                 true
             });
         }
+        self.group_selection = self
+            .group_selection
+            .iter()
+            .filter_map(|index| map[*index])
+            .collect();
         self.selected = self.selected.and_then(|index| map[index]);
         self.changed();
     }
@@ -305,11 +396,12 @@ impl Project {
         let texture = assets.texture(id).context("Texture unavailable")?;
         let size = [texture.width() as f32, texture.height() as f32];
         let index = node.unwrap_or_else(|| self.add(crate::strings::SPRITE_NODE, None));
-        self.document
-            .nodes
-            .get_mut(index)
-            .context("Unknown node")?
-            .sprite = Some(SpriteFile { png: path, size });
+        let node = self.document.nodes.get_mut(index).context("Unknown node")?;
+        anyhow::ensure!(
+            node.visual.is_none(),
+            "Remove the existing visual before assigning a sprite"
+        );
+        node.sprite = Some(SpriteFile { png: path, size });
         self.changed();
         Ok(())
     }
@@ -344,6 +436,7 @@ impl Project {
         let mut results = Vec::new();
         for directory in [
             "assets",
+            "resources",
             "scenes",
             "prefabs",
             "scripts",
@@ -395,11 +488,43 @@ pub(super) fn extension(path: &Path) -> &str {
         .unwrap_or("")
 }
 
+pub(super) fn is_scene(path: &Path) -> bool {
+    matches!(extension(path), "scene" | "aurora-scene")
+}
+
+pub(super) fn is_prefab(path: &Path) -> bool {
+    matches!(extension(path), "prefab" | "aurora-prefab")
+}
+
+pub(super) fn is_audio(path: &Path) -> bool {
+    matches!(extension(path), "wav" | "mp3" | "ogg" | "flac")
+}
+
+pub(super) fn is_frame(path: &Path) -> bool {
+    extension(path) == "png"
+}
+
+pub(super) fn main_scene(directory: &Path) -> PathBuf {
+    let preferred = directory.join("main.scene");
+    let legacy = directory.join("main.aurora-scene");
+    if !preferred.exists() && legacy.is_file() {
+        legacy
+    } else {
+        preferred
+    }
+}
+
+pub(super) fn is_main_scene(path: &Path) -> bool {
+    path.ends_with("main.scene") || path.ends_with("main.aurora-scene")
+}
+
 pub(super) fn supported(path: &Path) -> bool {
-    matches!(
-        extension(path),
-        "png" | "ts" | "wav" | "mp3" | "ttf" | "aurora-scene" | "aurora-prefab"
-    )
+    is_scene(path)
+        || is_prefab(path)
+        || matches!(
+            extension(path),
+            "png" | "ts" | "wav" | "mp3" | "ttf" | "otf"
+        )
 }
 
 fn node(name: &str, parent: Option<usize>) -> NodeFile {
@@ -407,8 +532,11 @@ fn node(name: &str, parent: Option<usize>) -> NodeFile {
         name: name.into(),
         parent,
         transform: Default::default(),
+        spatial: crate::inspector::spatial::preset(name),
+        visual: crate::inspector::visual::preset(name),
         sprite: None,
         appearance: None,
+        physics2d: None,
         scripts: Vec::new(),
     }
 }
@@ -418,9 +546,11 @@ fn empty() -> SceneFile {
         version: VERSION,
         nodes: Vec::new(),
         instances: Vec::new(),
+        script_prefabs: Vec::new(),
         animations: Vec::new(),
         autoplay: None,
         gameplay: None,
+        display: None,
     }
 }
 
@@ -428,6 +558,37 @@ fn empty() -> SceneFile {
 mod tests {
     use super::*;
     use engine_core::animation::{Clip, Interpolation, Key, Property, Track, Wrap};
+
+    #[test]
+    fn grouping_preserves_sibling_poses_and_references() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut project = Project::open(directory.path())?;
+        let left = project.add("Left", Some(0));
+        let right = project.add("Right", Some(0));
+        let grandchild = project.add("Grandchild", Some(left));
+        project.group_selection.extend([right, grandchild]);
+        assert!(project.group_siblings().is_err());
+        assert_eq!(project.document.nodes.len(), 4);
+        project.document.nodes[left].transform.position = [-12.0, 3.0];
+        project.attach(left, &directory.path().join("Mover.ts"), "Mover")?;
+        project.document.nodes[left].scripts[0].values.insert(
+            "targets".into(),
+            PropertyValue::Nodes(vec![right, grandchild]),
+        );
+        project.group_selection = BTreeSet::from([left, right]);
+        project.group_siblings()?;
+        project.save()?;
+        let reopened = Project::open(&project.path)?;
+        let nodes = &reopened.document.nodes;
+        assert_eq!(nodes[1].name, "Group");
+        assert_eq!(nodes[2].parent, Some(1));
+        assert_eq!(nodes[4].parent, Some(1));
+        assert_eq!(nodes[2].transform.position, [-12.0, 3.0]);
+        assert!(
+            matches!(&nodes[2].scripts[0].values["targets"], PropertyValue::Nodes(targets) if targets == &[4,3])
+        );
+        Ok(())
+    }
 
     #[test]
     fn hierarchy_edits_preserve_attachments_and_animation_bindings() -> Result<()> {
@@ -453,6 +614,7 @@ mod tests {
                 keys: vec![Key {
                     frame: 0,
                     value: 3.0,
+                    tangents: None,
                 }],
             }],
             events: Vec::new(),

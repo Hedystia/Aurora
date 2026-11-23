@@ -35,18 +35,25 @@ pub enum Mode {
 pub struct Link {
     socket: UnixStream,
     region: Option<Region>,
+    limit: Option<Instant>,
 }
 
 impl Link {
     /// Allocates the transport and returns its child socket.
     pub fn pair(mode: Mode) -> Result<(Self, UnixStream)> {
         let (socket, child) = UnixStream::pair()?;
-        socket.set_write_timeout(Some(DEADLINE))?;
         let region = match mode {
             Mode::Shared => Some(Region::new()?),
             Mode::Socket => None,
         };
-        Ok((Self { socket, region }, child))
+        Ok((
+            Self {
+                socket,
+                region,
+                limit: None,
+            },
+            child,
+        ))
     }
 
     /// Returns the shared-memory descriptor to be passed to the native child.
@@ -54,25 +61,34 @@ impl Link {
         self.region.as_ref().map(|region| region.file.as_fd())
     }
 
+    /// Applies a cumulative deadline to the remaining exchanges during graceful shutdown.
+    pub fn limit_until(&mut self, deadline: Instant) {
+        self.limit = Some(deadline);
+    }
+
     /// Publishes a request and reads one reply within a bounded timeout.
     pub fn exchange(&mut self, message: Envelope) -> Result<Envelope> {
+        let now = Instant::now();
+        let deadline = self.limit.unwrap_or(now + DEADLINE).min(now + DEADLINE);
+        let remaining = deadline.saturating_duration_since(now);
+        ensure!(!remaining.is_zero(), "Script transaction timed out");
+        self.socket.set_write_timeout(Some(remaining))?;
         let bytes = message.encode()?;
         let mut reply = [0; ENVELOPE_BYTES];
         if let Some(region) = &self.region {
             region.push(0, bytes[HEADER_BYTES..].try_into()?)?;
             self.socket.write_all(&bytes[..HEADER_BYTES])?;
-            read_deadline(&mut self.socket, &mut reply[..HEADER_BYTES])?;
+            read_deadline(&mut self.socket, &mut reply[..HEADER_BYTES], deadline)?;
             reply[HEADER_BYTES..].copy_from_slice(&region.pop(RING_BYTES)?);
         } else {
             self.socket.write_all(&bytes)?;
-            read_deadline(&mut self.socket, &mut reply)?;
+            read_deadline(&mut self.socket, &mut reply, deadline)?;
         }
         Ok(Envelope::decode(&reply)?)
     }
 }
 
-fn read_deadline(socket: &mut UnixStream, mut bytes: &mut [u8]) -> Result<()> {
-    let deadline = Instant::now() + DEADLINE;
+fn read_deadline(socket: &mut UnixStream, mut bytes: &mut [u8], deadline: Instant) -> Result<()> {
     while !bytes.is_empty() {
         let remaining = deadline.saturating_duration_since(Instant::now());
         ensure!(!remaining.is_zero(), "Script reply timed out");

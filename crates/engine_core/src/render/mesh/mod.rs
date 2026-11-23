@@ -9,6 +9,91 @@ use wgpu::{
 };
 
 use super::Cube;
+use crate::scene::{
+    NodeState,
+    spatial::{Role, View3D, matrices},
+};
+
+use crate::scene::spatial::Geometry;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Weak},
+};
+
+pub(super) struct MeshScene {
+    meshes: Vec<(Arc<Geometry>, Instance)>,
+    camera: View3D,
+    instances: Vec<Instance>,
+}
+
+impl MeshScene {
+    pub(super) fn authored(nodes: &[NodeState]) -> Option<Self> {
+        if !nodes.iter().any(|n| n.spatial.is_some() && n.visible) {
+            return None;
+        }
+        let worlds = matrices(nodes);
+        let camera = View3D::resolve(nodes, &worlds);
+        let instances = nodes
+            .iter()
+            .filter(|n| n.visible)
+            .filter_map(|n| {
+                let spatial = n.spatial.as_ref()?;
+                (spatial.role == Role::Cube).then(|| {
+                    Instance::new(
+                        worlds[&n.id] * Mat4::from_scale(Vec3::splat(0.5)),
+                        spatial.color,
+                    )
+                })
+            })
+            .collect();
+        let meshes = nodes
+            .iter()
+            .filter(|n| n.visible)
+            .filter_map(|n| {
+                let s = n.spatial.as_ref()?;
+                Some((
+                    Arc::clone(s.geometry.as_ref()?),
+                    Instance::new(worlds[&n.id], s.color),
+                ))
+            })
+            .collect();
+        Some(Self {
+            camera,
+            instances,
+            meshes,
+        })
+    }
+
+    pub(super) fn demo(cubes: &[Cube]) -> Self {
+        let instances = cubes
+            .iter()
+            .map(|cube| {
+                Instance::new(
+                    Mat4::from_scale_rotation_translation(
+                        Vec3::from_array(cube.extent),
+                        Quat::from_array(cube.state.orientation),
+                        Vec3::from_array(cube.state.center),
+                    ),
+                    cube.color,
+                )
+            })
+            .collect();
+        Self {
+            camera: View3D::default(),
+            instances,
+            meshes: Vec::new(),
+        }
+    }
+}
+
+impl Instance {
+    fn new(matrix: Mat4, color: [f32; 3]) -> Self {
+        Self {
+            model: matrix.to_cols_array_2d(),
+            color: [color[0], color[1], color[2], 1.],
+        }
+    }
+}
 
 const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float;
 const VERTICES: u32 = 36;
@@ -34,6 +119,7 @@ pub(super) struct MeshPass {
     pipeline: RenderPipeline,
     camera: Buffer,
     bindings: BindGroup,
+    imported: HashMap<usize, (Weak<Geometry>, Buffer, u32)>,
     vertices: Buffer,
     instances: Buffer,
     depth: Option<(Extent3d, TextureView)>,
@@ -86,7 +172,7 @@ impl MeshPass {
         });
         let camera = device.create_buffer(&BufferDescriptor {
             label: Some("3D camera"),
-            size: 64,
+            size: 80,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -107,6 +193,7 @@ impl MeshPass {
             pipeline,
             camera,
             bindings,
+            imported: HashMap::new(),
             vertices,
             instances: instance_buffer(device, size_of::<Instance>() as u64),
             depth: None,
@@ -120,7 +207,7 @@ impl MeshPass {
         encoder: &mut CommandEncoder,
         view: &TextureView,
         extent: Extent3d,
-        cubes: &[Cube],
+        scene: MeshScene,
     ) -> Result<()> {
         if self.depth.as_ref().is_none_or(|(size, _)| *size != extent) {
             let depth = device.create_texture(&TextureDescriptor {
@@ -140,36 +227,49 @@ impl MeshPass {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Missing depth attachment"))?
             .1;
-        let projection = glam::camera::rh::proj::directx::perspective(
-            45.0_f32.to_radians(),
-            extent.width as f32 / extent.height as f32,
-            0.1,
-            100.0,
-        );
-        let camera = glam::camera::rh::view::look_at_mat4(
-            Vec3::new(8.6, 6.6, 10.8),
-            Vec3::new(0.0, 1.05, 0.0),
-            Vec3::Y,
-        );
-        queue.write_buffer(
-            &self.camera,
-            0,
-            bytemuck::bytes_of(&(projection * camera).to_cols_array()),
-        );
-        let instances = cubes
-            .iter()
-            .map(|cube| Instance {
-                model: Mat4::from_scale_rotation_translation(
-                    Vec3::from_array(cube.extent),
-                    Quat::from_array(cube.state.orientation),
-                    Vec3::from_array(cube.state.center),
-                )
-                .to_cols_array_2d(),
-                color: [cube.color[0], cube.color[1], cube.color[2], 1.0],
-            })
-            .collect::<Vec<_>>();
+        let projection = scene
+            .camera
+            .projection(extent.width as f32 / extent.height as f32);
+        let mut uniform = [0.0_f32; 20];
+        uniform[..16].copy_from_slice(&projection.to_cols_array());
+        uniform[16..19].copy_from_slice(&scene.camera.light.to_array());
+        queue.write_buffer(&self.camera, 0, bytemuck::cast_slice(&uniform));
+        let mut instances = scene.instances;
+        let cube_count = u32::try_from(instances.len())?;
+        let mut draws = Vec::new();
+        self.imported
+            .retain(|_, (geometry, _, _)| geometry.strong_count() > 0);
+        for (geometry, instance) in scene.meshes {
+            let key = Arc::as_ptr(&geometry) as usize;
+            if let std::collections::hash_map::Entry::Vacant(entry) = self.imported.entry(key) {
+                let count = u32::try_from(geometry.indices.len())?;
+                ensure!(
+                    u64::from(count) * size_of::<Vertex>() as u64
+                        <= device.limits().max_buffer_size,
+                    "Imported mesh exceeds device limit"
+                );
+                let mut vertices = Vec::with_capacity(count as usize);
+                for triangle in geometry.indices.as_chunks::<3>().0 {
+                    let [a, b, c] =
+                        triangle.map(|i| Vec3::from_array(geometry.positions[i as usize]));
+                    let normal = (b - a).cross(c - a).normalize_or_zero().to_array();
+                    vertices.extend([a, b, c].map(|position| Vertex {
+                        position: position.to_array(),
+                        normal,
+                    }));
+                }
+                let buffer = device.create_buffer_init(&BufferInitDescriptor {
+                    label: Some("Imported static mesh"),
+                    contents: bytemuck::cast_slice(&vertices),
+                    usage: BufferUsages::VERTEX,
+                });
+                entry.insert((Arc::downgrade(&geometry), buffer, count));
+            }
+            draws.push((key, u32::try_from(instances.len())?));
+            instances.push(instance);
+        }
         let bytes = bytemuck::cast_slice(&instances);
-        let len = u32::try_from(instances.len())?;
+
         let capacity = bytes.len() as u64;
         let limit = device.limits().max_buffer_size;
         ensure!(
@@ -212,7 +312,12 @@ impl MeshPass {
         pass.set_bind_group(0, &self.bindings, &[]);
         pass.set_vertex_buffer(0, self.vertices.slice(..));
         pass.set_vertex_buffer(1, self.instances.slice(..));
-        pass.draw(0..VERTICES, 0..len);
+        pass.draw(0..VERTICES, 0..cube_count);
+        for (key, index) in draws {
+            let (_, buffer, count) = &self.imported[&key];
+            pass.set_vertex_buffer(0, buffer.slice(..));
+            pass.draw(0..*count, index..index + 1);
+        }
         Ok(())
     }
 }

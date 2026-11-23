@@ -21,7 +21,7 @@ use crate::{
 
 pub(super) struct Gameplay {
     sensors: BTreeMap<EntityId, [f32; 2]>,
-    contacts: BTreeSet<EntityId>,
+    contacts: BTreeMap<EntityId, BTreeSet<EntityId>>,
     frames: BTreeMap<EntityId, Vec<AssetId>>,
     audio: Option<(Audio, AudioSource)>,
     profile: Option<PathBuf>,
@@ -94,7 +94,7 @@ impl Gameplay {
         let best = profile.map(load_score).transpose()?.unwrap_or(0);
         Ok(Some(Self {
             sensors,
-            contacts: BTreeSet::new(),
+            contacts: BTreeMap::new(),
             frames,
             audio,
             profile: profile.map(Path::to_path_buf),
@@ -161,15 +161,15 @@ impl Gameplay {
 
     pub(super) fn contacts(
         &mut self,
-        director: &Director,
+        states: &[NodeState],
         target: EntityId,
-    ) -> Result<Vec<(Kind, EntityId)>> {
-        let states = director.scene().snapshot()?;
+        physical: impl Iterator<Item = EntityId>,
+    ) -> Vec<(Kind, EntityId)> {
         let actor_bounds = states
             .iter()
             .find(|node| node.id == target && node.visible)
             .and_then(|node| self.sensors.get(&target).map(|&size| bounds(node, size)));
-        let next = actor_bounds.map_or_else(BTreeSet::new, |target_bounds| {
+        let mut next = actor_bounds.map_or_else(BTreeSet::new, |target_bounds| {
             states
                 .iter()
                 .filter_map(|node| {
@@ -183,17 +183,18 @@ impl Gameplay {
                 })
                 .collect()
         });
-        let events = self
-            .contacts
+        next.extend(physical);
+        let previous = self.contacts.entry(target).or_default();
+        let events = previous
             .difference(&next)
             .map(|&id| (Kind::CollisionExit, id))
             .chain(
-                next.difference(&self.contacts)
+                next.difference(previous)
                     .map(|&id| (Kind::CollisionEnter, id)),
             )
             .collect();
-        self.contacts = next;
-        Ok(events)
+        *previous = next;
+        events
     }
 }
 

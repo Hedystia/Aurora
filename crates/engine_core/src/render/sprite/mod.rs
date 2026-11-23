@@ -175,7 +175,6 @@ impl SpriteBatch {
             }
             let start = u32::try_from(self.vertices.len())?;
             let appearance = node.appearance.unwrap_or_default();
-            let corners = appearance.corners(sprite.size);
             let uv = [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]];
             let [r, g, b, a] = appearance.color.map(|value| f32::from(value) / 255.0);
             let tint = [
@@ -184,11 +183,13 @@ impl SpriteBatch {
                 linear(b),
                 a * (f32::from(appearance.opacity) / 255.0),
             ];
-            self.vertices.extend([0, 1, 2, 2, 1, 3].map(|index| Vertex {
-                position: camera.project(node.world.point(corners[index]), viewport),
-                uv: uv[index],
-                tint,
-            }));
+            for corners in sprite.quads(appearance, node.draw_tick) {
+                self.vertices.extend([0, 1, 2, 2, 1, 3].map(|index| Vertex {
+                    position: camera.project(node.world.point(corners[index]), viewport),
+                    uv: uv[index],
+                    tint,
+                }));
+            }
             let end = u32::try_from(self.vertices.len())?;
             if let Some((last, range)) = self.batches.last_mut()
                 && *last == id

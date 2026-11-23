@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{assets::AssetId, ecs::EntityId};
 mod prefab;
+pub mod spatial;
 pub use prefab::{NodePool, Prefab, PrefabNode};
 
 /// Local 2D pose using pixels, radians and unitless scale.
@@ -36,7 +37,7 @@ impl Default for Transform2D {
 pub struct Affine2D([[f32; 2]; 3]);
 
 impl Affine2D {
-    const IDENTITY: Self = Self([[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]]);
+    pub(crate) const IDENTITY: Self = Self([[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]]);
 
     /// Maps a local point to world space.
     pub fn point(self, [x, y]: [f32; 2]) -> [f32; 2] {
@@ -44,7 +45,21 @@ impl Affine2D {
         [u[0] * x + v[0] * y + p[0], u[1] * x + v[1] * y + p[1]]
     }
 
-    fn compose(self, local: Transform2D) -> Self {
+    /// Maps a world point to local space, or returns `None` for a degenerate basis.
+    pub fn inverse_point(self, [px, py]: [f32; 2]) -> Option<[f32; 2]> {
+        let [u, v, p] = self.0;
+        let determinant = u[0] * v[1] - u[1] * v[0];
+        if determinant.abs() <= f32::EPSILON {
+            return None;
+        }
+        let [dx, dy] = [px - p[0], py - p[1]];
+        Some([
+            (v[1] * dx - v[0] * dy) / determinant,
+            (u[0] * dy - u[1] * dx) / determinant,
+        ])
+    }
+
+    pub(crate) fn compose(self, local: Transform2D) -> Self {
         let (sin, cos) = local.rotation.sin_cos();
         let [x, y] = local.scale;
         let [u, v, _] = self.0;
@@ -60,6 +75,9 @@ impl Affine2D {
 /// A centered textured quad. Sibling insertion order determines compositing.
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct Sprite {
+    /// Deterministic particle system carried by an emitter sprite.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emitter: Option<crate::save::visual::Emitter>,
     /// Imported texture handle.
     pub texture: AssetId,
     /// Quad width and height in local pixels.
@@ -135,6 +153,7 @@ pub enum Lifecycle {
 struct Node {
     name: String,
     parent: Option<EntityId>,
+    spatial: Option<spatial::SpatialNode>,
     children: Vec<EntityId>,
     local: Transform2D,
     appearance: Option<SpriteAppearance>,
@@ -153,6 +172,9 @@ pub struct Scene {
 /// A node's resolved state in scene traversal order.
 #[derive(Debug, Serialize)]
 pub struct NodeState {
+    /// Fixed tick sampled by procedural draw geometry.
+    #[serde(skip)]
+    pub draw_tick: u64,
     /// Stable node handle.
     pub id: EntityId,
     /// Parent, if any.
@@ -161,6 +183,9 @@ pub struct NodeState {
     pub name: String,
     /// Parent-relative pose.
     pub local: Transform2D,
+    /// Optional parent-relative spatial components.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spatial: Option<spatial::SpatialNode>,
     /// Composed world pose.
     pub world: Affine2D,
     /// Sprite component, when present.
@@ -214,6 +239,38 @@ impl Scene {
         }
     }
 
+    pub(crate) fn has_bodies2d(&self) -> bool {
+        self.world
+            .query::<&crate::physics2d::Body2D>()
+            .iter()
+            .next()
+            .is_some()
+    }
+
+    pub(crate) fn body2d(
+        &self,
+        id: EntityId,
+    ) -> Result<Option<hecs::Ref<'_, crate::physics2d::Body2D>>> {
+        Ok(self
+            .world
+            .get::<&crate::physics2d::Body2D>(self.entity(id)?)
+            .ok())
+    }
+
+    pub(crate) fn set_body2d(
+        &mut self,
+        id: EntityId,
+        body: Option<crate::physics2d::Body2D>,
+    ) -> Result<()> {
+        let entity = self.entity(id)?;
+        if let Some(body) = body {
+            self.world.insert_one(entity, body)?;
+        } else if self.world.satisfies::<&crate::physics2d::Body2D>(entity) {
+            self.world.remove_one::<crate::physics2d::Body2D>(entity)?;
+        }
+        Ok(())
+    }
+
     /// Adds a node, emitting entry and readiness if the scene is already active.
     pub fn spawn(
         &mut self,
@@ -233,6 +290,7 @@ impl Scene {
             parent,
             local,
             appearance: None,
+            spatial: None,
             children: Vec::new(),
         },));
         self.entities.insert(id, entity);
@@ -265,6 +323,62 @@ impl Scene {
         Ok(())
     }
 
+    pub(crate) fn has_spatial_bodies(&self) -> bool {
+        self.world.query::<&Node>().iter().any(|n| {
+            n.spatial
+                .as_ref()
+                .is_some_and(|s| s.body != spatial::Body::None)
+        })
+    }
+
+    pub(crate) fn node_count(&self) -> usize {
+        self.entities.len()
+    }
+
+    pub(crate) fn active_in_hierarchy(&self, mut id: EntityId) -> Result<bool> {
+        if !self.active {
+            return Ok(false);
+        }
+        loop {
+            let node = self.node(id)?;
+            if !node.appearance.is_none_or(|appearance| appearance.active) {
+                return Ok(false);
+            }
+            let Some(parent) = node.parent else {
+                return Ok(true);
+            };
+            id = parent;
+        }
+    }
+
+    pub(crate) fn visual(&self, id: EntityId) -> Result<Option<crate::save::visual::Visual>> {
+        Ok(self
+            .world
+            .get::<&crate::save::visual::Visual>(self.entity(id)?)
+            .ok()
+            .as_deref()
+            .cloned())
+    }
+
+    pub(crate) fn set_visual(
+        &mut self,
+        id: EntityId,
+        visual: Option<crate::save::visual::Visual>,
+    ) -> Result<()> {
+        let entity = self.entity(id)?;
+        if let Some(visual) = visual {
+            self.world.insert_one(entity, visual)?;
+        } else if self
+            .world
+            .get::<&crate::save::visual::Visual>(entity)
+            .is_ok()
+        {
+            self.world
+                .remove_one::<crate::save::visual::Visual>(entity)?;
+        }
+        Ok(())
+    }
+
     /// Sets or replaces a node's sprite.
     pub fn set_sprite(&mut self, id: EntityId, sprite: Sprite) -> Result<()> {
         Ok(self.world.insert_one(self.entity(id)?, sprite)?)
@@ -277,6 +391,19 @@ impl Scene {
         appearance: Option<SpriteAppearance>,
     ) -> Result<()> {
         self.world.get::<&mut Node>(self.entity(id)?)?.appearance = appearance;
+        Ok(())
+    }
+
+    /// Replaces the local spatial component, retaining all 2D components.
+    pub fn set_spatial(
+        &mut self,
+        id: EntityId,
+        spatial: Option<spatial::SpatialNode>,
+    ) -> Result<()> {
+        if let Some(component) = &spatial {
+            component.validate()?;
+        }
+        self.world.get::<&mut Node>(self.entity(id)?)?.spatial = spatial;
         Ok(())
     }
 
@@ -373,6 +500,12 @@ impl Scene {
         Ok(enter)
     }
 
+    pub(crate) fn subtree(&self, root: EntityId) -> Result<Vec<EntityId>> {
+        let mut nodes = Vec::new();
+        self.walk(&[root], |_, _, _| Ok(()), |id| nodes.push(id))?;
+        Ok(nodes)
+    }
+
     /// Removes a subtree, invalidates its handles and returns exit events.
     pub fn remove(&mut self, id: EntityId) -> Result<Vec<Lifecycle>> {
         let parent = self.node(id)?.parent;
@@ -426,10 +559,12 @@ impl Scene {
                         .is_none_or(|parent| visibility.get(&parent).copied().unwrap_or(true));
                 visibility.insert(id, visible);
                 states.push(NodeState {
+                    draw_tick: 0,
                     id,
                     name: node.name.clone(),
                     parent: node.parent,
                     local: node.local,
+                    spatial: node.spatial.clone(),
                     world,
                     sprite,
                     appearance: node.appearance,
@@ -443,6 +578,72 @@ impl Scene {
     }
 }
 
+/// How the design area maps into a differently shaped window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Fit {
+    /// Show the whole area and preserve aspect ratio.
+    #[default]
+    Contain,
+    /// Fill the window and crop the edges.
+    Cover,
+    /// Fill each axis independently.
+    Stretch,
+}
+
+/// Authored 2D design size and fit policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Display2D {
+    /// Width and height in design pixels.
+    pub resolution: [u32; 2],
+    /// Fit policy for the player window.
+    pub fit: Fit,
+}
+
+impl Default for Display2D {
+    fn default() -> Self {
+        Self {
+            resolution: [640, 384],
+            fit: Fit::Contain,
+        }
+    }
+}
+
+impl Display2D {
+    /// Maximum size of either authored dimension.
+    pub const MAX_DIMENSION: u32 = 2048;
+
+    /// Returns whether both dimensions are supported.
+    pub fn is_valid(self) -> bool {
+        self.resolution
+            .into_iter()
+            .all(|v| (1..=Self::MAX_DIMENSION).contains(&v))
+    }
+
+    /// Returns an aspect-preserving frame size for the editor preview stream.
+    pub fn preview_resolution(self) -> [u32; 2] {
+        const PREVIEW_MAX: u32 = 960;
+        let [width, height] = self.resolution;
+        let largest = width.max(height);
+        if largest <= PREVIEW_MAX {
+            return self.resolution;
+        }
+        self.resolution.map(|value| {
+            ((u64::from(value) * u64::from(PREVIEW_MAX) / u64::from(largest)) as u32).max(1)
+        })
+    }
+
+    /// Maps the authored area to an origin-centered camera.
+    pub fn camera(self) -> Camera2D {
+        Camera2D {
+            center: [0.0; 2],
+            design_size: self.resolution.map(|dimension| dimension as f32),
+            fit: self.fit,
+        }
+    }
+}
+
 /// Orthographic camera framing a fixed design resolution at any window aspect ratio.
 #[derive(Clone, Copy, Debug)]
 pub struct Camera2D {
@@ -450,17 +651,30 @@ pub struct Camera2D {
     pub center: [f32; 2],
     /// Width and height of the area that must remain visible, in world pixels.
     pub design_size: [f32; 2],
+    /// Fit policy for the viewport.
+    pub fit: Fit,
 }
 
 impl Camera2D {
-    /// Maps a world position into GPU clip coordinates, expanding to fit the window.
+    /// Returns pixels per world unit along each axis.
+    pub fn scale(self, [width, height]: [u32; 2]) -> [f32; 2] {
+        let x = width as f32 / self.design_size[0];
+        let y = height as f32 / self.design_size[1];
+        match self.fit {
+            Fit::Contain => [x.min(y); 2],
+            Fit::Cover => [x.max(y); 2],
+            Fit::Stretch => [x, y],
+        }
+    }
+
+    /// Maps a world position into GPU clip coordinates.
     pub fn project(self, [x, y]: [f32; 2], [width, height]: [u32; 2]) -> [f32; 2] {
+        let [sx, sy] = self.scale([width, height]);
         let width = width as f32;
         let height = height as f32;
-        let factor = (width / self.design_size[0]).min(height / self.design_size[1]);
         [
-            2.0 * (x - self.center[0]) * factor / width,
-            2.0 * (y - self.center[1]) * factor / height,
+            2.0 * (x - self.center[0]) * sx / width,
+            2.0 * (y - self.center[1]) * sy / height,
         ]
     }
 }
@@ -546,8 +760,25 @@ mod tests {
         let camera = Camera2D {
             center: [10.0, -6.0],
             design_size: [100.0, 100.0],
+            fit: Fit::Contain,
         };
         assert_eq!(camera.project([60.0, 44.0], [200, 100]), [0.5, 1.0]);
+        assert_eq!(
+            Camera2D {
+                fit: Fit::Cover,
+                ..camera
+            }
+            .project([60.0, 44.0], [200, 100]),
+            [1.0, 2.0]
+        );
+        assert_eq!(
+            Camera2D {
+                fit: Fit::Stretch,
+                ..camera
+            }
+            .project([60.0, 44.0], [200, 100]),
+            [1.0, 1.0]
+        );
         Ok(())
     }
 }

@@ -33,13 +33,13 @@ impl Dock {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Scene => strings::SCENE,
-            Self::NodeTree => strings::NODE_TREE,
-            Self::Assets => strings::ASSETS,
+            Self::Scene => strings::VIEW_2D,
+            Self::NodeTree => strings::SCENE,
+            Self::Assets => strings::FILE_SYSTEM,
             Self::Library => strings::LIBRARY,
             Self::Inspector => strings::INSPECTOR,
-            Self::Console => strings::CONSOLE,
-            Self::Timeline => strings::TIMELINE,
+            Self::Console => strings::OUTPUT,
+            Self::Timeline => strings::ANIMATION,
         }
     }
 }
@@ -49,14 +49,17 @@ pub(super) fn initial_layout() -> DockState<Dock> {
     let tree = state.main_surface_mut();
     let [workspace, left] =
         tree.split_left(NodeIndex::root(), theme::LEFT_WIDTH, vec![Dock::NodeTree]);
-    let [center, right] = tree.split_right(workspace, theme::CENTER_WIDTH, vec![Dock::Library]);
-    tree.split_below(left, theme::TOP_HEIGHT, vec![Dock::Assets]);
+    let [workspace, _] = tree.split_right(workspace, theme::CENTER_WIDTH, vec![Dock::Inspector]);
     tree.split_below(
-        center,
+        left,
+        theme::LEFT_TOP_HEIGHT,
+        vec![Dock::Assets, Dock::Library],
+    );
+    tree.split_below(
+        workspace,
         theme::TOP_HEIGHT,
         vec![Dock::Console, Dock::Timeline],
     );
-    tree.split_below(right, theme::LIBRARY_HEIGHT, vec![Dock::Inspector]);
     state
 }
 

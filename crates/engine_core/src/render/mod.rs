@@ -13,7 +13,7 @@ use crate::{
     assets::Assets,
     scene::{Camera2D, NodeState},
 };
-use mesh::MeshPass;
+use mesh::{MeshPass, MeshScene};
 use serde::Serialize;
 use sprite::SpriteBatch;
 
@@ -194,7 +194,28 @@ impl GpuScene {
                 nodes,
                 camera,
             } => {
-                self.encode_sprites(&mut encoder, &view, extent, assets, &nodes, camera)?;
+                let spatial = MeshScene::authored(&nodes);
+                let overlay = spatial.is_some();
+                if let Some(scene) = spatial {
+                    self.mesh
+                        .get_or_insert_with(|| MeshPass::new(&self.device, self.format))
+                        .encode(
+                            &self.device,
+                            &self.queue,
+                            &mut encoder,
+                            &view,
+                            extent,
+                            scene,
+                        )?;
+                }
+                self.encode_sprites(
+                    &mut encoder,
+                    &view,
+                    extent,
+                    assets,
+                    &nodes,
+                    (camera, overlay),
+                )?;
             }
             Frame::Cubes(cubes) => {
                 self.mesh
@@ -205,7 +226,7 @@ impl GpuScene {
                         &mut encoder,
                         &view,
                         extent,
-                        cubes,
+                        MeshScene::demo(cubes),
                     )?;
             }
         }
@@ -245,7 +266,7 @@ impl GpuScene {
         extent: Extent3d,
         assets: &Assets,
         nodes: &[NodeState],
-        camera: Camera2D,
+        (camera, overlay): (Camera2D, bool),
     ) -> anyhow::Result<()> {
         self.sprites.prepare(
             &self.device,
@@ -262,21 +283,24 @@ impl GpuScene {
                 depth_slice: None,
                 resolve_target: None,
                 ops: Operations {
-                    load: LoadOp::Clear(Color {
-                        r: 0.04,
-                        g: 0.09,
-                        b: 0.16,
-                        a: 1.0,
-                    }),
+                    load: if overlay {
+                        LoadOp::Load
+                    } else {
+                        LoadOp::Clear(Color {
+                            r: 0.04,
+                            g: 0.09,
+                            b: 0.16,
+                            a: 1.0,
+                        })
+                    },
                     store: StoreOp::Store,
                 },
             })],
             ..Default::default()
         });
-        let scale = (extent.width as f32 / camera.design_size[0])
-            .min(extent.height as f32 / camera.design_size[1]);
-        let width = (camera.design_size[0] * scale).round() as u32;
-        let height = (camera.design_size[1] * scale).round() as u32;
+        let [sx, sy] = camera.scale([extent.width, extent.height]);
+        let width = (camera.design_size[0] * sx).round() as u32;
+        let height = (camera.design_size[1] * sy).round() as u32;
         let width = width.clamp(1, extent.width);
         let height = height.clamp(1, extent.height);
         pass.set_scissor_rect(

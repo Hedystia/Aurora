@@ -1,16 +1,23 @@
-import { Component, Collider2D, NodePool, registerComponent } from "../../../aurora-cc/index.ts";
+import { Component, Collider2D, NodePool, ccclass, property, NodeRef } from "aurora";
 
 const birdX = -145;
 const speed = 115;
 const groundWidth = 256;
 
+@ccclass('Jumpy')
 export class Jumpy extends Component {
-  birdNode = 5;
-  startScreen = 7;
-  endScreen = 8;
-  firstGround = 2;
-  scoreDigits = 9;
-  bestDigits = 12;
+  @property({ type: NodeRef, tooltip: 'Bird visual and contact sensor.' })
+  birdNode = new NodeRef(5, this.scene);
+  @property({ type: NodeRef, tooltip: 'Ready overlay.' })
+  startScreen = new NodeRef(7, this.scene);
+  @property({ type: NodeRef, tooltip: 'Retry overlay.' })
+  endScreen = new NodeRef(8, this.scene);
+  @property({ type: NodeRef, tooltip: 'First of the three consecutive ground segments.' })
+  firstGround = new NodeRef(2, this.scene);
+  @property({ type: NodeRef, tooltip: 'First of the three consecutive score digits.' })
+  scoreDigits = new NodeRef(9, this.scene);
+  @property({ type: NodeRef, tooltip: 'First of the three consecutive best-score digits.' })
+  bestDigits = new NodeRef(12, this.scene);
 
   private pool = new NodePool([18, 21, 24, 27]);
   private slots: number[] = [];
@@ -31,11 +38,11 @@ export class Jumpy extends Component {
     this.best = score;
   }
 
-  onStart(): void {
-    this.scene.show(this.startScreen, true);
-    this.scene.show(this.endScreen, false);
-    this.digits(this.scoreDigits, this.score);
-    this.digits(this.bestDigits, this.best);
+  start(): void {
+    this.startScreen.setActive(true);
+    this.endScreen.setActive(false);
+    this.digits(this.scoreDigits.index, this.score);
+    this.digits(this.bestDigits.index, this.best);
   }
 
   onKeyDown(_key: number): void { this.press(); }
@@ -54,16 +61,16 @@ export class Jumpy extends Component {
       this.pipeCount = 0;
       this.score = 0;
       this.diePending = false;
-      this.scene.move(this.birdNode, birdX, this.y);
-      this.scene.show(this.startScreen, false);
-      this.scene.show(this.endScreen, false);
-      this.digits(this.scoreDigits, this.score);
+      this.birdNode.setPosition(birdX, this.y);
+      this.startScreen.setActive(false);
+      this.endScreen.setActive(false);
+      this.digits(this.scoreDigits.index, this.score);
     }
     this.velocity = 164;
     this.scene.sound(0);
   }
 
-  onUpdate(dt: number): void {
+  update(dt: number): void {
     if (this.phase === 2) {
       if (this.diePending) {
         this.scene.sound(3);
@@ -75,7 +82,7 @@ export class Jumpy extends Component {
       let x = this.ground[i] - speed * dt;
       if (x < -320 - groundWidth) x += this.ground.length * groundWidth;
       this.ground[i] = x;
-      this.scene.move(this.firstGround + i, x, -184);
+      this.scene.move(this.firstGround.index + i, x, -184);
     }
     if (this.phase !== 1) return;
     this.velocity -= 370 * dt;
@@ -84,7 +91,7 @@ export class Jumpy extends Component {
       this.y = 164;
       this.velocity = 0;
     }
-    this.scene.move(this.birdNode, birdX, this.y);
+    this.birdNode.setPosition(birdX, this.y);
 
     if (this.countdown === 0) {
       const slot = this.pool.get();
@@ -112,11 +119,11 @@ export class Jumpy extends Component {
         if (!this.counted[i] && x < birdX - 42) {
           this.counted[i] = true;
           this.score++;
-          this.digits(this.scoreDigits, this.score);
+          this.digits(this.scoreDigits.index, this.score);
           this.scene.sound(1);
           if (this.score > this.best) {
             this.best = this.score;
-            this.digits(this.bestDigits, this.best);
+            this.digits(this.bestDigits.index, this.best);
             this.scene.bestScore(this.best);
           }
         }
@@ -130,7 +137,7 @@ export class Jumpy extends Component {
     if (this.phase !== 1) return;
     this.phase = 2;
     this.diePending = true;
-    this.scene.show(this.endScreen, true);
+    this.endScreen.setActive(true);
     this.scene.sound(2);
   }
 
@@ -140,13 +147,3 @@ export class Jumpy extends Component {
     this.scene.frame(start + 2, score % 10);
   }
 }
-
-export const metadata =
-registerComponent(["Jumpy", { "props": {
-  "birdNode": { "type": "node", "tooltip": "Bird visual and bound contact sensor." },
-  "startScreen": { "type": "node", "tooltip": "Ready overlay." },
-  "endScreen": { "type": "node", "tooltip": "Retry overlay." },
-  "firstGround": { "type": "node", "tooltip": "First of the three consecutive ground segments." },
-  "scoreDigits": { "type": "node", "tooltip": "First of the three consecutive score digits." },
-  "bestDigits": { "type": "node", "tooltip": "First of the three consecutive best-score digits." }
-} }]);
