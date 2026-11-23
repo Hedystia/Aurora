@@ -1,5 +1,15 @@
-[package]
-name = "aurora-engine"
+[workspace]
+resolver = "2"
+
+members = [
+  "crates/engine_core",
+  "crates/player",
+  "crates/editor",
+  "crates/codegen",
+  "crates/script_api",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-description = "Aurora Engine"
+rust-version = "1.100.0"
