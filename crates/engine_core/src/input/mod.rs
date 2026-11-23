@@ -1,3 +1,1 @@
---! Aurora Input
-pub mod key;
-pub mod mouse;
+--! Aurora Input (legacy)
