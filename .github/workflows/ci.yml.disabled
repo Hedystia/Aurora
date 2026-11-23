@@ -1,0 +1,130 @@
+#! Aurora Engine CI Update
+name: CI
+on: [push, pull_request]
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Linux graphics dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake g++ xauth xvfb weston libvulkan1 libasound2-dev mesa-vulkan-drivers libxkbcommon-x11-0 libwayland-dev
+      - name: Verify Bun provisioning without system runtimes
+        shell: bash
+        run: |
+          path_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$path_dir"' EXIT
+          for tool in bash chmod curl dirname mkdir mktemp mv rm sha256sum uname unzip; do
+            ln -s "$(command -v "$tool")" "$path_dir/$tool"
+          done
+          runtime="$(PATH="$path_dir" tools/setup.sh --print-runtime)"
+          test "$runtime" = "$PWD/.aurora/tools/bun"
+          "$runtime" --version
+      - name: Provision toolchains
+        run: tools/setup.sh
+      - run: cargo fmt --all --check
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace
+      - name: Type-check the script SDK and samples
+        run: |
+          cargo run --locked --bin aurora-codegen -- --protocol-only .aurora/scripts/metadata
+          .aurora/tools/bun install --cwd scripts --no-save
+          .aurora/tools/bun --bun run --cwd scripts typecheck
+      - name: Verify one wgpu version
+        run: |
+          cargo tree --locked --workspace -d
+          cargo tree --locked --workspace -i wgpu
+      - name: Compare native and development game scripts
+        run: |
+          cargo build --locked --workspace
+          native="$(tools/build-script.sh native)"
+          dev="$(tools/build-script.sh dev)"
+          env -u DISPLAY -u WAYLAND_DISPLAY target/debug/aurora-player --headless --frames 120 --script "$native" > "$RUNNER_TEMP/native.json"
+          env -u DISPLAY -u WAYLAND_DISPLAY target/debug/aurora-player --headless --frames 120 --script-dev "$dev" > "$RUNNER_TEMP/dev.json"
+          cmp "$RUNNER_TEMP/native.json" "$RUNNER_TEMP/dev.json"
+          python3 -c 'import json,sys; scene=json.load(open(sys.argv[1])); assert scene["nodes"][1]["local"]["position"] == [76, 0]' "$RUNNER_TEMP/native.json"
+      - name: Verify bird input, contacts, and audio commands
+        run: |
+          native="$(tools/build-script.sh native bird)"
+          dev="$(tools/build-script.sh dev bird)"
+          env -u DISPLAY -u WAYLAND_DISPLAY target/debug/aurora-player --bird --headless --frames 140 --flap-at 0 --touch-at 75 --script "$native" > "$RUNNER_TEMP/bird-native.json"
+          env -u DISPLAY -u WAYLAND_DISPLAY target/debug/aurora-player --bird --headless --frames 140 --flap-at 0 --touch-at 75 --script-dev "$dev" > "$RUNNER_TEMP/bird-dev.json"
+          cmp "$RUNNER_TEMP/bird-native.json" "$RUNNER_TEMP/bird-dev.json"
+          python3 -c 'import json,sys; stats=json.load(open(sys.argv[1]))["bird"]; assert stats["flaps"] == 2 and stats["pipe_hits"] > 0 and stats["contact_exits"] > 0 and stats["one_shots"] > 2' "$RUNNER_TEMP/bird-native.json"
+      - name: Verify authored scene transition and pause
+        run: |
+          native="$(tools/build-script.sh native scene)"
+          dev="$(tools/build-script.sh dev scene)"
+          scenes=(--scene scripts/game-template/scenes/gallery.scene --scene scripts/game-template/scenes/lookout.scene)
+          target/debug/aurora-player "${scenes[@]}" --headless --frames 120 --script "$native" > "$RUNNER_TEMP/scene-native.json"
+          target/debug/aurora-player "${scenes[@]}" --headless --frames 120 --script-dev "$dev" > "$RUNNER_TEMP/scene-dev.json"
+          cmp "$RUNNER_TEMP/scene-native.json" "$RUNNER_TEMP/scene-dev.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["ticks"] == 54 and [n["name"] for n in s["nodes"]] == ["Lookout", "Marker", "Satellite"]' "$RUNNER_TEMP/scene-native.json"
+      - name: Check both 3D solvers
+        run: |
+          target/debug/aurora-player --3d --headless --frames 240 > "$RUNNER_TEMP/3d-first.json"
+          target/debug/aurora-player --3d --headless --frames 240 > "$RUNNER_TEMP/3d-second.json"
+          cmp "$RUNNER_TEMP/3d-first.json" "$RUNNER_TEMP/3d-second.json"
+          cargo test --locked -p engine_core --features physics-jolt physics3d
+      - name: Check the 600-frame Jumpy Bird golden
+        run: tools/golden_test.sh
+      - name: Capture editor and player
+        env:
+          WGPU_BACKEND: vulkan
+        run: |
+          cargo build --locked --workspace
+          env -u DISPLAY -u WAYLAND_DISPLAY target/debug/aurora-player --headless --frames 600 > "$RUNNER_TEMP/scene-first.json"
+          env -u DISPLAY -u WAYLAND_DISPLAY target/debug/aurora-player --headless --frames 600 > "$RUNNER_TEMP/scene-second.json"
+          cmp "$RUNNER_TEMP/scene-first.json" "$RUNNER_TEMP/scene-second.json"
+          mkdir -p screenshots
+          timeout 45s xvfb-run -a target/debug/aurora-player --bird --script .aurora/scripts/bird-native --capture-after 24 --flap-at 0 --screenshot screenshots/player.png
+          timeout 45s xvfb-run -a target/debug/aurora-editor --project . --screenshot screenshots/editor.png
+          timeout 45s xvfb-run -a target/debug/aurora-player --3d --capture-after 240 --screenshot screenshots/player-3d.png
+          test -s screenshots/player-3d.png
+          test -s screenshots/player.png
+          test -s screenshots/editor.png
+          timeout 45s xvfb-run -a target/debug/aurora-editor --screenshot screenshots/projects.png
+          test -s screenshots/projects.png
+          timeout 55s xvfb-run -a target/debug/aurora-editor --project scripts/game-template/scenes/gallery.scene --play --screenshot screenshots/editor-game.png
+          test -s screenshots/editor-game.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aurora-screenshots
+          path: screenshots/
+
+      - name: Smoke-test the relocatable Linux package on Wayland
+        run: |
+          tools/package-linux.sh "$RUNNER_TEMP/aurora.tar.gz" debug
+          tar -xzf "$RUNNER_TEMP/aurora.tar.gz" -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP/aurora"
+          export XDG_RUNTIME_DIR="$(mktemp -d)" WGPU_BACKEND=vulkan
+          unset DISPLAY
+          weston --backend=headless-backend.so --socket=aurora-wayland --idle-time=0 > "$RUNNER_TEMP/weston.log" 2>&1 &
+          compositor=$!
+          trap 'kill "$compositor" || true' EXIT
+          export WAYLAND_DISPLAY=aurora-wayland
+          for attempt in {1..100}; do
+            if test -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"; then break; fi
+            sleep 0.1
+          done
+          timeout 60s ./aurora-player --screenshot "$RUNNER_TEMP/wayland-player.png"
+          timeout 90s ./aurora-editor --project examples/jumpy --play --screenshot "$RUNNER_TEMP/wayland-jumpy.png"
+          test -s "$RUNNER_TEMP/wayland-player.png"
+          test -s "$RUNNER_TEMP/wayland-jumpy.png"
+
+  config-paths:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check native project manager paths
+        shell: bash
+        run: |
+          rustc +stable --edition=2024 --test crates/editor/src/project_manager/settings/paths/mod.rs -o "$RUNNER_TEMP/paths-test.exe"
+          "$RUNNER_TEMP/paths-test.exe"
