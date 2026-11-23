@@ -13,12 +13,14 @@ Read the project skills in `.codex/skills/` for the subsystem being changed.
 
 - Build scripts with `tools/build-script.sh native` or `tools/build-script.sh dev`. Pass the printed executable to `aurora-player --script PATH` or `aurora-player --script-dev PATH` respectively. Add `--headless --frames 120` to inspect the resulting scene state.
 - The script build emits inspector metadata and SDK declarations under `.aurora/scripts/metadata/<sample>`.
+- To type-check the script workspace, run `cargo run --locked --bin aurora-codegen -- --protocol-only .aurora/scripts/metadata`, then `bun install --cwd scripts --no-save` and `bun --bun run --cwd scripts typecheck`.
 
 - Build the bird sample with `tools/build-script.sh native bird`. Run `cargo run --locked --bin aurora-player -- --bird --script .aurora/scripts/bird-native` and press Space or Up, or tap the window.
 - For deterministic verification use `--bird --headless --frames 140 --flap-at 0 --touch-at 75`. The JSON includes flap, pipe-hit, contact-exit, and one-shot counts. For a graphical capture replace `--headless --frames 140` with `--capture-after 140 --screenshot /tmp/aurora-bird.png`.
+- For authored scenes, `--pointer-at TICK` injects a pointer press, move and release over three ticks with a stable identity. `--touch-at TICK` remains a coordinate-free centre-frame tap. `--wheel-at TICK` injects one vertical wheel step at the frame centre.
 - Linux build prerequisites include ALSA development headers for CPAL.
 
-- Build the authored scene sample with `tools/build-script.sh native scene`. Run the player with `--scene scripts/game-template/scenes/gallery.aurora-scene --scene scripts/game-template/scenes/lookout.aurora-scene --script .aurora/scripts/scene-native`. Press **P** to pause or resume and **Tab** to switch scenes. Add `--headless --frames 120` to verify the scripted transition and pause.
+- Build the authored scene sample with `tools/build-script.sh native scene`. Run the player with `--scene scripts/game-template/scenes/gallery.scene --scene scripts/game-template/scenes/lookout.scene --script .aurora/scripts/scene-native`. Press **P** to pause or resume and **Tab** to switch scenes. Add `--headless --frames 120` to verify the scripted transition and pause.
 - See [scene files and animation](docs/SCENES.md) for the persistence format and pool API.
 
 - Run `target/debug/aurora-editor --project /path/to/project` after building both binaries. Use `--play --screenshot /tmp/aurora-preview.png` to verify the embedded player.
