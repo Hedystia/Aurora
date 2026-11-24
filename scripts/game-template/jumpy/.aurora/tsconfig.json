@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "experimentalDecorators": true,
+    "paths": { "aurora": ["./index.d.ts"], "aurora-cc": ["./index.d.ts"] }
+  }
+}
