@@ -138,11 +138,21 @@ mod tests {
             director.step()?;
         }
         let nodes = director.scene().snapshot()?;
-        assert!((nodes[2].spatial.as_ref().unwrap().position[1] - 1.).abs() < 0.02);
+        assert!(
+            nodes[2]
+                .spatial
+                .as_ref()
+                .is_some_and(|spatial| (spatial.position[1] - 1.).abs() < 0.02)
+        );
         assert_eq!(nodes[3].local.position, [15., 20.]);
         director.change_scene(0)?;
         let nodes = director.scene().snapshot()?;
-        assert_eq!(nodes[2].spatial.as_ref().unwrap().position[1], 4.);
+        assert!(
+            nodes[2]
+                .spatial
+                .as_ref()
+                .is_some_and(|spatial| spatial.position[1] == 4.)
+        );
         let captured = SceneFile::capture(director.scene(), |_| None)?;
         assert!(captured.nodes[2].spatial.is_some() && captured.nodes[3].spatial.is_none());
         Ok(())
