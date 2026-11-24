@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, ops::Range};
 use anyhow::{Context, Result, bail, ensure};
 use tree_sitter::{Node, Parser};
 
-use super::{Metadata, Property, PropertyType};
+use super::{Metadata, NodeFilter, Property, PropertyType};
 
 pub(super) struct Decorated {
     pub components: BTreeMap<String, Metadata>,
@@ -189,6 +189,7 @@ fn string(node: Node<'_>, source: &str) -> Result<String> {
 struct Declared {
     kind: PropertyType,
     component: Option<String>,
+    node_filter: Option<NodeFilter>,
 }
 
 impl Declared {
@@ -196,6 +197,23 @@ impl Declared {
         Self {
             kind,
             component: None,
+            node_filter: None,
+        }
+    }
+
+    fn text_node() -> Self {
+        Self {
+            kind: PropertyType::Node,
+            component: None,
+            node_filter: Some(NodeFilter::Text),
+        }
+    }
+
+    fn image_node() -> Self {
+        Self {
+            kind: PropertyType::Node,
+            component: None,
+            node_filter: Some(NodeFilter::Image),
         }
     }
 }
@@ -203,8 +221,17 @@ impl Declared {
 fn kind(value: &str) -> Option<PropertyType> {
     match value {
         "Number" | "number" => Some(PropertyType::Number),
+        "Integer" | "integer" => Some(PropertyType::Integer),
         "Boolean" | "boolean" => Some(PropertyType::Boolean),
         "String" | "string" => Some(PropertyType::String),
+        "Text" | "text" => Some(PropertyType::Text),
+        "Vector2" | "vector2" => Some(PropertyType::Vector2),
+        "Vector3" | "vector3" => Some(PropertyType::Vector3),
+        "Size" | "size" => Some(PropertyType::Size),
+        "Rect" | "rect" => Some(PropertyType::Rect),
+        "Color" | "color" => Some(PropertyType::Color),
+        "Bitmask" | "bitmask" => Some(PropertyType::Bitmask),
+        "Image" | "image" => Some(PropertyType::SpriteFrame),
         "NodeRef" => Some(PropertyType::Node),
         "Prefab" => Some(PropertyType::Prefab),
         "AudioClip" => Some(PropertyType::AudioClip),
@@ -228,6 +255,15 @@ fn array_kind(value: &str) -> Option<PropertyType> {
 
 fn declared_kind(value: &str) -> Option<Declared> {
     let value = value.trim();
+    match value {
+        "Ref.Node" => return Some(Declared::value(PropertyType::Node)),
+        "Ref.Text" | "TextRef" => return Some(Declared::text_node()),
+        "Ref.Image" | "ImageRef" => return Some(Declared::image_node()),
+        "Ref.Prefab" => return Some(Declared::value(PropertyType::Prefab)),
+        "Ref.AudioClip" => return Some(Declared::value(PropertyType::AudioClip)),
+        "Ref.SpriteFrame" => return Some(Declared::value(PropertyType::SpriteFrame)),
+        _ => {}
+    }
     if let Some(inner) = value
         .strip_prefix('[')
         .and_then(|value| value.strip_suffix(']'))
@@ -249,6 +285,7 @@ fn declared_kind(value: &str) -> Option<Declared> {
         return Some(Declared {
             kind: PropertyType::Component,
             component: Some(value.to_owned()),
+            node_filter: None,
         });
     }
     None
@@ -259,6 +296,13 @@ fn field_property(annotation: Node<'_>, field: Node<'_>, source: &str) -> Result
     ensure!(arguments.len() <= 1, "Expected at most one argument");
     let mut tooltip = None;
     let mut explicit = None;
+    let mut choices = None;
+    let mut readonly = false;
+    let mut min = None;
+    let mut max = None;
+    let mut step = None;
+    let mut group = None;
+    let mut slider = false;
     if let Some(&argument) = arguments.first() {
         if argument.kind() == "object" {
             for pair in children(argument).filter(|node| node.kind() != "comment") {
@@ -274,6 +318,42 @@ fn field_property(annotation: Node<'_>, field: Node<'_>, source: &str) -> Result
                             declared_kind(text(value, source))
                                 .context("Unsupported property type")?,
                         )
+                    }
+                    "enum" => {
+                        let values = children(value)
+                            .filter(|node| node.kind() != "comment")
+                            .map(|node| string(node, source))
+                            .collect::<Result<Vec<_>>>()?;
+                        ensure!(
+                            !values.is_empty()
+                                && values.len() <= 256
+                                && values.iter().all(|value| !value.trim().is_empty())
+                                && values
+                                    .iter()
+                                    .collect::<std::collections::BTreeSet<_>>()
+                                    .len()
+                                    == values.len(),
+                            "Enum choices must be unique nonempty strings"
+                        );
+                        choices = Some(values);
+                    }
+                    "readonly" => {
+                        readonly = match text(value, source) {
+                            "true" => true,
+                            "false" => false,
+                            _ => bail!("readonly must be a boolean literal"),
+                        }
+                    }
+                    "min" => min = Some(text(value, source).parse::<f64>()?),
+                    "max" => max = Some(text(value, source).parse::<f64>()?),
+                    "step" => step = Some(text(value, source).parse::<f64>()?),
+                    "group" => group = Some(string(value, source)?),
+                    "slider" => {
+                        slider = match text(value, source) {
+                            "true" => true,
+                            "false" => false,
+                            _ => bail!("slider must be a boolean literal"),
+                        }
                     }
                     "tooltip" => tooltip = Some(string(value, source)?),
                     option => bail!("Unsupported property option {option}"),
@@ -305,12 +385,87 @@ fn field_property(annotation: Node<'_>, field: Node<'_>, source: &str) -> Result
             _ => None,
         }
     };
-    let declared = explicit.or_else(inferred).context(
-        "Specify Number, Boolean, String, NodeRef, Prefab, AudioClip, SpriteFrame, an array of them or a component class",
-    )?;
+    let declared = explicit
+        .or_else(inferred)
+        .or_else(|| choices.as_ref().map(|_| Declared::value(PropertyType::Enum)))
+        .context(
+            "Specify Number, Integer, Boolean, String, Text, Vector2, Vector3, Size, Rect, Color, Bitmask, NodeRef, Prefab, AudioClip, SpriteFrame, an array of them, enum choices, or a component class",
+        )?;
+    if declared.kind == PropertyType::Node
+        && let Some(annotation) = field.child_by_field_name("type")
+    {
+        let expected = match declared.node_filter {
+            Some(NodeFilter::Text) => "TextRef",
+            Some(NodeFilter::Image) => "ImageRef",
+            None => "NodeRef",
+        };
+        let mut variants = text(annotation, source)
+            .trim_start_matches(':')
+            .split('|')
+            .map(str::trim)
+            .filter(|variant| !matches!(*variant, "null" | "undefined"));
+        ensure!(
+            variants.next() == Some(expected) && variants.next().is_none(),
+            "Scene-node references must use {expected} as their value type, not the Ref marker type"
+        );
+    }
+    let kind = if choices.is_some() {
+        ensure!(
+            declared.kind == PropertyType::String || declared.kind == PropertyType::Enum,
+            "Enum choices require a string property"
+        );
+        PropertyType::Enum
+    } else {
+        declared.kind
+    };
+    if min.is_some() || max.is_some() || step.is_some() || slider {
+        ensure!(
+            matches!(kind, PropertyType::Number | PropertyType::Integer),
+            "Numeric constraints are only supported on number and integer properties"
+        );
+        ensure!(
+            min.is_none_or(f64::is_finite) && max.is_none_or(f64::is_finite),
+            "Numeric bounds must be finite"
+        );
+        ensure!(
+            min.zip(max)
+                .is_none_or(|(minimum, maximum)| minimum <= maximum),
+            "Minimum must not exceed maximum"
+        );
+        ensure!(
+            step.is_none_or(|value| value.is_finite() && value > 0.0),
+            "Step must be a finite positive number"
+        );
+        if kind == PropertyType::Integer {
+            ensure!(
+                min.is_none_or(|value| value.fract() == 0.0)
+                    && max.is_none_or(|value| value.fract() == 0.0)
+                    && step.is_none_or(|value| value.fract() == 0.0),
+                "Integer bounds and steps must be whole numbers"
+            );
+        }
+    }
+    if slider {
+        ensure!(
+            min.is_some() && max.is_some(),
+            "Slider properties need min and max"
+        );
+    }
+    ensure!(
+        group.as_ref().is_none_or(|value| !value.trim().is_empty()),
+        "Property group must not be empty"
+    );
     Ok(Property {
-        kind: declared.kind,
+        kind,
         tooltip,
         component: declared.component,
+        choices,
+        readonly,
+        node_filter: declared.node_filter,
+        min,
+        max,
+        step,
+        group,
+        slider,
     })
 }
