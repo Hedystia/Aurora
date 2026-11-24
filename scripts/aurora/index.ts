@@ -14,11 +14,18 @@ export type { PointerPhase } from "./events.ts";
 export type { ScheduledCallback } from "./scheduler.ts";
 
 export interface Property {
-  type: "number" | "boolean" | "string" | "node" | "prefab" | "number_array" | "boolean_array" | "string_array" | "node_array" | "component";
+  type: "number" | "integer" | "boolean" | "string" | "text" | "vector2" | "vector3" | "size" | "rect" | "color" | "bitmask" | "enum" | "node" | "prefab" | "audio_clip" | "sprite_frame" | "number_array" | "boolean_array" | "string_array" | "node_array" | "component";
   tooltip?: string;
   component?: string;
+  choices?: string[];
+  readonly?: boolean;
+  node_filter?: "text" | "image";
+  min?: number;
+  max?: number;
+  step?: number;
+  group?: string;
+  slider?: boolean;
 }
-
 export interface ComponentMetadata {
   props: Record<string, Property>;
 }
@@ -50,6 +57,10 @@ export class Node {
   setActive(visible: boolean): void {
     if (this.sceneCommands === null) throw new Error("Node is not bound");
     this.sceneCommands.show(this.sceneIndex, visible);
+  }
+  setText(value: string): void {
+    if (this.sceneCommands === null) throw new Error("Node is not bound");
+    this.sceneCommands.setText(this.sceneIndex, value);
   }
   addComponent(type: string | ComponentConstructor<Component>): void {
     if (this.sceneCommands === null) throw new Error("Node is not bound");
@@ -250,6 +261,9 @@ const degreesPerRadian = 180 / Math.PI;
 const firstDynamicNode = 0x80000000;
 let nextDynamicNode = firstDynamicNode;
 let callbackSceneCommands: SceneCommands | null = null;
+let callbackOwner: Component | null = null;
+let nextScriptTimerId = 1;
+const scriptTimerOwners = new Map<number, Component>();
 
 export class SceneCommands {
   edits: SceneEdit[] = [];
@@ -279,6 +293,32 @@ export class SceneCommands {
     const slot = frame.frameFor(node.index);
     if (slot === -1) throw new Error("Sprite frame is not registered for this node");
     this.frame(node.index, slot);
+  }
+  setText(node: number, value: string): void {
+    if (typeof value !== "string") throw new Error("Text content must be a string");
+    const bytes = new TextEncoder().encode(value);
+    if (bytes.length > 1512) throw new Error("Text content exceeds the 1512-byte limit");
+    const buffer = callbackSceneCommands ?? this;
+    const edits = Math.ceil(bytes.length / 12) + 2;
+    if (buffer.edits.length + edits > 128) {
+      throw new Error("Text replacement exceeds the scene command limit");
+    }
+    scriptScene.assertTextNode(node);
+    this.push(13, node, 0, 0);
+    for (let offset = 0; offset < bytes.length; offset += 12) {
+      const chunk = bytes.subarray(offset, offset + 12);
+      const packed = (start: number): number => {
+        let value = 0;
+        for (let index = 0; index < 6; index++) {
+          value += (chunk[start + index] ?? 0) * 2 ** (index * 8);
+        }
+        return value;
+      };
+      const packedY = packed(6) + chunk.length * 2 ** 48;
+      this.push(14, node, packed(0), packedY);
+    }
+    this.push(15, node, 0, 0);
+    scriptScene.setNodeText(node, value);
   }
   sound(clip: number): void { this.push(3, clip, 0, 0); }
   bestScore(score: number): void { this.push(4, score, 0, 0); }
@@ -410,6 +450,8 @@ export class NodeRef {
     this.commands.move(this.index, x, y);
   }
   setActive(visible: boolean): void { this.commands.show(this.index, visible); }
+  setText(value: string): void { this.commands.setText(this.index, value); }
+  setSpriteFrame(frame: SpriteFrame): void { this.commands.setSpriteFrame(this, frame); }
   setParent(parent: NodeRef | null): void { this.commands.reparent(this.index, parent); }
   removeFromParent(): void { this.commands.reparent(this.index, null); }
   destroy(): void { this.commands.destroy(this.index); }
@@ -418,6 +460,22 @@ export class NodeRef {
 export class Prefab {
   constructor(readonly path: string, readonly assetIndex = -1) {}
 }
+
+export class TextRef extends NodeRef {
+  get content(): string { return scriptScene.nodeText(this.index); }
+  set content(value: string) { this.setText(value); }
+}
+
+export class ImageRef extends NodeRef {}
+
+export const Ref = {
+  Node: NodeRef,
+  Text: TextRef,
+  Image: ImageRef,
+  Prefab,
+  AudioClip,
+  SpriteFrame,
+} as const;
 
 // A pool of authored prefab instance indices. Returning a slot hides its subtree.
 export class NodePool {
@@ -453,6 +511,15 @@ export class NodePool {
   }
 }
 
+export class Integer {}
+export class Text {}
+export class Vector2 {}
+export class Vector3 {}
+export class Size {}
+export class Rect {}
+export class Color {}
+export class Bitmask {}
+export class Image {}
 export class Component {
   readonly node = new Node();
   readonly audio = new AudioSource();
@@ -465,6 +532,8 @@ export class Component {
   /** Custom events scoped to this component. */
   readonly events = new EventTarget();
   private readonly scheduler = new Scheduler();
+  private readonly scriptTimers = new Map<number, ScheduledCallback>();
+  private scriptTime = 0;
 
   schedule(callback: ScheduledCallback, interval = 0, repeat = Infinity, delay = 0): void {
     this.scheduler.schedule(callback, interval, repeat, delay);
@@ -480,11 +549,43 @@ export class Component {
 
   unscheduleAllCallbacks(): void {
     this.scheduler.clear();
+    for (const id of this.scriptTimers.keys()) scriptTimerOwners.delete(id);
+    this.scriptTimers.clear();
   }
 
   /** @internal Called by the wire scheduler phase. */
   _tickScheduler(dt: number): void {
+    this.scriptTime += dt;
     this.scheduler.tick(dt);
+  }
+
+  /** @internal Schedules a global timer against simulation time. */
+  _scheduleScriptTimer(callback: () => void, delay: number, interval: number | null): number {
+    const id = allocateScriptTimer(this);
+    const scheduled: ScheduledCallback = () => {
+      if (interval === null) {
+        this.scriptTimers.delete(id);
+        scriptTimerOwners.delete(id);
+      }
+      callback();
+    };
+    this.scriptTimers.set(id, scheduled);
+    this.scheduler.schedule(scheduled, interval ?? 0, interval === null ? 0 : Infinity, delay);
+    return id;
+  }
+
+  /** @internal Cancels a global timer owned by this component. */
+  _clearScriptTimer(id: number): void {
+    const scheduled = this.scriptTimers.get(id);
+    if (scheduled === undefined) return;
+    this.scheduler.unschedule(scheduled);
+    this.scriptTimers.delete(id);
+    scriptTimerOwners.delete(id);
+  }
+
+  /** @internal Returns simulation time for requestAnimationFrame callbacks. */
+  _scriptTimeMilliseconds(): number {
+    return this.scriptTime * 1000;
   }
 
   /** @internal Delivers a resource completion in its own callback transaction. */
@@ -537,7 +638,7 @@ export class Component {
 
   /** @internal Releases listeners and timers on destruction. */
   _clearScriptServices(): void {
-    this.scheduler.clear();
+    this.unscheduleAllCallbacks();
     this.input.clear();
     this.events.clear();
     this.resources._clear();
@@ -596,6 +697,7 @@ class PrefabTemplate {
     readonly nodes: string[],
     readonly build: PrefabBuilder,
     readonly names: string[],
+    readonly textContents: (string | null)[],
   ) {}
 }
 
@@ -620,13 +722,27 @@ class ScriptScene {
   private owners: number[] = [];
   private names: string[] = [];
   private prefabs = new Map<string, Prefab>();
+  private readonly textContents = new Map<number, string>();
 
-  install(nodes: string[], parents: number[], instances: Component[], owners: number[], names: string[], prefabPaths: string[]): void {
+  install(
+    nodes: string[],
+    parents: number[],
+    instances: Component[],
+    owners: number[],
+    names: string[],
+    prefabPaths: string[],
+    textContents: (string | null)[] = [],
+  ): void {
     this.nodes = nodes;
     this.parents = parents;
     this.instances = instances;
     this.owners = owners;
     this.names = names;
+    this.textContents.clear();
+    for (let index = 0; index < textContents.length; index++) {
+      const text = textContents[index];
+      if (text !== null && text !== undefined) this.textContents.set(index, text);
+    }
     this.removedBindings.clear();
     this.prefabs.clear();
     for (let i = 0; i < prefabPaths.length; i++) {
@@ -798,8 +914,14 @@ class ScriptScene {
     return instance;
   }
 
-  registerTemplate(asset: number, names: string[], build: PrefabBuilder, componentNames: string[]): void {
-    this.templates.set(asset, new PrefabTemplate(names, build, componentNames));
+  registerTemplate(
+    asset: number,
+    names: string[],
+    build: PrefabBuilder,
+    componentNames: string[],
+    textContents: (string | null)[] = [],
+  ): void {
+    this.templates.set(asset, new PrefabTemplate(names, build, componentNames, textContents));
   }
 
   registerDynamicNode(reference: number, root: number, asset: number, parent: number): void {
@@ -816,6 +938,8 @@ class ScriptScene {
     references.push(reference);
     this.dynamicNames.set(reference, name);
     this.dynamicParents.set(reference, parent);
+    const text = template?.textContents[references.length - 1];
+    if (text !== null && text !== undefined) this.textContents.set(reference, text);
   }
 
   registerDynamicComponent(binding: number, root: number, asset: number, ordinal: number, ownerIndex: number): Component {
@@ -850,6 +974,7 @@ class ScriptScene {
   }
 
   releaseDynamicNode(reference: number): void {
+    this.textContents.delete(reference);
     this.dynamicParents.delete(reference);
     this.dynamicNames.delete(reference);
     this.clones.delete(reference);
@@ -883,6 +1008,18 @@ class ScriptScene {
   nodeScaleX(reference: number): number { return this.scaleX.get(reference) ?? 1; }
   nodeScaleY(reference: number): number { return this.scaleY.get(reference) ?? 1; }
   nodeAngle(reference: number): number { return this.angles.get(reference) ?? 0; }
+  nodeText(reference: number): string {
+    const text = this.textContents.get(reference);
+    if (text === undefined) throw new Error("Node does not have a Text visual");
+    return text;
+  }
+  setNodeText(reference: number, value: string): void {
+    this.assertTextNode(reference);
+    this.textContents.set(reference, value);
+  }
+  assertTextNode(reference: number): void {
+    if (!this.textContents.has(reference)) throw new Error("Node does not have a Text visual");
+  }
   moveNode(reference: number, x: number, y: number): void {
     this.positionX.set(reference, x);
     this.positionY.set(reference, y);
@@ -985,13 +1122,78 @@ export function dispatchWheelEvent(
 }
 
 export function setScriptCallbackOwner(component: Component | null): void {
+  callbackOwner = component;
   callbackSceneCommands = component === null ? null : component.scene;
   input._select(component === null ? null : component.input);
 }
 
-export function bindScriptScene(nodes: string[], parents: number[], instances: Component[], owners: number[], names: string[], prefabPaths: string[]): void {
+function timerDelay(delay: number): number {
+  if (Number.isNaN(delay)) return 0;
+  return Math.min(2_147_483_647, Math.max(0, delay)) / 1000;
+}
+
+function allocateScriptTimer(owner: Component): number {
+  let id = nextScriptTimerId;
+  while (scriptTimerOwners.has(id) || id === 0) {
+    id = id === Number.MAX_SAFE_INTEGER ? 1 : id + 1;
+  }
+  nextScriptTimerId = id === Number.MAX_SAFE_INTEGER ? 1 : id + 1;
+  scriptTimerOwners.set(id, owner);
+  return id;
+}
+
+function requireTimerOwner(): Component {
+  if (callbackOwner === null) {
+    throw new Error("Global timers can only be scheduled during a component callback");
+  }
+  return callbackOwner;
+}
+
+/** Schedules a one-shot callback in simulation milliseconds. */
+export function auroraSetTimeout<Arguments extends unknown[]>(
+  callback: (...args: Arguments) => void,
+  delay = 0,
+  ...args: Arguments
+): number {
+  return requireTimerOwner()._scheduleScriptTimer(() => callback(...args), timerDelay(delay), null);
+}
+
+/** Schedules a repeating callback in simulation milliseconds. */
+export function auroraSetInterval<Arguments extends unknown[]>(
+  callback: (...args: Arguments) => void,
+  delay = 0,
+  ...args: Arguments
+): number {
+  const interval = timerDelay(delay);
+  return requireTimerOwner()._scheduleScriptTimer(
+    () => callback(...args),
+    interval,
+    interval,
+  );
+}
+
+/** Cancels a one-shot or repeating simulation timer. */
+export function auroraClearTimer(id: number | undefined): void {
+  if (id !== undefined) scriptTimerOwners.get(id)?._clearScriptTimer(id);
+}
+
+/** Schedules a callback for the next simulation frame. */
+export function auroraRequestAnimationFrame(callback: (timestamp: number) => void): number {
+  const owner = requireTimerOwner();
+  return owner._scheduleScriptTimer(() => callback(owner._scriptTimeMilliseconds()), 0, null);
+}
+
+export function bindScriptScene(
+  nodes: string[],
+  parents: number[],
+  instances: Component[],
+  owners: number[],
+  names: string[],
+  prefabPaths: string[],
+  textContents: (string | null)[] = [],
+): void {
   scriptScene.clearEventTargets();
-  scriptScene.install(nodes, parents, instances, owners, names, prefabPaths);
+  scriptScene.install(nodes, parents, instances, owners, names, prefabPaths, textContents);
 }
 
 export function registerComponentFactory(name: string, factory: PrefabFactory): void {
@@ -1047,8 +1249,14 @@ export function registerRuntimeComponent(binding: number, owner: number, factory
   return scriptScene.makeComponent(binding, owner, factory);
 }
 
-export function registerScriptPrefab(asset: number, names: string[], build: PrefabBuilder, componentNames: string[]): void {
-  scriptScene.registerTemplate(asset, names, build, componentNames);
+export function registerScriptPrefab(
+  asset: number,
+  names: string[],
+  build: PrefabBuilder,
+  componentNames: string[],
+  textContents: (string | null)[] = [],
+): void {
+  scriptScene.registerTemplate(asset, names, build, componentNames, textContents);
 }
 
 export function registerPrefabNode(reference: number, root: number, asset: number, parent: number): void {
@@ -1326,13 +1534,34 @@ export function executionOrder(_order: number): ClassDecorator {
 // The editor reads these annotations from source, and the native build erases them.
 type PropertyToken =
   | NumberConstructor
+  | typeof Integer
   | BooleanConstructor
   | StringConstructor
+  | typeof Text
+  | typeof Vector2
+  | typeof Vector3
+  | typeof Size
+  | typeof Rect
+  | typeof Color
+  | typeof Bitmask
+  | typeof Image
+  | typeof TextRef
+  | typeof ImageRef
   | typeof NodeRef
   | typeof Prefab
   | typeof AudioClip
   | typeof SpriteFrame;
-type PropertyOptions = { type?: PropertyToken; tooltip?: string };
+type PropertyOptions = {
+  type?: PropertyToken;
+  tooltip?: string;
+  enum?: readonly string[];
+  readonly?: boolean;
+  min?: number;
+  max?: number;
+  step?: number;
+  group?: string;
+  slider?: boolean;
+};
 export function ccclass(target: Function): void;
 export function ccclass(name?: string): ClassDecorator;
 export function ccclass(name?: string | Function): ClassDecorator | void {
