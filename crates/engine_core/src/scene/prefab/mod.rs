@@ -128,7 +128,7 @@ impl Prefab {
             };
             scene.entities.insert(ids[index], entity);
             scene.siblings(parent)?.push(ids[index]);
-            scene.set_visual(ids[index],template.visual.clone())?;
+            scene.set_visual(ids[index], template.visual.clone())?;
             scene.set_body2d(ids[index], template.physics2d.clone())?;
             if let Some(sprite) = template.sprite {
                 scene.set_sprite(ids[index], sprite)?;
