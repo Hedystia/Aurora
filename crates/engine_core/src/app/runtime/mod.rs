@@ -75,6 +75,7 @@ impl Runtime {
                 bindings: BTreeMap::new(),
                 pointers: BTreeMap::new(),
                 mutations: VecDeque::new(),
+                pending_text: BTreeMap::new(),
                 next_binding: 0,
                 tearing_down: false,
                 transformed: BTreeSet::new(),
@@ -255,6 +256,7 @@ pub(super) struct Authored {
     /// Hit node reference and last position captured for each active pointer identity.
     pointers: BTreeMap<u64, (u32, [f32; 2])>,
     mutations: VecDeque<Mutation>,
+    pending_text: BTreeMap<u32, Vec<u8>>,
     next_binding: u32,
     tearing_down: bool,
     /// Script references whose local transform the script already knows.
@@ -269,6 +271,7 @@ impl Authored {
         self.bindings.clear();
         self.pointers.clear();
         self.mutations.clear();
+        self.pending_text.clear();
         self.transformed.clear();
         for (index, &owner) in self.script_nodes.iter().enumerate() {
             let node = self
@@ -566,6 +569,37 @@ impl Authored {
             }
             Command::MoveNode(index, position) => {
                 self.move_node(self.target(index)?, position)?;
+                return Ok(true);
+            }
+            Command::SetTextStart(reference) => {
+                self.target(reference as usize)?;
+                anyhow::ensure!(
+                    self.pending_text.insert(reference, Vec::new()).is_none(),
+                    "Text replacement is already in progress"
+                );
+                return Ok(true);
+            }
+            Command::SetTextChunk(reference, bytes, length) => {
+                let text = self
+                    .pending_text
+                    .get_mut(&reference)
+                    .context("Text chunk has no matching start")?;
+                let length = usize::from(length);
+                anyhow::ensure!(
+                    (1..=bytes.len()).contains(&length) && text.len() + length <= 1512,
+                    "Script text exceeds its size limit"
+                );
+                text.extend_from_slice(&bytes[..length]);
+                return Ok(true);
+            }
+            Command::SetTextEnd(reference) => {
+                let bytes = self
+                    .pending_text
+                    .remove(&reference)
+                    .context("Text end has no matching start")?;
+                let text = String::from_utf8(bytes).context("Script text is not valid UTF-8")?;
+                self.director
+                    .set_text(self.target(reference as usize)?, text)?;
                 return Ok(true);
             }
             Command::ScaleNode(index, scale) => {
