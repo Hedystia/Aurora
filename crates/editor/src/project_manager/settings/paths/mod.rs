@@ -42,9 +42,13 @@ mod tests {
     #[test]
     fn native_configuration_and_catalog() -> Result<(), &'static str> {
         #[cfg(target_os = "windows")]
-        let directory = absolute_env("APPDATA").ok_or("Missing APPDATA")?.join("Aurora");
+        let directory = absolute_env("APPDATA")
+            .ok_or("Missing APPDATA")?
+            .join("Aurora");
         #[cfg(target_os = "macos")]
-        let directory = home().ok_or("Missing home")?.join("Library/Application Support/Aurora");
+        let directory = home()
+            .ok_or("Missing home")?
+            .join("Library/Application Support/Aurora");
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let directory = home().ok_or("Missing home")?.join(".aurora");
         assert_eq!(config_file(), Some(directory.join("config")));
