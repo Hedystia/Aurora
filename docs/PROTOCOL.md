@@ -1,4 +1,4 @@
-# Script protocol 13
+# Script protocol 14
 
 Linux player and script use one full-duplex Unix stream socket. The script receives its end as file descriptor 0. Standard output and standard error carry diagnostics to the player's standard error. Native scripts also inherit a 592-byte memfd on descriptor 3. Its size is sealed before the process starts.
 
@@ -87,10 +87,19 @@ one-based for each touch contact.
 | 55 | Tween | 0. Advances script tweens once for the current simulation tick. |
 | 56 | ScaleNode | Queued local scale for the authored node in detail. X is scale X and Y is scale Y. |
 | 57 | RotateNode | Queued local rotation for the authored node in detail. X is the angle in radians. |
+| 58 | SetText | Queued text replacement. Detail packs an operation in the high 32 bits and the node reference in the low 32 bits. |
+
+For `SetText`, operation 0 starts a replacement, operations 1 through 12 carry
+that many UTF-8 bytes, and operation 13 ends the replacement. For a chunk,
+the operation value in `Detail` is the byte count. X and Y each carry six
+little-endian payload bytes as exactly representable f64 integers; unused bytes
+in the last chunk are zero. The queue allows at most 128 edits, limiting one
+replacement to 1512 UTF-8 bytes. The player validates the assembled UTF-8
+before updating an authored Text visual.
 
 The player resolves authored binding indices in the same order as the script entry. It reports Load when a node first becomes active, Enable when a loaded binding becomes active and enabled, and Start once per loaded binding. Active components receive input, FixedUpdate, animation markers and physics contacts according to the host, Update, Schedule, ProcessResources, and LateUpdate. The tick callbacks receive 1/60 second. The player synchronizes activation between callback phases and polls an independently disabled component for changes on its active node.
 
-Scene replacement and graceful shutdown send Disable and Destroy in reverse binding order. Every scene begins with SceneStart, which clears script-side dynamic nodes, removed-binding markers and node event listeners before score restoration and Load callbacks. Native bundles start a scene-local script process on scene replacement. Explicit CLI script launchers can reuse their authored instances across scenes. On graceful shutdown the player bounds the total exchange time before terminating the child. Rebuild scripts from older protocol versions before using them with this player; protocol 12 scripts do not understand the scale and rotation edits, protocol 11 scripts also lack the transform stream and tween tick, protocol 10 scripts also lack the wheel kinds, and protocol 9 scripts also lack the pointer kinds and SceneStart.
+Scene replacement and graceful shutdown send Disable and Destroy in reverse binding order. Every scene begins with SceneStart, which clears script-side dynamic nodes, removed-binding markers and node event listeners before score restoration and Load callbacks. Native bundles start a scene-local script process on scene replacement. Explicit CLI script launchers can reuse their authored instances across scenes. On graceful shutdown the player bounds the total exchange time before terminating the child. Rebuild scripts from older protocol versions before using them with this player; protocol 13 scripts do not understand text replacement, protocol 12 scripts also lack scale and rotation edits, protocol 11 scripts also lack the transform stream and tween tick, protocol 10 scripts also lack the wheel kinds, and protocol 9 scripts also lack the pointer kinds and SceneStart.
 
 Initial scene node indices occupy the lower half of the script command reference range. Script-created roots use monotonically increasing references in `0x80000000..0xC0000000`. The player allocates prefab descendant references from `0xC0000000` onwards. The player validates reference existence, prefab indices, and parent links before applying commands. The prefab index names an entry in the scene's ordered `script_prefabs` list. Runtime prefab control messages synchronize node references and new component bindings after a callback command batch. The node header identifies the actual player entity. Each control request requires an Ack. Node-control requests use binding zero, while component-control requests name the dynamic binding. Lifecycle teardown precedes the physical removal of a subtree.
 
