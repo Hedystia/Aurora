@@ -166,7 +166,6 @@ pub(super) fn import(source: &Path, destination: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn triangle_import_is_portable_and_never_overwrites_an_authored_prefab() -> Result<()> {
@@ -175,27 +174,39 @@ mod tests {
         let points = [0_f32, 0., 0., 1., 0., 0., 0., 1., 0.];
         let bytes: Vec<u8> = points.into_iter().flat_map(f32::to_le_bytes).collect();
         fs::write(source.path().join("triangle.bin"), bytes)?;
-        let document = json!({
-            "asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
-            "nodes":[{"name":"Panel","mesh":0,"translation":[2,3,4]}],
-            "meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],
-            "materials":[{"pbrMetallicRoughness":{"baseColorFactor":[0.1,0.2,0.3,1]}}],
-            "buffers":[{"uri":"triangle.bin","byteLength":36}],
-            "bufferViews":[{"buffer":0,"byteLength":36}],
-            "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}]
-        });
         let path = source.path().join("art.gltf");
-        fs::write(&path, serde_json::to_vec(&document)?)?;
+        fs::write(
+            &path,
+            br#"{
+                "asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+                "nodes":[{"name":"Panel","mesh":0,"translation":[2,3,4]}],
+                "meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],
+                "materials":[{"pbrMetallicRoughness":{"baseColorFactor":[0.1,0.2,0.3,1]}}],
+                "buffers":[{"uri":"triangle.bin","byteLength":36}],
+                "bufferViews":[{"buffer":0,"byteLength":36}],
+                "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}]
+            }"#,
+        )?;
         import(&path, destination.path())?;
         assert!(import(&path, destination.path()).is_err());
         let prefab = PrefabFile::load(&destination.path().join("art.prefab"))?;
-        assert_eq!(
-            prefab.nodes[1].spatial.as_ref().unwrap().position,
-            [2., 3., 4.]
-        );
-        let mesh = prefab.nodes[2].spatial.as_ref().unwrap();
+        let transform = prefab.nodes[1]
+            .spatial
+            .as_ref()
+            .context("Imported transform is missing")?;
+        assert_eq!(transform.position, [2., 3., 4.]);
+        let mesh = prefab.nodes[2]
+            .spatial
+            .as_ref()
+            .context("Imported mesh is missing")?;
         assert_eq!(mesh.color, [0.1, 0.2, 0.3]);
-        assert_eq!(mesh.geometry.as_ref().unwrap().indices, [0, 1, 2]);
+        assert_eq!(
+            mesh.geometry
+                .as_ref()
+                .context("Imported mesh geometry is missing")?
+                .indices,
+            [0, 1, 2]
+        );
         Ok(())
     }
 }
