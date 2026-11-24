@@ -6,7 +6,7 @@ pub mod transport;
 use bincode::{Decode, Encode};
 
 /// Current script protocol version.
-pub const VERSION: u32 = 13;
+pub const VERSION: u32 = 14;
 /// Fixed byte count of an encoded envelope.
 pub const ENVELOPE_BYTES: usize = 52;
 /// Size of the protocol, sequence and kind prefix.
@@ -135,6 +135,8 @@ pub enum Kind {
     ScaleNode,
     /// Queues a local rotation change for an authored node.
     RotateNode,
+    /// Replaces the text content of an authored text node.
+    SetText,
 }
 
 /// Wire message encoded with bincode 2 fixed-width, little-endian configuration.
@@ -222,7 +224,6 @@ mod tests {
         assert_eq!(Kind::PointerNodeEnd as u32, 48);
         assert_eq!(Kind::PointerNodeCancel as u32, 49);
         assert_eq!(Kind::SceneStart as u32, 50);
-        assert_eq!(VERSION, 13);
         assert_eq!(Kind::MouseWheel as u32, 51);
         assert_eq!(Kind::PointerNodeWheel as u32, 52);
         assert_eq!(Kind::NodeTransform as u32, 53);
@@ -230,5 +231,7 @@ mod tests {
         assert_eq!(Kind::Tween as u32, 55);
         assert_eq!(Kind::ScaleNode as u32, 56);
         assert_eq!(Kind::RotateNode as u32, 57);
+        assert_eq!(Kind::SetText as u32, 58);
+        assert_eq!(VERSION, 14);
     }
 }
