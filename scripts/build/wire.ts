@@ -1,4 +1,4 @@
-import { frameBytes, protocol, kindStart, kindUpdate, kindFixedUpdate, kindAck, kindSetPosition, kindCollisionEnter, kindCollisionExit, kindKeyDown, kindKeyUp, kindTouchStart, kindSetLinearVelocity, kindPlayOneShot, kindAnimationEvent, kindPause, kindResume, kindChangeScene, kindFlushCommands, kindMoveNode, kindShowNode, kindSelectFrame, kindQueueSound, kindRecordScore, kindRestoreScore, kindLoad, kindLateUpdate, kindEnable, kindDisable, kindDestroy, kindSchedule, kindPollEnabled, kindProcessResources, kindPointerTouch, kindPointerMove, kindPointerEnd, kindPointerCancel, kindPointerNodeMove, kindPointerNodeEnd, kindPointerNodeCancel, kindSceneStart, kindMouseWheel, kindPointerNodeWheel, kindNodeTransform, kindNodeScaleRotation, kindTween, kindScaleNode, kindRotateNode, bindingEnabled } from "../../.aurora/scripts/metadata/protocol.mts";
+import { frameBytes, protocol, kindStart, kindUpdate, kindFixedUpdate, kindAck, kindSetPosition, kindCollisionEnter, kindCollisionExit, kindKeyDown, kindKeyUp, kindTouchStart, kindSetLinearVelocity, kindPlayOneShot, kindAnimationEvent, kindPause, kindResume, kindChangeScene, kindFlushCommands, kindMoveNode, kindShowNode, kindSelectFrame, kindQueueSound, kindRecordScore, kindRestoreScore, kindLoad, kindLateUpdate, kindEnable, kindDisable, kindDestroy, kindSchedule, kindPollEnabled, kindProcessResources, kindPointerTouch, kindPointerMove, kindPointerEnd, kindPointerCancel, kindPointerNodeMove, kindPointerNodeEnd, kindPointerNodeCancel, kindSceneStart, kindMouseWheel, kindPointerNodeWheel, kindNodeTransform, kindNodeScaleRotation, kindTween, kindScaleNode, kindRotateNode, kindSetText, bindingEnabled } from "../../.aurora/scripts/metadata/protocol.mts";
 import { Component, Collider2D, InputEventType, NodeHandle, advanceTweens, setScriptCallbackOwner, setScriptNodeTransform, setScriptNodeScaleRotation, dispatchPointerEvent, dispatchWheelEvent, resetScriptScene } from "../aurora/index.ts";
 import { kindQueueCreateNode, kindQueueInstantiatePrefab, kindQueueReparentNode, kindQueueDestroyNode, kindQueueAddComponent, kindQueueRemoveComponent, kindRegisterComponent } from "../../.aurora/scripts/metadata/protocol.mts";
 
@@ -219,11 +219,29 @@ export function run(
       else if (edit.kind === 10) queued = kindQueueRemoveComponent;
       else if (edit.kind === 11) queued = kindScaleNode;
       else if (edit.kind === 12) queued = kindRotateNode;
+      else if (edit.kind >= 13 && edit.kind <= 15) queued = kindSetText;
       view.setUint32(12, queued, true);
-      view.setUint32(40, edit.target, true);
-      view.setUint32(44, 0, true);
-      view.setFloat64(24, edit.x, true);
-      view.setFloat64(32, edit.y, true);
+      let detail = 0n;
+      let x = 0;
+      let y = 0;
+      if (edit.kind === 13) detail = BigInt(edit.target);
+      else if (edit.kind === 15) detail = (13n << 32n) | BigInt(edit.target);
+      else if (edit.kind === 14) {
+        const length = Math.floor(edit.y / 2 ** 48);
+        if (!Number.isInteger(length) || length < 1 || length > 12) {
+          throw new Error("Invalid text chunk length");
+        }
+        detail = (BigInt(length) << 32n) | BigInt(edit.target);
+        x = edit.x;
+        y = edit.y - length * 2 ** 48;
+      } else {
+        detail = BigInt(edit.target);
+        x = edit.x;
+        y = edit.y;
+      }
+      view.setBigUint64(40, BigInt(detail), true);
+      view.setFloat64(24, x, true);
+      view.setFloat64(32, y, true);
       if (reply(bytes) !== 1) throw new Error("Aurora script reply failed");
       continue;
     }
