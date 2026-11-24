@@ -1,2 +1,1 @@
-// SDK declarations
-export type AuroraResult = any;
+export * from "./sdk/index.js";
