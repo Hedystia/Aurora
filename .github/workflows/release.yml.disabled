@@ -1,0 +1,97 @@
+name: Release (temporarily disabled)
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Require a version tag matching workspace packages
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          test "$version" != "$TAG"
+          cargo metadata --locked --no-deps --format-version 1 |
+            python3 -c 'import json,sys; v=sys.argv[1]; packages=json.load(sys.stdin)["packages"]; assert packages and all(p["version"] == v for p in packages), "tag must match every workspace package version"' "$version"
+
+  linux:
+    needs: validate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake g++ libasound2-dev libxkbcommon-x11-0 libwayland-dev
+      - name: Provision native toolchains
+        run: tools/setup.sh
+      - name: Package engine
+        run: tools/package-linux.sh "$RUNNER_TEMP/aurora-linux-x86_64.tar.gz" release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aurora-linux-x86_64
+          path: ${{ runner.temp }}/aurora-linux-x86_64.tar.gz
+
+  windows:
+    needs: validate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: cargo build --locked --workspace --release
+      - name: Package engine
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP "aurora-windows-x86_64"
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item target/release/aurora-player.exe,target/release/aurora-editor.exe,target/release/aurora-codegen.exe,LICENSE $stage
+          Copy-Item docs/licenses (Join-Path $stage "licenses") -Recurse
+          Compress-Archive -Path "$stage/*" -DestinationPath (Join-Path $env:RUNNER_TEMP "aurora-windows-x86_64.zip")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aurora-windows-x86_64
+          path: ${{ runner.temp }}/aurora-windows-x86_64.zip
+
+  macos:
+    needs: validate
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: cargo build --locked --workspace --release
+      - name: Package engine
+        run: |
+          stage="$RUNNER_TEMP/aurora-macos-aarch64"
+          mkdir -p "$stage/share/licenses/aurora"
+          install -m 755 target/release/aurora-player "$stage/"
+          install -m 755 target/release/aurora-editor "$stage/"
+          install -m 755 target/release/aurora-codegen "$stage/"
+          install -m 644 LICENSE "$stage/LICENSE"
+          cp -R docs/licenses/. "$stage/share/licenses/aurora/"
+          tar -czf "$RUNNER_TEMP/aurora-macos-aarch64.tar.gz" -C "$RUNNER_TEMP" aurora-macos-aarch64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aurora-macos-aarch64
+          path: ${{ runner.temp }}/aurora-macos-aarch64.tar.gz
+
+  publish:
+    needs: [validate, linux, windows, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create checksums
+        run: cd dist && sha256sum * > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Aurora ${{ github.ref_name }}
+          generate_release_notes: true
+          files: dist/*
+          fail_on_unmatched_files: true
