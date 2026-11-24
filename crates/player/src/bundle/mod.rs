@@ -11,6 +11,13 @@ use engine_core::app::{SceneProgram, bundle};
 
 pub(super) fn load(directory: &Path) -> Result<(Vec<PathBuf>, Vec<SceneProgram>)> {
     let root = directory.canonicalize()?;
+    let export_manifest_path = root.join(bundle::EXPORT_MANIFEST);
+    if export_manifest_path.try_exists()? {
+        let manifest: bundle::ExportManifest =
+            serde_json::from_slice(&read_manifest(&root, &export_manifest_path)?)?;
+        manifest.verify(&root)?;
+    }
+
     let manifest_path = root.join(bundle::MANIFEST);
     if !manifest_path.try_exists()? {
         let bindings = serde_json::from_slice(&read_manifest(&root, &root.join("bindings.json"))?)?;
