@@ -76,7 +76,14 @@ impl Demo {
         let mut scene = Scene::default();
         let (pivot, _) = scene.spawn("Pivot", None, Transform2D::default())?;
         let (primary, _) = scene.spawn("Aurora", Some(pivot), Transform2D::default())?;
-        scene.set_sprite(primary, Sprite { texture, size, emitter: None })?;
+        scene.set_sprite(
+            primary,
+            Sprite {
+                texture,
+                size,
+                emitter: None,
+            },
+        )?;
         for (name, x, angle) in [("Left", -180.0, 0.25), ("Right", 180.0, -0.25)] {
             let (id, _) = scene.spawn(
                 name,
@@ -87,7 +94,14 @@ impl Demo {
                     scale: [0.5; 2],
                 },
             )?;
-            scene.set_sprite(id, Sprite { texture, size, emitter: None })?;
+            scene.set_sprite(
+                id,
+                Sprite {
+                    texture,
+                    size,
+                    emitter: None,
+                },
+            )?;
         }
         scene.activate()?;
         Ok(Self {
@@ -233,7 +247,10 @@ impl Demo {
                     | Command::ReparentNode(..)
                     | Command::DestroyNode(_)
                     | Command::AddComponent(..)
-                    | Command::RemoveComponent(..),
+                    | Command::RemoveComponent(..)
+                    | Command::SetTextStart(_)
+                    | Command::SetTextChunk(..)
+                    | Command::SetTextEnd(_),
                 ) => {
                     anyhow::bail!("Director commands require an authored scene");
                 }
