@@ -3,20 +3,34 @@ import { describe, expect, test } from "vitest";
 import {
   Component,
   NodeRef,
+  Ref,
+  TextRef,
+  ImageRef,
   ScriptEvent,
   bindScriptScene,
   dispatchPointerEvent,
   advanceTweens,
+  auroraClearTimer,
+  auroraRequestAnimationFrame,
+  auroraSetInterval,
+  auroraSetTimeout,
   dispatchWheelEvent,
   registerComponentClass,
   registerComponentFactory,
   registerScriptResources,
+  setScriptCallbackOwner,
   setScriptNodeScaleRotation,
   setScriptNodeTransform,
+  property,
   tween,
 } from "../aurora/index.ts";
 
-function bind(components: Component[], owners: number[], names: string[]): void {
+function bind(
+  components: Component[],
+  owners: number[],
+  names: string[],
+  textContents: (string | null)[] = [],
+): void {
   bindScriptScene(
     ["Root", "Child", "Other"],
     [-1, 0, 0],
@@ -24,6 +38,7 @@ function bind(components: Component[], owners: number[], names: string[]): void 
     owners,
     names,
     [],
+    textContents,
   );
 }
 
@@ -126,6 +141,109 @@ describe("node events", () => {
   });
 });
 
+describe("typed node reference markers", () => {
+  test("Ref.Text exposes readable and writable authored text content", () => {
+    class TextTarget extends Component {
+      @property({ type: Ref.Node })
+      nodeData: NodeRef | null = null;
+      @property({
+        type: Ref.Text,
+      })
+      label: TextRef | null = null;
+      @property(Ref.Image)
+      image: ImageRef | null = null;
+
+      onStart(): void {
+        const text = this.label;
+        if (text !== null) {
+          setTimeout(() => {
+            text.content = "Updated";
+          }, 5000);
+        }
+      }
+    }
+
+    const target = new TextTarget();
+    expect(Ref.Node).toBe(NodeRef);
+    expect(Ref.Text).toBe(TextRef);
+    expect(Ref.Image).toBe(ImageRef);
+    expect(target.label).toBeNull();
+    bind([target], [0], ["TextTarget"], ["", "Authored text", null]);
+    target.label = new TextRef(1, target.scene);
+    expect(target.label.content).toBe("Authored text");
+    target.label.content = "Updated text";
+    expect(target.label.content).toBe("Updated text");
+    expect(target.scene.edits.map((edit) => edit.kind)).toEqual([13, 14, 15]);
+  });
+});
+
+describe("simulation timers", () => {
+  test("timeout waits for fixed simulation time and forwards callback arguments", () => {
+    const owner = new Component();
+    bind([owner], [0], ["Timer"]);
+    setScriptCallbackOwner(owner);
+    const calls: string[] = [];
+
+    auroraSetTimeout((value: string) => calls.push(value), 100, "fired");
+    owner._tickScheduler(0.05);
+    expect(calls).toEqual([]);
+    owner._tickScheduler(0.05);
+    expect(calls).toEqual(["fired"]);
+    owner._tickScheduler(1);
+    expect(calls).toEqual(["fired"]);
+    setScriptCallbackOwner(null);
+  });
+
+  test("intervals can be canceled and animation frames report simulation time", () => {
+    const owner = new Component();
+    bind([owner], [0], ["Timer"]);
+    setScriptCallbackOwner(owner);
+    let intervalId = 0;
+    let invocations = 0;
+    intervalId = auroraSetInterval(() => {
+      invocations++;
+      if (invocations === 2) auroraClearTimer(intervalId);
+    }, 100);
+    let frameTime = -1;
+    auroraRequestAnimationFrame((time) => { frameTime = time; });
+
+    owner._tickScheduler(0.1);
+    owner._tickScheduler(0.1);
+    owner._tickScheduler(1);
+
+    expect(invocations).toBe(2);
+    expect(frameTime).toBe(100);
+    setScriptCallbackOwner(null);
+  });
+
+  test("destroying a component clears its pending simulation timers", () => {
+    const owner = new Component();
+    bind([owner], [0], ["Timer"]);
+    setScriptCallbackOwner(owner);
+    let invoked = false;
+    auroraSetTimeout(() => { invoked = true; }, 10);
+    owner._clearScriptServices();
+    owner._tickScheduler(1);
+    expect(invoked).toBe(false);
+    setScriptCallbackOwner(null);
+  });
+
+  test("timer handles are unique across components and can be canceled globally", () => {
+    const first = new Component();
+    const second = new Component();
+    bind([first, second], [0, 1], ["First", "Second"]);
+    setScriptCallbackOwner(first);
+    let invoked = false;
+    const handle = auroraSetTimeout(() => { invoked = true; }, 10);
+    setScriptCallbackOwner(second);
+    auroraClearTimer(handle);
+    setScriptCallbackOwner(first);
+    first._tickScheduler(1);
+    expect(invoked).toBe(false);
+    setScriptCallbackOwner(null);
+  });
+});
+
 describe("component removal", () => {
   test("authored attachments disappear from lookup and queue removal", () => {
     const owner = new Component();
@@ -161,6 +279,48 @@ describe("component removal", () => {
 
     expect(owner.scene.edits).toHaveLength(1);
     expect(owner.scene.edits[0].kind).toBe(9);
+  });
+});
+
+describe("runtime text edits", () => {
+  test("queues UTF-8 text in bounded start, chunk and end commands", () => {
+    const owner = new Component();
+    bind([owner], [0], ["Owner"], ["", ""]);
+    const value = "A😊é";
+    setScriptCallbackOwner(null);
+
+    new NodeRef(1, owner.scene).setText(value);
+
+    const bytes = new TextEncoder().encode(value);
+    const [start, chunk, end] = owner.scene.edits;
+    const packed = (source: Uint8Array): number => {
+      let result = 0;
+      for (let index = 0; index < 6; index++) {
+        result += (source[index] ?? 0) * 2 ** (index * 8);
+      }
+      return result;
+    };
+    expect(owner.scene.edits.map((edit) => edit.kind)).toEqual([13, 14, 15]);
+    expect(start.target).toBe(1);
+    expect(chunk.x).toBe(packed(bytes.subarray(0, 6)));
+    expect(chunk.y).toBe(packed(bytes.subarray(6, 12)) + bytes.length * 2 ** 48);
+    expect(end.target).toBe(1);
+  });
+
+  test("rejects oversized or non-atomic replacements before queueing", () => {
+    const owner = new Component();
+    bind([owner], [0], ["Owner"], ["", ""]);
+    setScriptCallbackOwner(null);
+
+    new NodeRef(1, owner.scene).setText("a".repeat(1512));
+    expect(owner.scene.edits).toHaveLength(128);
+    expect(() => new NodeRef(1, owner.scene).setText("a".repeat(1513))).toThrow();
+
+    const next = new Component();
+    bind([next], [0], ["Next"], ["", ""]);
+    for (let index = 0; index < 126; index++) next.scene.move(1, 0, 0);
+    expect(() => new NodeRef(1, next.scene).setText("text")).toThrow();
+    expect(next.scene.edits).toHaveLength(126);
   });
 });
 
