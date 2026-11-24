@@ -313,11 +313,43 @@ impl Manager {
                 }
             } else {
                 if dialog == Dialog::Create {
+                    ui.label(RichText::new(strings::FIRST_SCENE).strong());
                     ui.horizontal(|ui| {
-                        ui.label("Starting scene");
-                        ui.selectable_value(&mut self.kind, ProjectKind::TwoD, "2D");
-                        ui.selectable_value(&mut self.kind, ProjectKind::ThreeD, "3D");
-                        ui.selectable_value(&mut self.kind, ProjectKind::Jumpy, "Jumpy Bird");
+                        let card_width = ((ui.available_width() - 18.0) / 4.0).max(96.0);
+                        for (kind, title, detail) in [
+                            (ProjectKind::TwoD, "2D", strings::SCENE_2D_DETAIL),
+                            (ProjectKind::ThreeD, "3D", strings::SCENE_3D_DETAIL),
+                            (
+                                ProjectKind::TwoDThreeD,
+                                "2D + 3D",
+                                strings::SCENE_MIXED_DETAIL,
+                            ),
+                            (
+                                ProjectKind::Jumpy,
+                                "Jumpy Bird",
+                                strings::SCENE_JUMPY_DETAIL,
+                            ),
+                        ] {
+                            let response = ui
+                                .add_sized(
+                                    [card_width, 54.0],
+                                    Button::selectable(
+                                        self.kind == kind,
+                                        RichText::new(title).strong(),
+                                    )
+                                    .wrap(),
+                                )
+                                .on_hover_text(detail);
+                            if response.clicked() {
+                                self.kind = kind;
+                            }
+                        }
+                    });
+                    ui.label(match self.kind {
+                        ProjectKind::TwoD => strings::SCENE_2D_DETAIL,
+                        ProjectKind::ThreeD => strings::SCENE_3D_DETAIL,
+                        ProjectKind::TwoDThreeD => strings::SCENE_MIXED_DETAIL,
+                        ProjectKind::Jumpy => strings::SCENE_JUMPY_DETAIL,
                     });
                     ui.label(strings::PROJECT_NAME);
                     ui.add(TextEdit::singleline(&mut self.name).desired_width(f32::INFINITY));
@@ -463,6 +495,14 @@ impl Manager {
                         self.selected = Some(path.clone());
                         self.error = None;
                     }
+                    row.context_menu(|ui| {
+                        if ui.button(strings::EXPLORER).clicked() {
+                            self.error = crate::show_in_files(path)
+                                .err()
+                                .map(|error| format!("{error:#}"));
+                            ui.close();
+                        }
+                    });
                     if !dirty && exists && row.double_clicked() {
                         return Some(path.clone());
                     }
@@ -528,6 +568,105 @@ mod tests {
         assert_eq!(path, default.canonicalize()?.join("Night Flight"));
         manager.name = "../escape".into();
         assert!(manager.submit(Dialog::Create).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn create_dialog_preserves_the_selected_starter_kind() -> Result<()> {
+        let workspace = tempfile::tempdir()?;
+        for (name, kind) in [
+            ("TwoD", ProjectKind::TwoD),
+            ("ThreeD", ProjectKind::ThreeD),
+            ("Mixed", ProjectKind::TwoDThreeD),
+            ("Jumpy", ProjectKind::Jumpy),
+        ] {
+            let mut manager = Manager::new();
+            manager.path = workspace.path().display().to_string();
+            manager.name = name.into();
+            manager.kind = kind;
+
+            let Some(Action::Create(path, actual_kind)) = manager.submit(Dialog::Create)? else {
+                anyhow::bail!("Create did not produce a project action");
+            };
+            assert_eq!(path, workspace.path().join(name));
+            assert_eq!(actual_kind, kind);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn project_starters_keep_2d_and_3d_nodes_composable() -> Result<()> {
+        use engine_core::scene::spatial::Role;
+
+        let workspace = tempfile::tempdir()?;
+        let mut two_d = Project::create(&workspace.path().join("TwoD"), ProjectKind::TwoD)?;
+        assert_eq!(two_d.document.nodes.len(), 1);
+        assert_eq!(two_d.document.nodes[0].name, "Canvas");
+        assert!(two_d.document.nodes[0].spatial.is_none());
+        two_d.add("Cube 3D", Some(0));
+        two_d.save()?;
+        let two_d = Project::open_existing(&two_d.root)?;
+        assert_eq!(
+            two_d.document.nodes[1]
+                .spatial
+                .as_ref()
+                .map(|spatial| spatial.role),
+            Some(Role::Cube)
+        );
+
+        let mut three_d = Project::create(&workspace.path().join("ThreeD"), ProjectKind::ThreeD)?;
+        let initial_nodes = [
+            ("Node 3D", Role::Pivot),
+            ("Cube 3D", Role::Cube),
+            ("Camera 3D", Role::Camera),
+            ("Directional Light", Role::DirectionalLight),
+        ];
+        assert_eq!(three_d.document.nodes.len(), initial_nodes.len());
+        for (node, (name, role)) in three_d.document.nodes.iter().zip(initial_nodes) {
+            assert_eq!(node.name, name);
+            assert_eq!(
+                node.spatial.as_ref().map(|spatial| spatial.role),
+                Some(role)
+            );
+        }
+        three_d.add("Canvas", Some(0));
+        three_d.save()?;
+        let three_d = Project::open_existing(&three_d.root)?;
+        assert_eq!(three_d.document.nodes[4].name, "Canvas");
+        assert!(three_d.document.nodes[4].spatial.is_none());
+
+        let mixed = Project::create(&workspace.path().join("Mixed"), ProjectKind::TwoDThreeD)?;
+        assert_eq!(
+            mixed.document.scene_kind,
+            engine_core::save::SceneKind::TwoDThreeD
+        );
+        assert!(mixed.document.nodes[0].spatial.is_none());
+        assert!(mixed.document.nodes[1].spatial.is_some());
+        assert_eq!(
+            mixed.document.nodes[2]
+                .spatial
+                .as_ref()
+                .map(|spatial| spatial.role),
+            Some(Role::Cube)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn show_in_files_resolves_scene_files_to_the_project_folder() -> Result<()> {
+        let workspace = tempfile::tempdir()?;
+        let project_folder = workspace.path().join("Project");
+        fs::create_dir(&project_folder)?;
+        let main_scene = project_folder.join("main.scene");
+        fs::write(&main_scene, b"{}")?;
+        assert_eq!(
+            crate::folder_to_show(&main_scene)?,
+            project_folder.canonicalize()?
+        );
+        assert_eq!(
+            crate::folder_to_show(&project_folder)?,
+            project_folder.canonicalize()?
+        );
         Ok(())
     }
 
