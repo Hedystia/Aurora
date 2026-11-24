@@ -106,6 +106,11 @@ pub(super) fn refresh(root: &Path, approved_version: Option<&str>) -> Result<()>
     }
     replace_generated(&root.join(GENERATED_CONFIG), BASE_CONFIG)?;
     install_root_config(root)?;
+    let sdk = generated.join("sdk");
+    fs::create_dir_all(&sdk)?;
+    for (name, contents) in codegen::SDK_MODULES {
+        replace_generated(&sdk.join(name), contents)?;
+    }
     replace_generated(
         &root.join(DECLARATIONS),
         &format!("{STAMP}{EDITOR_VERSION}\n{}", codegen::SDK_DECLARATIONS),
@@ -128,6 +133,11 @@ pub(super) fn clean_incomplete_creation(root: &Path) {
     ] {
         let _ = fs::remove_file(root.join(file));
     }
+    let sdk = root.join(GENERATED).join("sdk");
+    for (name, _) in codegen::SDK_MODULES {
+        let _ = fs::remove_file(sdk.join(name));
+    }
+    let _ = fs::remove_dir(sdk);
     let _ = fs::remove_dir(root.join(GENERATED));
 }
 
@@ -211,6 +221,10 @@ mod tests {
         )?;
         refresh(root, None)?;
         assert!(fs::read_to_string(root.join(DECLARATIONS))?.ends_with(codegen::SDK_DECLARATIONS));
+        assert!(
+            fs::read_to_string(root.join(".aurora/sdk/index.d.ts"))?
+                .contains("export declare function property")
+        );
         Ok(())
     }
 }
