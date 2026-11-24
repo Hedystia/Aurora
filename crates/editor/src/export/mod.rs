@@ -109,12 +109,65 @@ pub(super) fn export(project: &Project, includes: &[PathBuf], output: &Path) -> 
         "Bundle manifest is too large"
     );
     fs::write(staged.path().join(name), bytes)?;
+    include_player_runtime(staged.path())?;
+    let target = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+    let export_manifest =
+        bundle::ExportManifest::create(staged.path(), env!("CARGO_PKG_VERSION"), &target)?;
+    let bytes = serde_json::to_vec_pretty(&export_manifest)?;
+    ensure!(
+        bytes.len() <= bundle::MAX_MANIFEST_BYTES,
+        "Export package manifest is too large"
+    );
+    fs::write(staged.path().join(bundle::EXPORT_MANIFEST), bytes)?;
 
     // Claim the destination exclusively before publishing the complete package.
     fs::create_dir(&destination)?;
     if let Err(error) = fs::rename(staged.path(), &destination) {
         let _ = fs::remove_dir(&destination);
         return Err(error.into());
+    }
+    Ok(())
+}
+
+fn include_player_runtime(output: &Path) -> Result<()> {
+    let runtime_name = format!("aurora-player{}", std::env::consts::EXE_SUFFIX);
+    let runtime_source = std::env::current_exe()?.with_file_name(&runtime_name);
+    ensure!(
+        runtime_source.is_file(),
+        "Cannot create a runnable export: {} must be installed beside aurora-editor",
+        runtime_name
+    );
+    fs::copy(&runtime_source, output.join(&runtime_name))
+        .with_context(|| format!("Copying player runtime from {}", runtime_source.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(
+            output.join(&runtime_name),
+            fs::Permissions::from_mode(0o755),
+        )?;
+    }
+
+    let (launcher, contents) = if cfg!(windows) {
+        (
+            "run-game.cmd",
+            "@echo off\r\n\"%~dp0aurora-player.exe\" --bundle \"%~dp0\" %*\r\n",
+        )
+    } else {
+        (
+            "run-game.sh",
+            "#!/bin/sh\nset -eu\ncd -- \"$(dirname -- \"$0\")\"\nexec ./aurora-player --bundle . \"$@\"\n",
+        )
+    };
+    let launcher_path = output.join(launcher);
+    fs::write(&launcher_path, contents)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(launcher_path, fs::Permissions::from_mode(0o755))?;
     }
     Ok(())
 }
@@ -254,7 +307,7 @@ fn copy_sources(source: &Path, destination: &Path) -> Result<()> {
             )
         {
             let source = fs::read_to_string(entry.path())?;
-            let lowered = codegen::lower(&source)
+            let lowered = codegen::lower_runtime(&source)
                 .with_context(|| format!("Lowering {}", entry.path().display()))?;
             fs::write(target, lowered)?;
         }
@@ -332,7 +385,12 @@ impl<'a> Assets<'a> {
         prefab: bool,
     ) -> Result<()> {
         for node in nodes {
-            for path in node.sprite.iter_mut().map(|sprite| &mut sprite.png).chain(node.visual.as_mut().and_then(|visual| visual.asset_mut())) {
+            for path in node
+                .sprite
+                .iter_mut()
+                .map(|sprite| &mut sprite.png)
+                .chain(node.visual.as_mut().and_then(|visual| visual.asset_mut()))
+            {
                 let target = self.file(&directory.join(&*path))?;
                 *path = if prefab {
                     PathBuf::from(target.file_name().context("Missing packaged asset name")?)
