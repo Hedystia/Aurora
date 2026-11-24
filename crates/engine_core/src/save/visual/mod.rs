@@ -160,7 +160,7 @@ impl Visual {
         }
     }
 
-    pub(super) fn resolve(&self, dir: &Path, assets: &mut Assets) -> Result<Sprite> {
+    pub(crate) fn resolve(&self, dir: &Path, assets: &mut Assets) -> Result<Sprite> {
         self.validate()?;
         let image = match self {
             Self::Text { font, spans } => {
