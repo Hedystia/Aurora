@@ -16,6 +16,10 @@ trap 'rm -rf -- "$stage"; rm -f -- "$archive"' EXIT
 cargo build --locked --workspace "${flags[@]}"
 kit="$stage/aurora"
 mkdir -p "$kit/sdk/tools" "$kit/sdk/scripts" "$kit/examples"
+mkdir -p "$kit/share/licenses/aurora"
+install -m 644 LICENSE "$kit/LICENSE"
+install -m 644 LICENSE "$kit/share/licenses/aurora/LICENSE"
+cp -R docs/licenses/. "$kit/share/licenses/aurora/"
 for binary in aurora-player aurora-editor aurora-codegen; do
   install -s "${CARGO_TARGET_DIR:-target}/$profile/$binary" "$kit/$binary"
 done
