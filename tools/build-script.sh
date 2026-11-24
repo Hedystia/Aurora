@@ -22,7 +22,7 @@ case "${1:-}" in
         mkdir -p "$stage/scripts" "$stage/.aurora/scripts/metadata"
         cp -R scripts/aurora scripts/build scripts/tsconfig.json "$stage/scripts/"
         cp "$output/metadata/protocol.mts" "$stage/.aurora/scripts/metadata/"
-        cargo run --quiet --locked --bin aurora-codegen -- --lower "$source" "$stage/$source"
+        cargo run --quiet --locked --bin aurora-codegen -- --lower-runtime "$source" "$stage/$source"
         bash tools/compile-native.sh "$stage/scripts/build/$sample-native.ts" "$stage/hello"
         mv -f "$stage/hello" "$output/$sample-native"
         printf '%s\n' "$output/$sample-native"
