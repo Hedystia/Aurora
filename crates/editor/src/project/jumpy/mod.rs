@@ -1,5 +1,5 @@
 //! Install the original editable game into a newly claimed project.
-use std::{fs,io::Write,path::Path};
+use std::{fs, io::Write, path::Path};
 
 use anyhow::Result;
 
@@ -49,7 +49,9 @@ pub(super) fn create(root: &Path) -> Result<()> {
             Ok(())
         })();
         if let Err(error) = result {
-            for path in installed { let _ = fs::remove_file(path); }
+            for path in installed {
+                let _ = fs::remove_file(path);
+            }
             return Err(error);
         }
         installed.push(path);
