@@ -54,6 +54,7 @@ Insta activates the existing `1.43.2` workspace pin. The golden runner uses exis
 
 Rapier 3D activates at the workspace pin `0.35.3` with enhanced determinism. The optional Jolt backend resolves `oxijolt 0.6.0+jolt-5.6.0`. Glam `0.33.12` matches the version already used by Rapier's math API.
 
+
 ## 2026-11-22 · TypeScript tooling update
 
 | Component | Pin | Reason |
@@ -83,6 +84,10 @@ Protocol 12 streams local node transforms to the script and adds a per-tick twee
 
 Protocol 13 adds queued ScaleNode and RotateNode edits, so scripts and tweens can change local scale and rotation alongside position. `NodeRef` and `Node` gain `setScale`, `setAngle`, and writable `scaleX`, `scaleY`, and `angle` (degrees), and `tween` drives all three channels. The demo launcher now advances tweens and drains queued edits. `@property` accepts component classes and the editor serializes component references. Existing native scripts must be rebuilt.
 
+## 2026-11-23 · Script protocol 14
+
+Protocol 14 adds bounded, chunked `SetText` edits for replacing the content of authored Text nodes at runtime. `NodeRef.setText` and `Node.setText` expose the API; replacements are UTF-8 validated and limited to 1512 bytes. The Inspector metadata also adds integer, multiline text, Vector2, color, enum, read-only, and image properties. Existing native scripts must be rebuilt.
+
 ## Authored static mesh import
 
 The editor uses gltf 1.4.1 for validated glTF 2.0 accessors, base64 0.22.1 for embedded buffers and the existing glam pin for coordinate conversion. Runtime mesh rendering uses the existing wgpu pipeline. Serde's rc feature shares immutable mesh geometry across scene snapshots and prefab instances.
@@ -90,3 +95,7 @@ The editor uses gltf 1.4.1 for validated glTF 2.0 accessors, base64 0.22.1 for e
 ## Authored text rasterization
 
 The runtime activates the workspace pin for `ab_glyph 0.2.32` and the locked `epaint_default_fonts 0.35.0` font-data crate. Ubuntu Light provides a portable default when the scene has no project font. Custom TrueType and OpenType fonts use the same rasterizer.
+
+## Export package manifest
+
+The editor emits `export.json` version 1 for single- and multi-scene exports. It records the engine version, exporting host target, each package file's SHA-256, and a deterministic digest of the ordered file records. The player verifies packages with this manifest and continues to load legacy bundles without it. Local exports also include the matching host player and a launcher.
