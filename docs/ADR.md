@@ -3,7 +3,7 @@
 ## M0 workspace and review notes
 
 - The player delegates its event loop and GPU surface to engine_core. The editor owns its eframe renderer and dock tree. Separate player and script child processes will establish the runtime boundaries when those features land.
-- The editor uses an original navy palette and preserves the requested panel roles and locations. The M0 lower center has one placeholder dock for Console and Timeline. Later milestones add the separate views and editing workflows.
+- The editor uses an original Godot-inspired slate-blue palette and preserves distinct Scene, Game, hierarchy, Inspector, asset, Console and Timeline roles. The dock tree remains project-persisted and user-editable.
 - Stable rustfmt handles formatting. Crate-level import grouping and rearrangement are maintained in source because the requested rustfmt options require nightly.
 - Dependency versions are centralized. Milestone dependencies enter the lockfile when a workspace member starts using them.
 - Godot research used the shallow checkout at revision `67421f3`. `EditorNode` composes the dock manager and run bar. `SceneTreeDock` owns tree operations and the class creation dialog. `FileSystemDock` owns asset searching and drag/drop. `InspectorDock` tracks the inspected object and delegates field editing to the inspector. The requested animation dock and node library filenames are absent at this revision. The corresponding entry points are the animation player editor plugin, animation track editor and create dialog. Aurora's lifecycle specification follows parent-first tree entry, child-first readiness and parent-relative 2D transforms. [Godot source](https://github.com/godotengine/godot/tree/67421f3)
@@ -23,6 +23,7 @@
 - The current SDK binds one component to the demo sprite. It passes position snapshots and applies checked commands in frame order. The sample registers inspector metadata as a strict JSON literal in TypeScript, and codegen extracts that declaration at build time.
 - The player launches the child in a dedicated process group, bounds reply wait time, and reaps the group on session teardown. Automated headless runs surface protocol failures as command failures.
 - Both backend choices share the same child lifecycle and envelope validation. A backend enum selects the launch and transport configuration, so the runtime uses one session implementation.
+- Global timer calls are lowered to component-owned SDK functions and advanced by the existing Schedule phase. Development and native builds share that lowering, so timers remain deterministic and pause with simulation instead of depending on a blocked host event loop.
 
 ## M3 physics, input, and sound
 
@@ -53,6 +54,12 @@
 - Rapier remains the default 3D solver. The optional Jolt implementation is selected at runtime in a build that enables `physics-jolt`. Both expose the same cuboid pose and velocity shape and advance once per existing fixed tick.
 - The 3D preview and windowed player share their existing GPU device, surface management and frame readback. The new opaque pass owns a perspective camera, an instanced unit cuboid and a depth attachment sized to the active target.
 - The spatial snapshot adds an optional 3D section. The 2D state schema and scripting protocol stay compatible with the earlier samples.
+
+## Export bundle integrity
+
+- Every new editor export includes `export.json` with the engine version, exporting host target, sorted file SHA-256 values, and a digest of those records. The player verifies the complete file set and hashes before loading a bundle that has this manifest. This detects content changes relative to the manifest; it does not authenticate a publisher or a modified manifest.
+- The editor copies its sibling player into each local export and creates a host launcher. This makes the exported folder directly runnable on its build host without requiring a separately installed Aurora player; it does not provide cross-compilation or a downloadable target template.
+- Older exports without the integrity manifest remain supported. The manifest does not imply the bundle contains a portable target runtime or that its scripts can run on a different platform.
 
 ## Scene component bindings
 
@@ -93,6 +100,7 @@
 ## Scale, rotation and component references
 
 - Protocol 13 sends local scale and rotation changes as queued ScaleNode and RotateNode edits instead of an immediate command. A fixed reply carries one command, so position, scale, and rotation changes from the same callback would otherwise conflict. Draining queued edits through FlushCommands keeps the existing ordering and callback settlement semantics.
+- Protocol 14 sends runtime text changes as a bounded Start/Chunk/End sequence through the existing queued-edit path. The player assembles and validates UTF-8 before changing an authored Text visual, so partially received content cannot replace the current display.
 - `angle` is exposed in degrees because Cocos uses degrees for node angles. The protocol and player keep radians, and the SDK converts at the boundary.
 - Asset property arrays use the same catalog keys as scalars and preserve authored order. Prefab arrays join the existing prefab dependency catalog, so dynamic factories and exports see every referenced prefab. Unregistered audio or frame entries are dropped from the generated array instead of aborting scene load.
 - Audio clip and sprite frame properties resolve through the scene's registered resource banks rather than raw file paths. The player exposes those banks to scripts, so listing them in the Inspector prevents authoring handles the scene cannot resolve. The generated entry calls `requireAudioClip`/`requireSpriteFrame`; every instance and prefab clone resolves the same catalog key. An unregistered path is skipped rather than crashing scene load.
@@ -126,3 +134,7 @@ Text runs, atlas cells, tile grids and nine-slice panels resolve to content-addr
 A scene or prefab can place an optional `spatial` component on any node. Metre-space transforms compose through spatial ancestors. Pixel-space transforms and sprite ordering keep their existing interpretation. The first visible camera and directional light in traversal order drive the depth-tested mesh pass, then the existing sprite pass overlays the scene. The Director owns the authored Rapier world and replaces it together with a successfully loaded scene. A 3D project starter uses the same scene format as a 2D project.
 
 The editor converts static glTF 2.0 triangle primitives to an ordinary Aurora prefab, including hierarchy, local TRS, geometry and material base colors. The import publishes a new prefab without replacing an existing file. Its meshes are self-contained for Play and export.
+
+## Engine releases and export packages
+
+Engine/editor downloads and project export packages are distinct versioned deliverables. The engine's wgpu/winit backend remains the cross-platform renderer/window layer; Sokol bindings would not remove Android/Apple SDK or linker requirements and would not solve script portability. Target packages should be built on hosted platform runners, checksum-verified, and installed independently by the editor. Script IPC portability must land before claiming scripted game exports outside Linux.
