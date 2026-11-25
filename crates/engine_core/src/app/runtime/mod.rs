@@ -90,6 +90,7 @@ impl Runtime {
                 pending_audio: BTreeMap::new(),
                 pending_prefabs: BTreeMap::new(),
                 pending_raycasts: BTreeMap::new(),
+                pending_overlaps: BTreeMap::new(),
                 dynamic_frames: BTreeMap::new(),
                 dynamic_audio: BTreeMap::new(),
                 dynamic_prefabs: BTreeMap::new(),
@@ -97,6 +98,7 @@ impl Runtime {
                 next_asset: 0x8000_0000,
                 pending_asset_events: Vec::new(),
                 pending_raycast_events: Vec::new(),
+                pending_overlap_events: Vec::new(),
                 next_binding: 0,
                 tearing_down: false,
                 transformed: BTreeSet::new(),
@@ -308,6 +310,7 @@ pub(super) struct Authored {
     pending_audio: BTreeMap<u32, Vec<u8>>,
     pending_prefabs: BTreeMap<u32, Vec<u8>>,
     pending_raycasts: BTreeMap<u32, Vec<u8>>,
+    pending_overlaps: BTreeMap<u32, Vec<u8>>,
     dynamic_frames: BTreeMap<u64, crate::assets::AssetId>,
     dynamic_audio: BTreeMap<u64, AudioClip>,
     dynamic_prefabs: BTreeMap<u64, u32>,
@@ -316,6 +319,7 @@ pub(super) struct Authored {
     /// Binding, request, handle, failure flag and asset kind (1 sprite, 2 audio, 3 prefab).
     pending_asset_events: Vec<(u32, u64, u64, bool, u32)>,
     pending_raycast_events: Vec<(u32, u64, f32, [f32; 3], bool)>,
+    pending_overlap_events: Vec<(u32, u64, u32, bool)>,
     next_binding: u32,
     tearing_down: bool,
     /// Script references whose local transform the script already knows.
@@ -335,12 +339,14 @@ impl Authored {
         self.pending_audio.clear();
         self.pending_prefabs.clear();
         self.pending_raycasts.clear();
+        self.pending_overlaps.clear();
         self.dynamic_frames.clear();
         self.dynamic_audio.clear();
         self.dynamic_prefabs.clear();
         self.asset_refs.clear();
         self.pending_asset_events.clear();
         self.pending_raycast_events.clear();
+        self.pending_overlap_events.clear();
         self.next_asset = 0x8000_0000;
         self.transformed.clear();
         for (index, &owner) in self.script_nodes.iter().enumerate() {
@@ -839,8 +845,8 @@ impl Authored {
                     .pending_raycasts
                     .remove(&request)
                     .context("Raycast has no matching start")?;
-                anyhow::ensure!(bytes.len() == 28, "Raycast payload must be 28 bytes");
-                let mut values = [0.0_f32; 7];
+                anyhow::ensure!(bytes.len() == 44, "Raycast payload must be 44 bytes");
+                let mut values = [0.0_f32; 11];
                 for (index, value) in values.iter_mut().enumerate() {
                     let start = index * 4;
                     let bits = u32::from_le_bytes(
@@ -851,15 +857,73 @@ impl Authored {
                     *value = f32::from_bits(bits);
                 }
                 let binding = self.binding_for_node(node)?;
-                let hit = self.director.physics3d_raycast(
-                    [values[0], values[1], values[2]],
-                    [values[3], values[4], values[5]],
-                    values[6],
-                )?;
+                let half = [values[7], values[8], values[9]];
+                let hit = if values[0] == 2.0 {
+                    self.director.physics3d_shape_cast(
+                        half,
+                        [values[1], values[2], values[3]],
+                        [values[4], values[5], values[6]],
+                        values[10],
+                    )?
+                } else {
+                    self.director.physics3d_raycast(
+                        [values[1], values[2], values[3]],
+                        [values[4], values[5], values[6]],
+                        values[10],
+                    )?
+                };
                 self.pending_raycast_events.push(match hit {
                     Some(hit) => (binding, u64::from(request), hit.distance, hit.normal, false),
                     None => (binding, u64::from(request), 0.0, [0.0; 3], true),
                 });
+                return Ok(true);
+            }
+            Command::OverlapStart(request) => {
+                anyhow::ensure!(
+                    self.pending_overlaps.insert(request, Vec::new()).is_none(),
+                    "Overlap query is already in progress"
+                );
+                return Ok(true);
+            }
+            Command::OverlapChunk(request, bytes, length) => {
+                Self::append_asset_chunk(&mut self.pending_overlaps, request, bytes, length)?;
+                return Ok(true);
+            }
+            Command::OverlapEnd(request) => {
+                let bytes = self
+                    .pending_overlaps
+                    .remove(&request)
+                    .context("Overlap query has no matching start")?;
+                anyhow::ensure!(bytes.len() == 24, "Overlap payload must be 24 bytes");
+                let mut values = [0.0_f32; 6];
+                for (index, value) in values.iter_mut().enumerate() {
+                    let start = index * 4;
+                    let bits = u32::from_le_bytes(
+                        bytes[start..start + 4]
+                            .try_into()
+                            .context("Overlap chunk")?,
+                    );
+                    *value = f32::from_bits(bits);
+                }
+                let binding = self.binding_for_node(node)?;
+                let hits = self.director.physics3d_overlaps(
+                    [values[0], values[1], values[2]],
+                    [values[3], values[4], values[5]],
+                )?;
+                if hits.is_empty() {
+                    self.pending_overlap_events
+                        .push((binding, u64::from(request), 0, true));
+                } else {
+                    for (index, entity) in hits.iter().enumerate() {
+                        let reference = self.director.script_reference(*entity).unwrap_or(u32::MAX);
+                        self.pending_overlap_events.push((
+                            binding,
+                            u64::from(request),
+                            reference,
+                            index + 1 == hits.len(),
+                        ));
+                    }
+                }
                 return Ok(true);
             }
             Command::MoveNode(index, position) => {
@@ -1351,7 +1415,38 @@ impl Authored {
         }
         self.dispatch_contacts()?;
         self.flush_asset_events()?;
-        self.flush_raycast_events()
+        self.flush_raycast_events()?;
+        self.flush_overlap_events()
+    }
+
+    /// Delivers overlap hits to their requesting components.
+    fn flush_overlap_events(&mut self) -> Result<()> {
+        let events = std::mem::take(&mut self.pending_overlap_events);
+        for (binding, request, reference, last) in events {
+            let Some(node) = self.bindings.get(&binding).map(|entry| entry.node) else {
+                continue;
+            };
+            let reply = self
+                .script
+                .as_mut()
+                .context("Script disconnected")?
+                .exchange_control(
+                    Kind::OverlapHit,
+                    binding,
+                    node.0,
+                    [f64::from(reference), if last { 1.0 } else { 0.0 }, 0.0],
+                    request,
+                )?;
+            self.bindings
+                .get_mut(&binding)
+                .context("Unknown component binding")?
+                .lifecycle
+                .enabled = reply.enabled;
+            if let Some(command) = reply.command {
+                self.apply(node, command)?;
+            }
+        }
+        Ok(())
     }
 
     /// Delivers completed raycasts to their requesting components.
