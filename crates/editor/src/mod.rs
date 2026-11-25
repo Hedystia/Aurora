@@ -171,6 +171,12 @@ impl Editor {
         }
     }
 
+    /// Opens the asset-creation dialog for one asset kind.
+    pub(crate) fn begin_new_asset(&mut self, kind: assets_browser::AssetKind) {
+        self.new_asset = Some(kind);
+        self.asset_name.clear();
+    }
+
     fn begin_rename(&mut self, index: usize) {
         self.rename = self
             .project
@@ -602,20 +608,27 @@ impl Editor {
                         .margin(egui::Margin::symmetric(6, 3)),
                 );
                 if ui.button(strings::CREATE).clicked() {
-                    let result = assets_browser::create_with_scene_kind(
-                        &root,
-                        &directory,
-                        self.asset_name.trim(),
-                        kind,
-                        self.new_scene_kind,
-                    );
-                    match result {
-                        Ok(path) => {
-                            self.selected_asset = Some(path);
-                            self.new_asset = None;
-                            self.refresh_assets();
+                    if kind == assets_browser::AssetKind::Scene && self.project.dirty {
+                        self.report(Err(anyhow::anyhow!(strings::SAVE_FIRST_CREATE)));
+                    } else {
+                        let result = assets_browser::create_with_scene_kind(
+                            &root,
+                            &directory,
+                            self.asset_name.trim(),
+                            kind,
+                            self.new_scene_kind,
+                        );
+                        match result {
+                            Ok(path) => {
+                                self.selected_asset = Some(path.clone());
+                                if kind == assets_browser::AssetKind::Scene {
+                                    self.pending_open = Some(path);
+                                }
+                                self.new_asset = None;
+                                self.refresh_assets();
+                            }
+                            Err(error) => self.report(Err(error)),
                         }
-                        Err(error) => self.report(Err(error)),
                     }
                 }
                 if ui.button(strings::CANCEL).clicked() {
