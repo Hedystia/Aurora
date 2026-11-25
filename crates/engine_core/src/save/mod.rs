@@ -285,6 +285,9 @@ pub struct SceneFile {
     /// Optional authored design size and fit policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display: Option<Display2D>,
+    /// Spatial constraints between authored bodies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub joints: Vec<crate::scene::spatial::JointFile>,
 }
 
 /// Versioned .prefab document describing one subtree.
@@ -298,6 +301,9 @@ pub struct PrefabFile {
     /// Clips bound to this template's nodes, indexed in parent-first order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub animations: Vec<Clip>,
+    /// Spatial constraints between template bodies. Runtime instances do not rebase them yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub joints: Vec<crate::scene::spatial::JointFile>,
 }
 
 impl SceneFile {
@@ -336,6 +342,7 @@ impl SceneFile {
         }
         let document = Self {
             version: VERSION,
+            joints: Vec::new(),
             scene_kind: match (
                 nodes.iter().any(|node| node.spatial.is_some()),
                 nodes.iter().any(|node| node.spatial.is_none()),
@@ -372,6 +379,9 @@ impl SceneFile {
 
     fn validate(&self) -> Result<()> {
         validate_nodes(self.version, &self.nodes)?;
+        for joint in &self.joints {
+            joint.validate(self.nodes.len())?;
+        }
         ensure!(
             self.display.is_none_or(Display2D::is_valid),
             "Unsupported design resolution"
@@ -495,8 +505,21 @@ impl SceneFile {
         if let Some(gameplay) = &self.gameplay {
             gameplay.validate(ids.len())?;
         }
+        let joints = self
+            .joints
+            .iter()
+            .map(|joint| crate::physics3d::authored::Joint {
+                a: ids[joint.a],
+                b: ids[joint.b],
+                kind: joint.kind,
+                anchor_a: joint.anchor_a,
+                anchor_b: joint.anchor_b,
+                axis: joint.axis,
+            })
+            .collect();
         let mut loaded = Loaded {
             spatial_physics: Default::default(),
+            joints,
             display: self.display.unwrap_or_default(),
             scene,
             ids,
@@ -509,6 +532,7 @@ impl SceneFile {
             playback: None,
             entry_markers: Vec::new(),
         };
+        loaded.spatial_physics.set_joints(loaded.joints.clone());
         if let Some(index) = self.autoplay {
             loaded.play(index)?;
         }
@@ -560,6 +584,7 @@ impl PrefabFile {
             version: VERSION,
             nodes,
             animations,
+            joints: Vec::new(),
         };
         document.validate()?;
         Ok(document)
@@ -622,6 +647,7 @@ pub(crate) struct Loaded {
     pub scene: Scene,
     pub ids: Vec<EntityId>,
     pub script_prefabs: Vec<PathBuf>,
+    pub joints: Vec<crate::physics3d::authored::Joint>,
     clips: Vec<Clip>,
     pub playback: Option<Playback>,
     pub entry_markers: Vec<u32>,
@@ -881,6 +907,7 @@ mod tests {
         };
         let document = SceneFile {
             version: VERSION,
+            joints: Vec::new(),
             scene_kind: SceneKind::ThreeD,
             nodes: vec![host],
             instances: vec![InstanceFile {
