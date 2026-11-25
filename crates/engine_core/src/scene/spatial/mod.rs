@@ -215,6 +215,52 @@ pub fn matrices(
     worlds
 }
 
+/// Bakes a glTF skin at its rest pose into mesh-local vertex positions.
+///
+/// Each vertex is transformed by the weight-normalized sum of
+/// `joint_world * inverse_bind` for its four joints. This captures the skin's
+/// bind pose honestly but cannot retain deformation from animated joints: the
+/// resulting geometry is static and the mesh node transform is ignored, as in
+/// glTF's skinned-mesh rule.
+pub fn bake_skin(
+    positions: &[[f32; 3]],
+    joints: &[[u16; 4]],
+    weights: &[[f32; 4]],
+    inverse_bind: &[Mat4],
+    joint_world: &[Mat4],
+) -> Result<Vec<[f32; 3]>> {
+    ensure!(
+        positions.len() == joints.len() && joints.len() == weights.len(),
+        "Skin vertex data has inconsistent lengths"
+    );
+    ensure!(
+        inverse_bind.len() == joint_world.len(),
+        "Skin has inconsistent joint data"
+    );
+    let transforms: Vec<_> = joint_world
+        .iter()
+        .zip(inverse_bind)
+        .map(|(world, inverse)| *world * *inverse)
+        .collect();
+    let mut baked = Vec::with_capacity(positions.len());
+    for (index, position) in positions.iter().enumerate() {
+        let mut point = Vec3::ZERO;
+        let mut total = 0.0;
+        for (&joint, &weight) in joints[index].iter().zip(&weights[index]) {
+            if weight == 0.0 {
+                continue;
+            }
+            let joint = joint as usize;
+            ensure!(joint < transforms.len(), "Skin joint index out of bounds");
+            point += transforms[joint].transform_point3(Vec3::from_array(*position)) * weight;
+            total += weight;
+        }
+        ensure!(total > 0.0, "Skin vertex has no effective weight");
+        baked.push((point / total).to_array());
+    }
+    Ok(baked)
+}
+
 /// Perspective and lighting shared by the runtime and Scene view.
 pub struct View3D {
     /// World-to-camera transformation.
@@ -301,5 +347,39 @@ mod tests {
                 .validate()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn skin_baking_applies_inverse_bind_and_rest_joint_transforms() -> Result<()> {
+        let positions = [[1., 2., 3.]];
+        let joints = [[0, 0, 0, 0]];
+        let weights = [[1., 0., 0., 0.]];
+        let world = [Mat4::from_translation(Vec3::new(5., 0., 0.))];
+        let inverse = [Mat4::from_translation(Vec3::new(-5., 0., 0.))];
+        assert_eq!(
+            bake_skin(&positions, &joints, &weights, &inverse, &world)?,
+            vec![[1., 2., 3.]]
+        );
+        assert_eq!(
+            bake_skin(&positions, &joints, &weights, &[Mat4::IDENTITY], &world)?,
+            vec![[6., 2., 3.]]
+        );
+        let two_joints = [[0, 1, 0, 0]];
+        let two_weights = [[0.25, 0.75, 0., 0.]];
+        let two_world = [world[0], Mat4::IDENTITY];
+        let two_inverse = [Mat4::IDENTITY, Mat4::IDENTITY];
+        assert_eq!(
+            bake_skin(
+                &positions,
+                &two_joints,
+                &two_weights,
+                &two_inverse,
+                &two_world
+            )?,
+            vec![[2.25, 2., 3.]]
+        );
+        assert!(bake_skin(&positions, &[[9, 0, 0, 0]], &weights, &inverse, &world).is_err());
+        assert!(bake_skin(&positions, &joints, &[[0., 0., 0., 0.]], &inverse, &world).is_err());
+        Ok(())
     }
 }
