@@ -1,5 +1,5 @@
-import { frameBytes, protocol, kindStart, kindUpdate, kindFixedUpdate, kindAck, kindSetPosition, kindCollisionEnter, kindCollisionExit, kindKeyDown, kindKeyUp, kindTouchStart, kindSetLinearVelocity, kindPlayOneShot, kindAnimationEvent, kindPause, kindResume, kindChangeScene, kindFlushCommands, kindMoveNode, kindShowNode, kindSelectFrame, kindQueueSound, kindRecordScore, kindRestoreScore, kindLoad, kindLateUpdate, kindEnable, kindDisable, kindDestroy, kindSchedule, kindPollEnabled, kindProcessResources, kindPointerTouch, kindPointerMove, kindPointerEnd, kindPointerCancel, kindPointerNodeMove, kindPointerNodeEnd, kindPointerNodeCancel, kindSceneStart, kindMouseWheel, kindPointerNodeWheel, kindNodeTransform, kindNodeScaleRotation, kindTween, kindScaleNode, kindRotateNode, kindSetText, kindSetLoading, kindConfigSet, kindConfigValue, kindSecretValue, kindNodeTransform3D, kindNodeRotation3D, kindNodeScale3D, kindSetLinearVelocity3D, kindCollisionEnter3D, kindCollisionExit3D, kindLoadSprite, kindAssetLoaded, kindReleaseAsset, kindLoadAudio, kindLoadPrefab, kindSetAngularVelocity3D, kindRaycast3D, kindRaycastResult, kindNodeWorldTransform3D, kindNodeWorldRotation3D, bindingEnabled } from "../../.aurora/scripts/metadata/protocol.mts";
-import { Component, Collider2D, Collider3D, InputEventType, NodeHandle, advanceTweens, setScriptCallbackOwner, setScriptNodeTransform, setScriptNodeScaleRotation, setScriptNodeTransform3D, advanceGestures, dispatchPointerEvent, dispatchWheelEvent, resetScriptScene, resetGestures, resolveAssetLoad, clearAssetLoads, setScriptWorldTransform, dispatchRaycastResult, config, secrets } from "../aurora/index.ts";
+import { frameBytes, protocol, kindStart, kindUpdate, kindFixedUpdate, kindAck, kindSetPosition, kindCollisionEnter, kindCollisionExit, kindKeyDown, kindKeyUp, kindTouchStart, kindSetLinearVelocity, kindPlayOneShot, kindAnimationEvent, kindPause, kindResume, kindChangeScene, kindFlushCommands, kindMoveNode, kindShowNode, kindSelectFrame, kindQueueSound, kindRecordScore, kindRestoreScore, kindLoad, kindLateUpdate, kindEnable, kindDisable, kindDestroy, kindSchedule, kindPollEnabled, kindProcessResources, kindPointerTouch, kindPointerMove, kindPointerEnd, kindPointerCancel, kindPointerNodeMove, kindPointerNodeEnd, kindPointerNodeCancel, kindSceneStart, kindMouseWheel, kindPointerNodeWheel, kindNodeTransform, kindNodeScaleRotation, kindTween, kindScaleNode, kindRotateNode, kindSetText, kindSetLoading, kindConfigSet, kindConfigValue, kindSecretValue, kindNodeTransform3D, kindNodeRotation3D, kindNodeScale3D, kindSetLinearVelocity3D, kindCollisionEnter3D, kindCollisionExit3D, kindLoadSprite, kindAssetLoaded, kindReleaseAsset, kindLoadAudio, kindLoadPrefab, kindSetAngularVelocity3D, kindRaycast3D, kindRaycastResult, kindNodeWorldTransform3D, kindNodeWorldRotation3D, kindOverlapQuery, kindOverlapHit, bindingEnabled } from "../../.aurora/scripts/metadata/protocol.mts";
+import { Component, Collider2D, Collider3D, InputEventType, NodeHandle, advanceTweens, setScriptCallbackOwner, setScriptNodeTransform, setScriptNodeScaleRotation, setScriptNodeTransform3D, advanceGestures, dispatchPointerEvent, dispatchWheelEvent, resetScriptScene, resetGestures, resolveAssetLoad, clearAssetLoads, setScriptWorldTransform, dispatchRaycastResult, dispatchOverlapHit, config, secrets } from "../aurora/index.ts";
 import { kindQueueCreateNode, kindQueueInstantiatePrefab, kindQueueReparentNode, kindQueueDestroyNode, kindQueueAddComponent, kindQueueRemoveComponent, kindRegisterComponent } from "../../.aurora/scripts/metadata/protocol.mts";
 
 import { kindRegisterPrefabNode, kindRegisterPrefabComponent, kindReleasePrefabNode, kindReleasePrefabComponent, kindUpdatePrefabParent } from "../../.aurora/scripts/metadata/protocol.mts";
@@ -127,6 +127,17 @@ export async function run(
       view.setUint32(12, kindAck, true);
       view.setUint32(56, binding + bindingEnabled, true);
       if (reply(bytes) !== 1) throw new Error("Aurora raycast reply failed");
+      continue;
+    }
+    if (kind === kindOverlapHit) {
+      dispatchOverlapHit(
+        view.getUint32(48, true),
+        view.getUint32(16, true),
+        view.getFloat64(32, true) !== 0,
+      );
+      view.setUint32(12, kindAck, true);
+      view.setUint32(56, binding + bindingEnabled, true);
+      if (reply(bytes) !== 1) throw new Error("Aurora overlap reply failed");
       continue;
     }
     if (kind === kindNodeWorldTransform3D || kind === kindNodeWorldRotation3D) {
@@ -343,6 +354,7 @@ export async function run(
       else if (edit.kind >= 23 && edit.kind <= 25) queued = kindLoadAudio;
       else if (edit.kind >= 26 && edit.kind <= 28) queued = kindLoadPrefab;
       else if (edit.kind >= 29 && edit.kind <= 31) queued = kindRaycast3D;
+      else if (edit.kind >= 32 && edit.kind <= 34) queued = kindOverlapQuery;
       view.setUint32(12, queued, true);
       let detail = 0n;
       let x = 0;
@@ -370,12 +382,15 @@ export async function run(
       } else if (
         edit.kind === 19 || edit.kind === 21 || edit.kind === 23 || edit.kind === 25
         || edit.kind === 26 || edit.kind === 28 || edit.kind === 29 || edit.kind === 31
+        || edit.kind === 32 || edit.kind === 34
       ) {
         detail = (edit.kind === 21 || edit.kind === 25 || edit.kind === 28 || edit.kind === 31
+          || edit.kind === 34
           ? 13n << 32n
           : 0n) | BigInt(edit.target);
       } else if (
         edit.kind === 20 || edit.kind === 24 || edit.kind === 27 || edit.kind === 30
+        || edit.kind === 33
       ) {
         const length = Math.floor(edit.y / 2 ** 48);
         if (!Number.isInteger(length) || length < 1 || length > 12) {
