@@ -3,6 +3,9 @@
 use anyhow::{Result, ensure};
 use glam::{EulerRot, Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+use crate::assets::{AssetId, Assets};
 
 /// The visual or camera role of a spatial node.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,10 +45,13 @@ pub struct Geometry {
     pub positions: Vec<[f32; 3]>,
     /// Three vertex indices per triangle.
     pub indices: Vec<u32>,
+    /// Optional per-vertex texture coordinates matching `positions` in length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uvs: Option<Vec<[f32; 2]>>,
 }
 
 impl Geometry {
-    /// Validates topology and numeric limits before rendering.
+    /// Validates topology, texture coordinates, and numeric limits before rendering.
     pub fn validate(&self) -> Result<()> {
         ensure!(
             !self.positions.is_empty()
@@ -57,7 +63,12 @@ impl Geometry {
                 && self
                     .indices
                     .iter()
-                    .all(|i| (*i as usize) < self.positions.len()),
+                    .all(|i| (*i as usize) < self.positions.len())
+                && self
+                    .uvs
+                    .as_ref()
+                    .is_none_or(|uvs| uvs.len() == self.positions.len()
+                        && uvs.iter().flatten().all(|v| v.is_finite())),
             "Invalid triangle mesh"
         );
         Ok(())
@@ -76,11 +87,21 @@ pub struct SpatialNode {
     pub rotation: [f32; 3],
     /// Positive local axis scales. A unit cube spans one metre.
     pub scale: [f32; 3],
-    /// Linear RGB base color.
+    /// Linear RGB base color multiplied by the base-color texture when present.
     pub color: [f32; 3],
     /// Indexed triangles for a mesh role.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub geometry: Option<std::sync::Arc<Geometry>>,
+    /// Base-color PNG path relative to the containing document.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub texture: Option<PathBuf>,
+    /// Resolved texture identity, filled while loading the document.
+    #[serde(skip)]
+    pub texture_asset: Option<AssetId>,
+    /// PBR metalness in the zero-to-one range.
+    pub metallic: f32,
+    /// PBR perceptual roughness in the zero-to-one range.
+    pub roughness: f32,
     /// Physics body type.
     pub body: Body,
     /// Vertical field of view in degrees.
@@ -96,6 +117,10 @@ impl Default for SpatialNode {
             rotation: [0.; 3],
             scale: [1.; 3],
             color: [0.35, 0.66, 0.9],
+            texture: None,
+            texture_asset: None,
+            metallic: 0.,
+            roughness: 0.5,
             body: Body::None,
             fov: 45.,
         }
@@ -113,6 +138,20 @@ impl SpatialNode {
         )
     }
 
+    /// Resolves the authored base-color texture against a document directory.
+    pub(crate) fn resolve(
+        &mut self,
+        directory: &std::path::Path,
+        assets: &mut Assets,
+    ) -> Result<()> {
+        self.validate()?;
+        self.texture_asset = match &self.texture {
+            Some(path) => Some(assets.import_file(&directory.join(path))?),
+            None => None,
+        };
+        Ok(())
+    }
+
     pub(crate) fn validate(&self) -> Result<()> {
         ensure!(
             self.position
@@ -121,12 +160,27 @@ impl SpatialNode {
                 .all(|v| v.is_finite())
                 && self.scale.iter().all(|v| v.is_finite() && *v > 0.)
                 && self.color.iter().all(|v| (0.0..=1.).contains(v))
+                && (0.0..=1.).contains(&self.metallic)
+                && (0.0..=1.).contains(&self.roughness)
                 && (1.0..179.).contains(&self.fov),
             "Invalid spatial component"
         );
         ensure!(
+            self.texture.as_ref().is_none_or(|path| {
+                !path.as_os_str().is_empty()
+                    && path
+                        .components()
+                        .all(|part| matches!(part, std::path::Component::Normal(_)))
+            }),
+            "Spatial textures need a document-relative path"
+        );
+        ensure!(
             (self.role == Role::Mesh) == self.geometry.is_some(),
             "Mesh nodes require triangle geometry"
+        );
+        ensure!(
+            self.role != Role::Mesh || self.metallic.is_finite() && self.roughness.is_finite(),
+            "Mesh nodes require finite material values"
         );
         if let Some(mesh) = &self.geometry {
             mesh.validate()?;
@@ -218,5 +272,34 @@ impl View3D {
             }
         }
         view
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn triangle(uvs: Option<Vec<[f32; 2]>>) -> Geometry {
+        Geometry {
+            positions: vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]],
+            indices: vec![0, 1, 2],
+            uvs,
+        }
+    }
+
+    #[test]
+    fn geometry_accepts_matching_texture_coordinates_and_rejects_broken_ones() {
+        assert!(triangle(None).validate().is_ok());
+        assert!(
+            triangle(Some(vec![[0., 0.], [1., 0.], [0., 1.]]))
+                .validate()
+                .is_ok()
+        );
+        assert!(triangle(Some(vec![[0., 0.]])).validate().is_err());
+        assert!(
+            triangle(Some(vec![[0., 0.], [f32::NAN, 0.], [0., 1.]]))
+                .validate()
+                .is_err()
+        );
     }
 }
