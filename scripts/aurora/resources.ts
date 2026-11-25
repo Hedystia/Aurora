@@ -1,4 +1,4 @@
-import type { Prefab, SceneCommands } from "./index.ts";
+import type { LoadedPrefab, Prefab, SceneCommands } from "./index.ts";
 
 export class AudioClip {
   readonly path: string;
@@ -24,6 +24,16 @@ export class SpriteFrame {
   frameFor(node: number): number {
     const index = this.nodes.indexOf(node);
     return index === -1 ? -1 : this.slots[index];
+  }
+}
+
+/** An audio clip imported from disk on demand rather than a scene bank. */
+export class LoadedAudioClip extends AudioClip {
+  readonly handle: number;
+
+  constructor(path: string, handle: number) {
+    super(path, -1);
+    this.handle = handle;
   }
 }
 
@@ -230,9 +240,34 @@ export class Resources {
     this.scene.loadSprite(path, callback);
   }
 
+  /** Imports a WAV or MP3 under the project on demand. */
+  loadAudioFile(path: string, callback: AudioClipCallback): void {
+    this.scene.loadAudio(path, callback);
+  }
+
+  /** Imports a prefab under the project on demand. */
+  loadPrefabFile(path: string, callback: PrefabCallback): void {
+    this.scene.loadPrefabFile(path, callback);
+  }
+
+  /** Releases one on-demand asset handle directly. */
+  releaseAssetHandle(handle: number): void {
+    this.scene.releaseAsset(handle);
+  }
+
   /** Releases one on-demand sprite handle. Scene bank handles are unaffected. */
   releaseSpriteFile(frame: LoadedSpriteFrame): void {
-    this.scene.releaseSprite(frame);
+    this.scene.releaseAsset(frame.handle);
+  }
+
+  /** Releases one on-demand audio handle. */
+  releaseAudioFile(clip: LoadedAudioClip): void {
+    this.scene.releaseAsset(clip.handle);
+  }
+
+  /** Releases one on-demand prefab handle. Already-instantiated nodes are unaffected. */
+  releasePrefabFile(prefab: LoadedPrefab): void {
+    this.scene.releaseAsset(prefab.handle);
   }
 
   loadPrefab(path: string, callback: PrefabCallback): void {
