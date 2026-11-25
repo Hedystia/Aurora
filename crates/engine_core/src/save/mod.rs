@@ -469,6 +469,7 @@ impl SceneFile {
         }
         let mut prefabs = BTreeMap::new();
         let mut clips = self.animations;
+        let mut joints = self.joints.clone();
         for instance in &self.instances {
             let path = directory.join(&instance.prefab);
             let prefab = match prefabs.entry(path) {
@@ -487,6 +488,16 @@ impl SceneFile {
             let (nodes, _) =
                 prefab.instantiate(&mut scene, instance.parent.map(|index| ids[index]))?;
             ids.extend(nodes);
+            for joint in prefab.joints() {
+                joints.push(crate::scene::spatial::JointFile {
+                    a: joint.a + base,
+                    b: joint.b + base,
+                    kind: joint.kind,
+                    anchor_a: joint.anchor_a,
+                    anchor_b: joint.anchor_b,
+                    axis: joint.axis,
+                });
+            }
             for clip in prefab.clips() {
                 let mut clip = clip.clone();
                 for track in &mut clip.tracks {
@@ -505,8 +516,10 @@ impl SceneFile {
         if let Some(gameplay) = &self.gameplay {
             gameplay.validate(ids.len())?;
         }
-        let joints = self
-            .joints
+        for joint in &joints {
+            joint.validate(ids.len())?;
+        }
+        let joints = joints
             .iter()
             .map(|joint| crate::physics3d::authored::Joint {
                 a: ids[joint.a],
@@ -624,7 +637,7 @@ impl PrefabFile {
                 sprite: node.resolve_visual(directory, assets)?,
             });
         }
-        Prefab::new(nodes, self.animations.clone())
+        Prefab::new(nodes, self.animations.clone(), self.joints.clone())
     }
 
     fn validate(&self) -> Result<()> {
@@ -636,6 +649,9 @@ impl PrefabFile {
         );
         for clip in &self.animations {
             clip.validate(self.nodes.len())?;
+        }
+        for joint in &self.joints {
+            joint.validate(self.nodes.len())?;
         }
         Ok(())
     }
@@ -850,6 +866,71 @@ mod tests {
     use super::*;
     use crate::animation::{Interpolation, Property};
     use crate::scene::spatial::SpatialNode;
+
+    #[test]
+    fn prefab_joints_are_rebased_on_instantiation() -> Result<()> {
+        let node = |name: &str, parent: Option<usize>| NodeFile {
+            name: name.into(),
+            parent,
+            transform: Transform2D::default(),
+            spatial: Some(crate::scene::spatial::SpatialNode {
+                role: crate::scene::spatial::Role::Cube,
+                body: crate::scene::spatial::Body::Dynamic,
+                ..Default::default()
+            }),
+            sprite: None,
+            visual: None,
+            appearance: None,
+            physics2d: None,
+            scripts: Vec::new(),
+        };
+        let scratch = tempfile::tempdir()?;
+        let prefab = PrefabFile {
+            version: VERSION,
+            nodes: vec![node("A", None), node("B", Some(0))],
+            animations: Vec::new(),
+            joints: vec![crate::scene::spatial::JointFile {
+                a: 0,
+                b: 1,
+                kind: crate::scene::spatial::JointKind::Fixed,
+                anchor_a: [0.0, 0.5, 0.0],
+                anchor_b: [0.0, -0.5, 0.0],
+                axis: [0.0, 1.0, 0.0],
+            }],
+        };
+        prefab.save(&scratch.path().join("pair.prefab"))?;
+        let scene = SceneFile {
+            version: VERSION,
+            scene_kind: SceneKind::ThreeD,
+            nodes: vec![NodeFile {
+                name: "Canvas".into(),
+                parent: None,
+                transform: Transform2D::default(),
+                spatial: None,
+                sprite: None,
+                visual: None,
+                appearance: None,
+                physics2d: None,
+                scripts: Vec::new(),
+            }],
+            instances: vec![InstanceFile {
+                prefab: PathBuf::from("pair.prefab"),
+                parent: None,
+            }],
+            script_prefabs: Vec::new(),
+            animations: Vec::new(),
+            autoplay: None,
+            gameplay: None,
+            display: None,
+            joints: Vec::new(),
+        };
+        let mut assets = Assets::new(None);
+        let loaded = scene.instantiate(scratch.path(), &mut assets, Scene::default())?;
+        assert_eq!(loaded.joints.len(), 1);
+        assert_eq!(loaded.joints[0].a, loaded.ids[1]);
+        assert_eq!(loaded.joints[0].b, loaded.ids[2]);
+        Ok(())
+    }
 
     #[test]
     fn prefab_animations_round_trip_and_survive_instantiation() -> Result<()> {
