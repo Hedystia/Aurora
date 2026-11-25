@@ -6,9 +6,9 @@ pub mod transport;
 use bincode::{Decode, Encode};
 
 /// Current script protocol version.
-pub const VERSION: u32 = 15;
+pub const VERSION: u32 = 16;
 /// Fixed byte count of an encoded envelope.
-pub const ENVELOPE_BYTES: usize = 52;
+pub const ENVELOPE_BYTES: usize = 60;
 /// Size of the protocol, sequence and kind prefix.
 pub const HEADER_BYTES: usize = 16;
 /// Size of the unframed shared-memory payload.
@@ -145,6 +145,18 @@ pub enum Kind {
     ConfigValue,
     /// Delivers a secret entry as `name\0value` UTF-8 chunks. Detail packs the operation.
     SecretValue,
+    /// Local position of a spatial scene node. Detail holds the reference; X, Y and Z are the position.
+    NodeTransform3D,
+    /// Local Euler rotation of a spatial scene node. X, Y and Z carry degrees.
+    NodeRotation3D,
+    /// Local scale of a spatial scene node. X, Y and Z carry the scale.
+    NodeScale3D,
+    /// Set the bound spatial body velocity in meters per second.
+    SetLinearVelocity3D,
+    /// The bound spatial body began touching another body identified by detail.
+    CollisionEnter3D,
+    /// The bound spatial body stopped touching another body identified by detail.
+    CollisionExit3D,
 }
 
 /// Wire message encoded with bincode 2 fixed-width, little-endian configuration.
@@ -162,6 +174,8 @@ pub struct Envelope {
     pub x: f64,
     /// Local Y position or linear velocity Y.
     pub y: f64,
+    /// Local Z position, rotation or velocity component. Zero when unused.
+    pub z: f64,
     /// Kind-specific handle, key or clip index. Zero when unused.
     pub detail: u64,
     /// Zero-based component binding. Reply values also carry the enabled flag.
@@ -203,6 +217,7 @@ mod tests {
             node: 42,
             x: -3.5,
             y: 2.0,
+            z: 1.25,
             detail: u64::MAX,
             binding: 12,
         };
@@ -213,8 +228,9 @@ mod tests {
         assert_eq!(bytes[16..24], 42_u64.to_le_bytes());
         assert_eq!(bytes[24..32], (-3.5_f64).to_le_bytes());
         assert_eq!(bytes[32..40], 2.0_f64.to_le_bytes());
-        assert_eq!(bytes[40..48], u64::MAX.to_le_bytes());
-        assert_eq!(bytes[48..], 12_u32.to_le_bytes());
+        assert_eq!(bytes[40..48], 1.25_f64.to_le_bytes());
+        assert_eq!(bytes[48..56], u64::MAX.to_le_bytes());
+        assert_eq!(bytes[56..], 12_u32.to_le_bytes());
         assert_eq!(Envelope::decode(&bytes)?, message);
         bytes[12] = 255;
         assert!(Envelope::decode(&bytes).is_err());
@@ -244,6 +260,12 @@ mod tests {
         assert_eq!(Kind::ConfigSet as u32, 60);
         assert_eq!(Kind::ConfigValue as u32, 61);
         assert_eq!(Kind::SecretValue as u32, 62);
-        assert_eq!(VERSION, 15);
+        assert_eq!(Kind::NodeTransform3D as u32, 63);
+        assert_eq!(Kind::NodeRotation3D as u32, 64);
+        assert_eq!(Kind::NodeScale3D as u32, 65);
+        assert_eq!(Kind::SetLinearVelocity3D as u32, 66);
+        assert_eq!(Kind::CollisionEnter3D as u32, 67);
+        assert_eq!(Kind::CollisionExit3D as u32, 68);
+        assert_eq!(VERSION, 16);
     }
 }
