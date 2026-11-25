@@ -255,7 +255,11 @@ impl Demo {
                     | Command::ConfigSetStart(_)
                     | Command::ConfigSetChunk(..)
                     | Command::ConfigSetEnd(_)
-                    | Command::SetLinearVelocity3D(_),
+                    | Command::SetLinearVelocity3D(_)
+                    | Command::LoadSpriteStart(_)
+                    | Command::LoadSpriteChunk(..)
+                    | Command::LoadSpriteEnd(_)
+                    | Command::ReleaseAsset(_),
                 ) => {
                     anyhow::bail!("Director commands require an authored scene");
                 }
