@@ -49,6 +49,9 @@ pub(crate) enum Command {
     RaycastStart(u32),
     RaycastChunk(u32, [u8; 12], u8),
     RaycastEnd(u32),
+    OverlapStart(u32),
+    OverlapChunk(u32, [u8; 12], u8),
+    OverlapEnd(u32),
 }
 
 #[cfg(unix)]
