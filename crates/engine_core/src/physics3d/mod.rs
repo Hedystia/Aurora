@@ -2,6 +2,8 @@
 
 pub(crate) mod authored;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use anyhow::{Context, Result, ensure};
 use glam::{Quat, Vec3};
 use serde::Serialize;
@@ -9,6 +11,39 @@ use serde::Serialize;
 use rapier3d::prelude::{ColliderBuilder, PhysicsWorld, Pose, RigidBodyBuilder, RigidBodyHandle};
 
 const STEP: f32 = 1.0 / 60.0;
+
+/// Backend used by authored worlds instantiated from now on.
+///
+/// The player selects this once when it starts; authored worlds capture it when
+/// they are constructed, so scene changes keep the same solver. Defaults to
+/// Rapier, which keeps every non-Jolt build and host unchanged.
+static AUTHORED_JOLT: AtomicBool = AtomicBool::new(false);
+
+/// Selects the solver for authored 3D worlds created after this call.
+///
+/// This is a process-wide player option: the player calls it before it builds
+/// its runtime, and `AuthoredWorld` reads it when a scene is instantiated. It
+/// is not a per-scene setting.
+pub fn set_authored_backend(backend: Backend) -> Result<()> {
+    match backend {
+        Backend::Rapier => AUTHORED_JOLT.store(false, Ordering::Relaxed),
+        Backend::Jolt => {
+            #[cfg(feature = "physics-jolt")]
+            AUTHORED_JOLT.store(true, Ordering::Relaxed);
+            #[cfg(not(feature = "physics-jolt"))]
+            anyhow::bail!("Jolt requires the physics-jolt cargo feature");
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn authored_backend() -> Backend {
+    if AUTHORED_JOLT.load(Ordering::Relaxed) {
+        Backend::Jolt
+    } else {
+        Backend::Rapier
+    }
+}
 
 /// Which solver advances a 3D world.
 #[derive(Clone, Copy, Debug, Default, Serialize)]
