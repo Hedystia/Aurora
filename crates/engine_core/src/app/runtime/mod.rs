@@ -2,6 +2,7 @@
 
 mod gameplay;
 mod prefab_scripts;
+mod settings;
 mod spatial;
 
 use std::{
@@ -22,7 +23,7 @@ use crate::{
     input::InputEvent,
     physics3d::Backend,
     render::{Cube, Frame},
-    scene::NodeState,
+    scene::{Affine2D, NodeState, Sprite, SpriteAppearance, Transform2D},
     scripting::{Command, Script, Session},
 };
 
@@ -38,6 +39,10 @@ pub(super) enum Runtime {
     Demo(Box<Demo>),
     Authored(Box<Authored>),
     Spatial(Box<spatial::Spatial>),
+}
+
+fn pack_entry((name, value): (&str, &str)) -> String {
+    format!("{name}\0{value}")
 }
 
 impl Runtime {
@@ -68,8 +73,11 @@ impl Runtime {
             Ok(Self::Authored(Box::new(Authored {
                 director,
                 gameplay,
+                settings: settings::GameSettings::load(scenario.config, scenario.secrets)?,
                 profile: scenario.profile.map(Path::to_path_buf),
                 silent,
+                loading: None,
+                pending_config: BTreeMap::new(),
                 script: None,
                 pending_scene: None,
                 bindings: BTreeMap::new(),
@@ -163,14 +171,36 @@ impl Runtime {
                 nodes: demo.scene.snapshot()?,
                 camera: CAMERA,
             },
-            Self::Authored(game) => Frame::Sprites {
-                assets: game.director.assets(),
-                nodes: crate::save::visual::draw_nodes(
+            Self::Authored(game) => {
+                let mut nodes = crate::save::visual::draw_nodes(
                     game.director.scene().snapshot()?,
                     game.director.ticks(),
-                )?,
-                camera: game.director.display().camera(),
-            },
+                )?;
+                if let Some(sprite) = &game.loading {
+                    nodes.push(NodeState {
+                        draw_tick: game.director.ticks(),
+                        id: EntityId(u64::MAX),
+                        parent: None,
+                        name: "Loading".into(),
+                        local: Transform2D::default(),
+                        spatial: None,
+                        world: Affine2D::IDENTITY,
+                        sprite: Some(*sprite),
+                        appearance: Some(SpriteAppearance {
+                            color: [0, 0, 0, 255],
+                            opacity: 170,
+                            layer: i32::MAX,
+                            ..Default::default()
+                        }),
+                        visible: true,
+                    });
+                }
+                Frame::Sprites {
+                    assets: game.director.assets(),
+                    nodes,
+                    camera: game.director.display().camera(),
+                }
+            }
             Self::Spatial(game) => Frame::Cubes(&game.cubes),
         })
     }
@@ -246,7 +276,11 @@ fn spawn_scene_program(program: &SceneProgram) -> Result<Option<Session>> {
 pub(super) struct Authored {
     director: Director,
     gameplay: Option<gameplay::Gameplay>,
+    settings: settings::GameSettings,
     profile: Option<PathBuf>,
+    /// White-pixel sprite drawn over the game frame while input is blocked.
+    loading: Option<Sprite>,
+    pending_config: BTreeMap<u32, Vec<u8>>,
     silent: bool,
     script: Option<Session>,
     pending_scene: Option<usize>,
@@ -293,7 +327,50 @@ impl Authored {
                 self.dispatch_to(binding, node, Kind::RestoreScore, u64::from(best))?;
             }
         }
+        let (config, secrets): (Vec<_>, Vec<_>) = (
+            self.settings.config_entries().map(pack_entry).collect(),
+            self.settings.secret_entries().map(pack_entry).collect(),
+        );
+        for (index, entry) in config.iter().enumerate() {
+            self.dispatch_entry(Kind::ConfigValue, index as u32, entry)?;
+        }
+        for (index, entry) in secrets.iter().enumerate() {
+            self.dispatch_entry(Kind::SecretValue, index as u32, entry)?;
+        }
         self.sync_lifecycle()
+    }
+
+    /// Sends one `name\0value` entry to every running binding in 12-byte chunks.
+    fn dispatch_entry(&mut self, kind: Kind, entry: u32, text: &str) -> Result<()> {
+        let bytes = text.as_bytes();
+        anyhow::ensure!(
+            bytes.len() <= 1512,
+            "Settings entry exceeds the 1512-byte limit"
+        );
+        for binding in self.bindings.keys().copied().collect::<Vec<_>>() {
+            let node = self.bindings[&binding].node;
+            self.dispatch_raw(binding, node, kind, u64::from(entry), Some([0.0; 2]))?;
+            for chunk in bytes.chunks(12) {
+                let mut packed = [0_u64; 2];
+                for (index, byte) in chunk.iter().enumerate() {
+                    packed[index / 6] |= u64::from(*byte) << ((index % 6) * 8);
+                }
+                let detail = (u64::from(chunk.len() as u32) << 32) | u64::from(entry);
+                let coordinate = [
+                    packed[0] as f64,
+                    packed[1] as f64 + f64::from(chunk.len() as u32) * 2_f64.powi(48),
+                ];
+                self.dispatch_raw(binding, node, kind, detail, Some(coordinate))?;
+            }
+            self.dispatch_raw(
+                binding,
+                node,
+                kind,
+                13_u64 << 32 | u64::from(entry),
+                Some([0.0; 2]),
+            )?;
+        }
+        Ok(())
     }
 
     /// Sends the local transform of every scene node the script has not seen yet.
@@ -320,7 +397,7 @@ impl Authored {
                 host,
                 Kind::NodeTransform,
                 u64::from(reference),
-                Some(state.local.position),
+                Some(state.local.position.map(f64::from)),
             )?;
             let detail = u64::from(reference) | (u64::from(state.local.rotation.to_bits()) << 32);
             self.dispatch_raw(
@@ -328,7 +405,7 @@ impl Authored {
                 host,
                 Kind::NodeScaleRotation,
                 detail,
-                Some(state.local.scale),
+                Some(state.local.scale.map(f64::from)),
             )?;
         }
         Ok(())
@@ -401,6 +478,8 @@ impl Authored {
         }
         self.mutations.clear();
         self.pointers.clear();
+        self.pending_config.clear();
+        self.loading = None;
         Ok(())
     }
 
@@ -456,7 +535,7 @@ impl Authored {
                     .lifecycle
                     .runs(self.director.scene().active_in_hierarchy(node)?)
                 {
-                    self.dispatch_raw(binding, node, kind, id, Some(position))?;
+                    self.dispatch_raw(binding, node, kind, id, Some(position.map(f64::from)))?;
                     self.settle_mutations()?;
                 }
             }
@@ -498,7 +577,7 @@ impl Authored {
             owner,
             Kind::PointerNodeWheel,
             u64::from(reference),
-            Some(delta),
+            Some(delta.map(f64::from)),
         )?;
         self.settle_mutations()
     }
@@ -509,16 +588,16 @@ impl Authored {
         node: EntityId,
         mut kind: Kind,
         mut detail: u64,
-        mut coordinates: Option<[f32; 2]>,
+        mut coordinates: Option<[f64; 2]>,
     ) -> Result<()> {
         for _ in 0..=128 {
             let transform = self.director.scene().transform(node)?;
-            let position = coordinates.unwrap_or(transform.position);
+            let position = coordinates.unwrap_or_else(|| transform.position.map(f64::from));
             let reply = self
                 .script
                 .as_mut()
                 .context("Script disconnected")?
-                .exchange(kind, binding, node.0, position, detail)?;
+                .exchange_control(kind, binding, node.0, position, detail)?;
             self.bindings
                 .get_mut(&binding)
                 .context("Unknown component binding")?
@@ -600,6 +679,56 @@ impl Authored {
                 let text = String::from_utf8(bytes).context("Script text is not valid UTF-8")?;
                 self.director
                     .set_text(self.target(reference as usize)?, text)?;
+                return Ok(true);
+            }
+            Command::ShowLoading(visible) => {
+                if visible && self.loading.is_none() {
+                    let texture = self
+                        .director
+                        .assets_mut()
+                        .generated(image::RgbaImage::from_pixel(1, 1, image::Rgba([255; 4])));
+                    let size = self.director.display().resolution.map(|value| value as f32);
+                    self.loading = Some(Sprite {
+                        texture,
+                        size,
+                        emitter: None,
+                    });
+                } else if !visible {
+                    self.loading = None;
+                }
+            }
+            Command::ConfigSetStart(entry) => {
+                anyhow::ensure!(
+                    self.pending_config.insert(entry, Vec::new()).is_none(),
+                    "Config update is already in progress"
+                );
+                return Ok(true);
+            }
+            Command::ConfigSetChunk(entry, bytes, length) => {
+                let value = self
+                    .pending_config
+                    .get_mut(&entry)
+                    .context("Config chunk has no matching start")?;
+                let length = usize::from(length);
+                anyhow::ensure!(
+                    (1..=bytes.len()).contains(&length) && value.len() + length <= 1512,
+                    "Script config exceeds its size limit"
+                );
+                value.extend_from_slice(&bytes[..length]);
+                return Ok(true);
+            }
+            Command::ConfigSetEnd(entry) => {
+                let bytes = self
+                    .pending_config
+                    .remove(&entry)
+                    .context("Config end has no matching start")?;
+                let separator = bytes
+                    .iter()
+                    .position(|byte| *byte == 0)
+                    .context("Config entry has no name")?;
+                let name = String::from_utf8(bytes[..separator].to_vec())?;
+                let value = String::from_utf8(bytes[separator + 1..].to_vec())?;
+                self.settings.set_config(&name, &value)?;
                 return Ok(true);
             }
             Command::ScaleNode(index, scale) => {
@@ -752,6 +881,10 @@ impl Authored {
         self.poll_disabled()?;
         self.sync_lifecycle()?;
         for event in input {
+            // A loading overlay swallows gameplay input until a script clears it.
+            if self.loading.is_some() {
+                break;
+            }
             match event {
                 InputEvent::KeyDown(key) => self.dispatch(Kind::KeyDown, *key as u64)?,
                 InputEvent::KeyUp(key) => self.dispatch(Kind::KeyUp, *key as u64)?,
@@ -807,7 +940,13 @@ impl Authored {
                             .lifecycle
                             .runs(self.director.scene().active_in_hierarchy(node)?)
                         {
-                            self.dispatch_raw(binding, node, Kind::MouseWheel, 0, Some(*delta))?;
+                            self.dispatch_raw(
+                                binding,
+                                node,
+                                Kind::MouseWheel,
+                                0,
+                                Some(delta.map(f64::from)),
+                            )?;
                             self.settle_mutations()?;
                         }
                     }
@@ -904,7 +1043,7 @@ impl Authored {
             self.pointer_local(reference, world)?
         };
         let detail = u64::from(reference) | (id << 32);
-        self.dispatch_raw(binding, owner, kind, detail, Some(local))?;
+        self.dispatch_raw(binding, owner, kind, detail, Some(local.map(f64::from)))?;
         self.settle_mutations()
     }
 
