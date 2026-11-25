@@ -223,6 +223,8 @@ export class Director {
 
   pause(): void { this.action = 1; }
   resume(): void { this.action = 2; }
+  showLoading(): void { this.action = 4; }
+  hideLoading(): void { this.action = 5; }
   loadScene(name: string): boolean {
     for (let index = 0; index < scriptSceneNames.length; index++) {
       if (scriptSceneNames[index] === name) {
@@ -319,6 +321,31 @@ export class SceneCommands {
     }
     this.push(15, node, 0, 0);
     scriptScene.setNodeText(node, value);
+  }
+  /** Persists one project config value as `name\0value` UTF-8 bytes. */
+  setConfig(name: string, value: string): void {
+    if (typeof name !== "string" || typeof value !== "string") throw new Error("Config requires strings");
+    const bytes = new TextEncoder().encode(`${name}\0${value}`);
+    if (bytes.length > 1512) throw new Error("Config entry exceeds the 1512-byte limit");
+    const buffer = callbackSceneCommands ?? this;
+    const edits = Math.ceil(bytes.length / 12) + 2;
+    if (buffer.edits.length + edits > 128) {
+      throw new Error("Config update exceeds the scene command limit");
+    }
+    this.push(16, 0, 0, 0);
+    for (let offset = 0; offset < bytes.length; offset += 12) {
+      const chunk = bytes.subarray(offset, offset + 12);
+      const packed = (start: number): number => {
+        let value = 0;
+        for (let index = 0; index < 6; index++) {
+          value += (chunk[start + index] ?? 0) * 2 ** (index * 8);
+        }
+        return value;
+      };
+      this.push(17, 0, packed(0), packed(6) + chunk.length * 2 ** 48);
+    }
+    this.push(18, 0, 0, 0);
+    config.set(name, value);
   }
   sound(clip: number): void { this.push(3, clip, 0, 0); }
   bestScore(score: number): void { this.push(4, score, 0, 0); }
@@ -463,6 +490,49 @@ export class AssetManager {
 
 /** Global asset manager for bundle and non-component resource work. */
 export const assetManager = new AssetManager();
+
+/** Host-pushed key/value state. Values arrive once per scene start. */
+class KeyValueStore {
+  private readonly values = new Map<string, string>();
+  private readonly pending = new Map<number, number[]>();
+
+  /** Returns the stored value or null when the host did not supply the key. */
+  get(name: string): string | null { return this.values.get(name) ?? null; }
+
+  /** @internal Stores one config value locally. */
+  set(name: string, value: string): void { this.values.set(name, value); }
+
+  /** @internal Clears cached values before a new scene's configuration arrives. */
+  reset(): void { this.values.clear(); this.pending.clear(); }
+
+  /** @internal Accumulates one `name\0value` chunk stream from the host. */
+  chunk(operation: number, entry: number, bytes: number[]): void {
+    if (operation === 0) {
+      this.pending.set(entry, []);
+      return;
+    }
+    const chunks = this.pending.get(entry);
+    if (chunks === undefined) throw new Error("Config chunk has no matching start");
+    if (operation >= 1 && operation <= 12) {
+      for (const byte of bytes) chunks.push(byte);
+      return;
+    }
+    if (operation !== 13) throw new Error("Invalid config chunk operation");
+    this.pending.delete(entry);
+    const separator = chunks.indexOf(0);
+    if (separator < 0) throw new Error("Config entry is missing its name separator");
+    const decoder = new TextDecoder();
+    const name = decoder.decode(new Uint8Array(chunks.slice(0, separator)));
+    const value = decoder.decode(new Uint8Array(chunks.slice(separator + 1)));
+    this.values.set(name, value);
+  }
+}
+
+/** Project-scoped config values supplied by the host. Writes persist through the host. */
+export const config = new KeyValueStore();
+
+/** Host-only secret values supplied by the host. Secrets cannot be written from scripts. */
+export const secrets = new KeyValueStore();
 
 export class NodeRef {
   constructor(readonly index: number, private readonly commands: SceneCommands) {}
