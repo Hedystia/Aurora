@@ -97,6 +97,8 @@ struct Editor {
     component_search: String,
     open_dialog: bool,
     display_dialog: bool,
+    project_settings: bool,
+    default_scene: String,
     pending_open: Option<PathBuf>,
     close_dialog: bool,
     logs: Vec<String>,
@@ -107,6 +109,7 @@ struct Editor {
 impl Editor {
     fn new(project: Project, play: bool) -> Self {
         let (watcher, watch_events) = make_watcher();
+        let default_scene = project::load_session(&project.root).default_scene;
         let mut editor = Self {
             layout: load_layout(&project),
             project,
@@ -140,6 +143,8 @@ impl Editor {
             component_search: String::new(),
             open_dialog: false,
             display_dialog: false,
+            project_settings: false,
+            default_scene,
             pending_open: None,
             close_dialog: false,
             logs: Vec::new(),
@@ -281,6 +286,7 @@ impl Editor {
             self.asset_delete = None;
             self.rename = None;
             self.layout = load_layout(&project);
+            self.default_scene = project::load_session(&project.root).default_scene;
             self.project = project;
             (self.watcher, self.watch_events) = make_watcher();
             self.watched.clear();
@@ -483,7 +489,15 @@ impl Editor {
         let mut file = tempfile::NamedTempFile::new_in(&directory)?;
         file.write_all(&serde_json::to_vec(&self.layout)?)?;
         file.persist(directory.join("layout.json"))?;
-        Ok(())
+        let mut session = project::load_session(&self.project.root);
+        if !self.project.prefab
+            && project::is_scene(&self.project.path)
+            && self.project.path.is_file()
+            && let Ok(relative) = self.project.path.strip_prefix(&self.project.root)
+        {
+            session.last_scene = relative.to_string_lossy().into_owned();
+        }
+        project::save_session(&self.project.root, &session)
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
@@ -548,6 +562,42 @@ impl Editor {
                         self.project.changed();
                     }
                 });
+        }
+        if self.project_settings {
+            let mut open = true;
+            let mut close = false;
+            let root = self.project.root.clone();
+            let mut result = None;
+            egui::Window::new(strings::PROJECT_SETTINGS)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.label(strings::DEFAULT_SCENE);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.default_scene).hint_text("main.scene"),
+                    );
+                    if ui.button(strings::SAVE).clicked() {
+                        let reference = self.default_scene.trim();
+                        if reference.is_empty()
+                            || project::valid_scene_ref(&root, reference).is_some()
+                        {
+                            let mut session = project::load_session(&root);
+                            session.default_scene = reference.to_owned();
+                            result = Some(project::save_session(&root, &session));
+                        } else {
+                            result = Some(Err(anyhow::anyhow!(strings::INVALID_DEFAULT_SCENE)));
+                        }
+                    }
+                    if ui.button(strings::CANCEL).clicked() {
+                        close = true;
+                    }
+                });
+            if close || result.as_ref().is_some_and(Result::is_ok) {
+                open = false;
+            }
+            self.project_settings = open;
+            if let Some(result) = result {
+                self.report(result);
+            }
         }
         if self.create_node {
             egui::Window::new(strings::CREATE_NODE).show(ctx, |ui| {
