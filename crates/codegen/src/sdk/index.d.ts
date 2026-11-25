@@ -1,6 +1,6 @@
-import { AudioClip, Resources, SpriteFrame } from "./resources.js";
+import { AssetBundle, AudioClip, Resources, SpriteFrame } from "./resources.js";
 export { AssetBundle, AudioClip, Resources, SpriteFrame, registerScriptResources } from "./resources.js";
-export type { AudioClipCallback, PrefabCallback, SpriteFrameCallback } from "./resources.js";
+export type { AudioClipCallback, BundleAssets, BundleCallback, BundleProgressCallback, PrefabCallback, SpriteFrameCallback } from "./resources.js";
 import { EventCallback, EventTarget, Input, PointerPhase, ScriptEvent } from "./events.js";
 import { ScheduledCallback } from "./scheduler.js";
 export { EventPhase, EventTarget, Input, InputEventType, InputRouter, KeyCode, PointerEventType, ScriptEvent, input } from "./events.js";
@@ -128,6 +128,45 @@ export declare class SceneCommands {
     reparent(node: number, parent: NodeRef | null): void;
     destroy(node: number): void;
 }
+/**
+ * Scene-wide asset manager for code that is not tied to one component.
+ *
+ * Handles resolve from the same catalog as `Component.resources`. Bundle-wide
+ * preload and load callbacks share the fixed resource phase, and `release`
+ * drops the bundle's script handles without touching scene-owned asset data.
+ */
+export declare class AssetManager {
+    private readonly resources;
+    private readonly bundles;
+    /** Returns a cached directory-scoped view of the current scene catalog. */
+    bundle(root?: string): AssetBundle;
+    /** Resolves every asset in a bundle and calls back with the bundle. */
+    loadBundle(root: string, callback: (error: Error | null, bundle: AssetBundle | null) => void): AssetBundle;
+    preloadBundle(root: string, callback: (error: Error | null, bundle: AssetBundle | null) => void): AssetBundle;
+    releaseBundle(root: string): void;
+    getAudioClip(path: string): AudioClip | null;
+    getSpriteFrame(path: string): SpriteFrame | null;
+    getPrefab(path: string): Prefab | null;
+    requireAudioClip(path: string): AudioClip;
+    requireSpriteFrame(path: string): SpriteFrame;
+    loadAudioClip(path: string, callback: (error: Error | null, clip: AudioClip | null) => void): void;
+    loadSpriteFrame(path: string, callback: (error: Error | null, frame: SpriteFrame | null) => void): void;
+    loadPrefab(path: string, callback: (error: Error | null, prefab: Prefab | null) => void): void;
+    preloadAudioClip(path: string, callback: (error: Error | null, clip: AudioClip | null) => void): void;
+    preloadSpriteFrame(path: string, callback: (error: Error | null, frame: SpriteFrame | null) => void): void;
+    preloadPrefab(path: string, callback: (error: Error | null, prefab: Prefab | null) => void): void;
+    releaseAudioClip(path: string): void;
+    releaseSpriteFrame(path: string): void;
+    releaseAll(): void;
+    cancelLoads(): void;
+    get pendingCount(): number;
+    /** @internal Advances one global asset callback per simulation tick. */
+    _advance(): void;
+    /** @internal Drops manager handles when a scene starts. */
+    _reset(): void;
+}
+/** Global asset manager for bundle and non-component resource work. */
+export declare const assetManager: AssetManager;
 export declare class NodeRef {
     readonly index: number;
     private readonly commands;
