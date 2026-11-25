@@ -31,11 +31,16 @@ pub struct PrefabNode {
 pub struct Prefab {
     nodes: Vec<PrefabNode>,
     clips: Vec<crate::animation::Clip>,
+    joints: Vec<crate::scene::spatial::JointFile>,
 }
 
 impl Prefab {
     /// Validates that the template has one root and all parents precede children.
-    pub fn new(nodes: Vec<PrefabNode>, clips: Vec<crate::animation::Clip>) -> Result<Self> {
+    pub fn new(
+        nodes: Vec<PrefabNode>,
+        clips: Vec<crate::animation::Clip>,
+        joints: Vec<crate::scene::spatial::JointFile>,
+    ) -> Result<Self> {
         ensure!(
             !nodes.is_empty() && nodes[0].parent.is_none(),
             "Prefab needs a root"
@@ -49,7 +54,11 @@ impl Prefab {
         for clip in &clips {
             clip.validate(nodes.len())?;
         }
-        Ok(Self { nodes, clips })
+        Ok(Self {
+            nodes,
+            clips,
+            joints,
+        })
     }
 
     /// Exposes template nodes in their authored order.
@@ -60,6 +69,11 @@ impl Prefab {
     /// Exposes clips bound to the template's authored node order.
     pub fn clips(&self) -> &[crate::animation::Clip] {
         &self.clips
+    }
+
+    /// Exposes template joints in their authored order.
+    pub fn joints(&self) -> &[crate::scene::spatial::JointFile] {
+        &self.joints
     }
 
     /// Copies an existing scene subtree into an independent template.
@@ -91,7 +105,7 @@ impl Prefab {
             },
             |_| {},
         )?;
-        Self::new(nodes, Vec::new())
+        Self::new(nodes, Vec::new(), Vec::new())
     }
 
     /// Instantiates a fresh subtree, returning handles and ordered lifecycle events.
