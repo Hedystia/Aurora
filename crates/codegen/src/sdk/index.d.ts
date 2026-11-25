@@ -142,6 +142,8 @@ export declare function resolveSpriteLoad(requestId: number, handle: number, fai
 export declare function resolveAssetLoad(requestId: number, handle: number, failed: boolean, type: AssetLoadType): void;
 /** @internal Drops unresolved asset imports during teardown. */
 export declare function clearAssetLoads(): void;
+/** @internal Delivers one overlap hit to the owning component. */
+export declare function dispatchOverlapHit(request: number, reference: number, last: boolean): void;
 /** @internal Caches one authored world transform stream. */
 export declare function setScriptWorldTransform(reference: number, field: "position" | "rotation", value: [number, number, number]): void;
 /** @internal Delivers one raycast result to the owning callback. */
@@ -176,8 +178,12 @@ export declare class SceneCommands {
     loadPrefabFile(path: string, callback: (error: Error | null, prefab: Prefab | null) => void): void;
     /** Requests a world-space raycast; the result arrives as a component event. */
     raycast(origin: [number, number, number], direction: [number, number, number], distance: number): void;
-    /** @internal Sends a raycast with a preallocated request identity. */
-    raycastWith(request: number, origin: [number, number, number], direction: [number, number, number], distance: number): void;
+    /** @internal Sends a raycast or shape cast with a preallocated request identity. */
+    raycastWith(request: number, origin: [number, number, number], direction: [number, number, number], distance: number, halfExtents?: [number, number, number]): void;
+    /** Requests a box overlap query; hits arrive as component events. */
+    overlap(halfExtents: [number, number, number], position: [number, number, number]): void;
+    /** @internal Sends an overlap query with a preallocated request identity. */
+    overlapWith(request: number, halfExtents: [number, number, number], position: [number, number, number]): void;
     /** Releases one on-demand asset handle. */
     releaseAsset(handle: number): void;
     setText(node: number, value: string): void;
@@ -432,6 +438,15 @@ export declare class Component {
     onEndContact3D(_other: Collider3D): void;
     /** Requests a world-space raycast. The result arrives on a later tick. */
     raycast(origin: [number, number, number], direction: [number, number, number], distance: number, callback: (hit: RaycastHit3D | null) => void): void;
+    /** Requests a box shape cast. The result arrives as a raycast callback. */
+    shapeCast(halfExtents: [number, number, number], origin: [number, number, number], direction: [number, number, number], distance: number, callback: (hit: RaycastHit3D | null) => void): void;
+    /** Requests a box overlap query. Each hit arrives through `onOverlapHit`. */
+    overlap(halfExtents: [number, number, number], position: [number, number, number]): void;
+    /** Called for each box overlap hit. `last` marks the final hit or an empty result. */
+    onOverlapHit(_node: NodeHandle | null, _last: boolean): void;
+    /** @internal Consumes one overlap callback request. */
+    _takeOverlap(request: number): boolean;
+    private readonly overlapRequests;
     private readonly raycastCallbacks;
     /** @internal Consumes one raycast callback. */
     _takeRaycast(request: number): ((hit: RaycastHit3D | null) => void) | null;
