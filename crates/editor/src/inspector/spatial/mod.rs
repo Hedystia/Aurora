@@ -1,6 +1,6 @@
 //! Spatial node presets and local component editing.
 use egui::{DragValue, Ui};
-use engine_core::scene::spatial::{Body, Role, SpatialNode};
+use engine_core::scene::spatial::{Body, Collider, Role, SpatialNode};
 
 pub(crate) const PRESETS: [(&str, Role); 4] = [
     ("Node 3D", Role::Pivot),
@@ -67,11 +67,34 @@ pub(super) fn show(ui: &mut Ui, node: &mut SpatialNode) -> bool {
                     for (body, label) in [
                         (Body::None, "None"),
                         (Body::Fixed, "Fixed"),
+                        (Body::Kinematic, "Kinematic"),
                         (Body::Dynamic, "Dynamic"),
                     ] {
                         changed |= ui.selectable_value(&mut node.body, body, label).changed();
                     }
                 });
+            if node.body != Body::None {
+                egui::ComboBox::from_label("Collider")
+                    .selected_text(format!("{:?}", node.collider))
+                    .show_ui(ui, |ui| {
+                        for (shape, label) in [
+                            (Collider::Cuboid, "Box"),
+                            (Collider::Sphere, "Sphere"),
+                            (Collider::Capsule, "Capsule (Y)"),
+                        ] {
+                            changed |= ui
+                                .selectable_value(&mut node.collider, shape, label)
+                                .changed();
+                        }
+                    });
+                changed |= ui.checkbox(&mut node.trigger, "Trigger").changed();
+                changed |= ui
+                    .add(egui::Slider::new(&mut node.friction, 0.0..=10.0).text("Friction"))
+                    .changed();
+                changed |= ui
+                    .add(egui::Slider::new(&mut node.restitution, 0.0..=1.0).text("Restitution"))
+                    .changed();
+            }
         }
         if node.role == Role::Camera {
             changed |= ui
