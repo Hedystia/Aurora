@@ -6,7 +6,11 @@ use anyhow::Result;
 
 use crate::project::Project;
 
-pub(super) fn write_catalog(entry: &mut String, project: &Project) -> Result<()> {
+pub(super) fn write_catalog(
+    entry: &mut String,
+    project: &Project,
+    prefabs: &[String],
+) -> Result<()> {
     let mut audio = Vec::new();
     let mut frames = Vec::new();
     let mut nodes = Vec::new();
@@ -25,11 +29,12 @@ pub(super) fn write_catalog(entry: &mut String, project: &Project) -> Result<()>
 
     writeln!(
         entry,
-        "import {{ registerScriptResources }} from \"aurora\";\nregisterScriptResources({}, {}, {}, {});",
+        "import {{ registerScriptResources }} from \"aurora\";\nregisterScriptResources({}, {}, {}, {}, {});",
         serde_json::to_string(&audio)?,
         serde_json::to_string(&frames)?,
         serde_json::to_string(&nodes)?,
         serde_json::to_string(&slots)?,
+        serde_json::to_string(prefabs)?,
     )?;
     Ok(())
 }
