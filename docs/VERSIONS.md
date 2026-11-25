@@ -123,3 +123,9 @@ Verification: `script_api` tests pass on Linux, `script_api`, `engine_core`, and
 ## 2026-11-25 · Package CI and release publishing
 
 Adds a disabled `.github/workflows/packages.yml.disabled` and removes the separate macOS workflow. Pull requests, `main` pushes, and manual dispatches build and test release artifacts: Linux formatting/clippy/tests, full kit, and Docker/Podman builder; macOS formatting/clippy/tests, app, native/development transport, and kit on aarch64 and x86-64; Windows release build and executable smoke test. A `v*` tag creates the release, uploads engine archives with `taiki-e/upload-rust-binary-action`, host kits, smoke-tests the packaged Windows archive, records Android as blocked, and pushes the Linux builder image to GHCR. Existing workflows remain disabled.
+
+## 2026-11-25 · Perspective Scene camera
+
+The editor Scene view now projects spatial nodes through an orbitable perspective camera instead of the fixed isometric projection. Middle-drag orbits the camera, **Reset view** restores the default angle, and projected picking, translation on the node's XY plane, and gizmo handles use the same camera. Authored 3D data and the player's runtime camera are unchanged.
+
+Verification: `cargo fmt --all --check`, `cargo clippy --locked -p editor --all-targets -- -D warnings`, and all 41 editor tests pass, including perspective target projection, orbit pitch clamping, screen-drag round trips, and gizmo picking.
