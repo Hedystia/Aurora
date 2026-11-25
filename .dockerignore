@@ -1,0 +1,8 @@
+target
+.git
+.aurora
+.freebuff
+.agents
+.github
+scripts/node_modules
+docs
