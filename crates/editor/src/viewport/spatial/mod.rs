@@ -1,23 +1,34 @@
 //! Orbitable perspective spatial-node editing overlays.
 
 use egui::{Color32, Painter, Pos2, Rect, Response, Stroke, Vec2, pos2};
-use engine_core::scene::{
-    NodeState,
-    spatial::{Role, matrices},
+use engine_core::{
+    ecs::EntityId,
+    scene::{
+        NodeState,
+        spatial::{Role, matrices},
+    },
 };
-use glam::Vec3;
+use glam::{Mat4, Vec3};
+use std::collections::BTreeMap;
+
+/// Pixel-to-metre scale used when a 2D sprite is placed in the 3D view.
+const PIXELS_PER_METRE: f32 = 32.0;
 
 use crate::{project::Project, theme};
 
 const CAMERA_DISTANCE: f32 = 10.0;
 const MIN_PITCH: f32 = 5.0 * std::f32::consts::PI / 180.0;
 const MAX_PITCH: f32 = 85.0 * std::f32::consts::PI / 180.0;
+const MIN_DISTANCE: f32 = 1.0;
+const MAX_DISTANCE: f32 = 1000.0;
 
 /// Orbit camera shared by the spatial overlay and its picking tools.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Camera {
     yaw: f32,
     pitch: f32,
+    target: Vec3,
+    distance: f32,
 }
 
 impl Default for Camera {
@@ -27,6 +38,8 @@ impl Default for Camera {
             // negative X/Z corner with the ground plane rising up-screen.
             yaw: -3.0 * std::f32::consts::FRAC_PI_4,
             pitch: 0.34,
+            target: Vec3::ZERO,
+            distance: CAMERA_DISTANCE,
         }
     }
 }
@@ -38,13 +51,26 @@ impl Camera {
         self.pitch = (self.pitch - delta.y * 0.01).clamp(MIN_PITCH, MAX_PITCH);
     }
 
+    /// Pans the look-at target in the camera's screen plane.
+    pub(super) fn pan(&mut self, delta: Vec2, scale: f32) {
+        let (right, up, _) = self.basis();
+        let units = self.distance / (scale * CAMERA_DISTANCE);
+        self.target -= right * (delta.x * units) + up * (-delta.y * units);
+    }
+
+    /// Dollies the camera. Positive delta zooms out.
+    pub(super) fn zoom(&mut self, delta: f32) {
+        self.distance = (self.distance * (delta * 0.003).exp()).clamp(MIN_DISTANCE, MAX_DISTANCE);
+    }
+
     fn eye(self) -> Vec3 {
         let horizontal = self.pitch.cos();
-        Vec3::new(
-            horizontal * self.yaw.sin(),
-            self.pitch.sin(),
-            horizontal * self.yaw.cos(),
-        ) * CAMERA_DISTANCE
+        self.target
+            + Vec3::new(
+                horizontal * self.yaw.sin(),
+                self.pitch.sin(),
+                horizontal * self.yaw.cos(),
+            ) * self.distance
     }
 
     fn basis(self) -> (Vec3, Vec3, Vec3) {
@@ -59,7 +85,7 @@ impl Camera {
         let (right, up, forward) = self.basis();
         let relative = point - self.eye();
         let depth = relative.dot(forward).max(0.05);
-        let focal = scale * CAMERA_DISTANCE;
+        let focal = scale * self.distance;
         pos2(
             origin.x + relative.dot(right) / depth * focal,
             origin.y - relative.dot(up) / depth * focal,
@@ -68,7 +94,7 @@ impl Camera {
 
     fn screen_to_world(self, point: Pos2, plane_z: f32, origin: Pos2, scale: f32) -> Option<Vec3> {
         let (right, up, forward) = self.basis();
-        let focal = scale * CAMERA_DISTANCE;
+        let focal = scale * self.distance;
         let x = (point.x - origin.x) / focal;
         let y = -(point.y - origin.y) / focal;
         let direction = (forward + right * x + up * y).normalize();
@@ -76,6 +102,20 @@ impl Camera {
             return None;
         }
         let distance = (plane_z - self.eye().z) / direction.z;
+        (distance.is_finite() && distance > 0.0).then(|| self.eye() + direction * distance)
+    }
+
+    /// Intersects a screen point with the ground plane (`y = 0`).
+    pub(super) fn screen_to_ground(self, point: Pos2, origin: Pos2, scale: f32) -> Option<Vec3> {
+        let (right, up, forward) = self.basis();
+        let focal = scale * self.distance;
+        let x = (point.x - origin.x) / focal;
+        let y = -(point.y - origin.y) / focal;
+        let direction = (forward + right * x + up * y).normalize();
+        if direction.y.abs() < 1e-4 {
+            return None;
+        }
+        let distance = -self.eye().y / direction.y;
         (distance.is_finite() && distance > 0.0).then(|| self.eye() + direction * distance)
     }
 
@@ -105,6 +145,7 @@ pub(super) enum Mode {
 
 pub(super) struct Interaction<'a> {
     pub dragging: &'a mut Option<usize>,
+    pub axis: &'a mut Option<usize>,
     pub mode: Mode,
     pub camera: Camera,
 }
@@ -220,8 +261,50 @@ pub(super) fn draw(
         }
     }
 
+    // Non-cuboid colliders get a distinct projected outline so the chosen
+    // shape and trigger flag are visible while authoring.
+    for node in nodes.iter().filter(|node| node.visible) {
+        let Some(spatial) = &node.spatial else {
+            continue;
+        };
+        if spatial.body == engine_core::scene::spatial::Body::None
+            || spatial.collider == engine_core::scene::spatial::Collider::Cuboid
+        {
+            continue;
+        }
+        let Some(world) = worlds.get(&node.id) else {
+            continue;
+        };
+        let center = screen_position(world.transform_point3(Vec3::ZERO));
+        let radius = (world
+            .transform_vector3(Vec3::X * spatial.scale[0] * 0.5)
+            .length()
+            / CAMERA_DISTANCE
+            * scale)
+            .clamp(2.0, 400.0);
+        let tint = if spatial.trigger {
+            theme::WARNING
+        } else {
+            theme::ACCENT
+        };
+        let stroke = Stroke::new(1.2, tint);
+        match spatial.collider {
+            engine_core::scene::spatial::Collider::Sphere => {
+                painter.circle_stroke(center, radius, stroke);
+            }
+            engine_core::scene::spatial::Collider::Capsule => {
+                let half = radius * 0.6;
+                painter.line_segment([center - Vec2::Y * half, center + Vec2::Y * half], stroke);
+                painter.circle_stroke(center - Vec2::Y * half, radius * 0.5, stroke);
+                painter.circle_stroke(center + Vec2::Y * half, radius * 0.5, stroke);
+            }
+            engine_core::scene::spatial::Collider::Cuboid => {}
+        }
+    }
+
     let pointer = response.interact_pointer_pos();
     let primary_drag_started = response.drag_started_by(egui::PointerButton::Primary);
+    let mut picked_axis = None;
     let picked = response
         .clicked()
         .then_some(pointer)
@@ -231,16 +314,25 @@ pub(super) fn draw(
             markers
                 .iter()
                 .filter_map(|(index, center, bounds, _, position)| {
-                    (bounds.contains(pointer)
-                        || (project.selected == Some(*index)
-                            && gizmo_hit(
-                                pointer,
-                                *center,
-                                &gizmo_axes(camera, origin, scale, *position),
-                                scale,
-                                interaction.mode,
-                            )))
-                    .then_some((*index, pointer.distance(*center)))
+                    let hit_axis = if project.selected == Some(*index) {
+                        gizmo_axis(
+                            pointer,
+                            *center,
+                            &gizmo_axes(camera, origin, scale, *position),
+                            scale,
+                            interaction.mode,
+                        )
+                    } else {
+                        None
+                    };
+                    if bounds.contains(pointer) || hit_axis.is_some() {
+                        if hit_axis.is_some() {
+                            picked_axis = hit_axis;
+                        }
+                        Some((*index, pointer.distance(*center)))
+                    } else {
+                        None
+                    }
                 })
                 .min_by(|left, right| left.1.total_cmp(&right.1))
                 .map(|(index, _)| index)
@@ -248,6 +340,10 @@ pub(super) fn draw(
 
     if primary_drag_started {
         *interaction.dragging = picked;
+        *interaction.axis = picked_axis;
+    }
+    if response.drag_stopped_by(egui::PointerButton::Primary) {
+        *interaction.axis = None;
     }
     if response.dragged_by(egui::PointerButton::Primary)
         && let Some(index) = *interaction.dragging
@@ -270,7 +366,12 @@ pub(super) fn draw(
                 );
                 let world_delta =
                     camera.screen_delta_to_world(world_position, delta, origin, scale);
-                let local_delta = parent.inverse().transform_vector3(world_delta);
+                let mut local_delta = parent.inverse().transform_vector3(world_delta);
+                if let Some(axis) = *interaction.axis {
+                    let mut constrained = Vec3::ZERO;
+                    constrained[axis] = local_delta[axis];
+                    local_delta = constrained;
+                }
                 if local_delta.is_finite() && local_delta != Vec3::ZERO {
                     let position = Vec3::from(spatial.position) + local_delta;
                     spatial.position = position.to_array();
@@ -287,7 +388,8 @@ pub(super) fn draw(
                     if let Some(position) = position
                         && let Some(rotation) = rotation_delta(position, previous, pointer)
                     {
-                        spatial.rotation[2] += rotation.to_degrees();
+                        let axis = interaction.axis.unwrap_or(2);
+                        spatial.rotation[axis] += rotation.to_degrees();
                         project.selected = Some(index);
                         project.changed();
                     }
@@ -296,7 +398,10 @@ pub(super) fn draw(
             Mode::Scale => {
                 let factor = scale_factor(delta.y);
                 let mut changed = false;
-                for value in &mut spatial.scale {
+                for (axis, value) in spatial.scale.iter_mut().enumerate() {
+                    if interaction.axis.is_some_and(|selected| selected != axis) {
+                        continue;
+                    }
                     let next = (*value * factor).clamp(0.001, 1e5);
                     changed |= next != *value;
                     *value = next;
@@ -361,20 +466,34 @@ fn gizmo_axes(camera: Camera, origin: Pos2, scale: f32, position: Vec3) -> [(Vec
     ]
 }
 
-fn gizmo_hit(
+fn gizmo_axis(
     pointer: egui::Pos2,
     center: egui::Pos2,
     axes: &[(Vec2, Color32); 3],
     scale: f32,
     mode: Mode,
-) -> bool {
+) -> Option<usize> {
     let delta = pointer - center;
     match mode {
         Mode::Move => axes
             .iter()
-            .any(|(axis, _)| segment_distance(delta, *axis) <= 6.0),
-        Mode::Rotate => (delta.length() - scale * 0.6).abs() <= 6.0,
-        Mode::Scale => axes.iter().any(|(axis, _)| (delta - *axis).length() <= 7.0),
+            .enumerate()
+            .filter(|(_, (axis, _))| segment_distance(delta, *axis) <= 6.0)
+            .min_by(|(_, (left, _)), (_, (right, _))| {
+                segment_distance(delta, *left).total_cmp(&segment_distance(delta, *right))
+            })
+            .map(|(index, _)| index),
+        Mode::Rotate => ((delta.length() - scale * 0.6).abs() <= 6.0).then_some(2),
+        Mode::Scale => axes
+            .iter()
+            .enumerate()
+            .filter(|(_, (axis, _))| (delta - *axis).length() <= 7.0)
+            .min_by(|(_, (left, _)), (_, (right, _))| {
+                (delta - *left)
+                    .length()
+                    .total_cmp(&(delta - *right).length())
+            })
+            .map(|(index, _)| index),
     }
 }
 
@@ -399,6 +518,92 @@ fn rotation_delta(center: egui::Pos2, previous: egui::Pos2, current: egui::Pos2)
 
 fn scale_factor(delta_y: f32) -> f32 {
     (-delta_y * 0.01).exp()
+}
+
+/// Projects one sprite quad into the perspective view.
+///
+/// Spatial nodes use their authored world matrix. Plain 2D nodes are placed on
+/// the `z = 0` plane at the engine's 32-pixel-per-metre scale so a mixed scene
+/// shows its HUD beside the 3D geometry.
+pub(super) fn project_sprite_point(
+    camera: Camera,
+    worlds: &BTreeMap<EntityId, Mat4>,
+    node: &NodeState,
+    point: [f32; 2],
+    origin: Pos2,
+    scale: f32,
+) -> Pos2 {
+    let local = if node.spatial.is_some() {
+        Vec3::new(
+            point[0] / PIXELS_PER_METRE,
+            -point[1] / PIXELS_PER_METRE,
+            0.0,
+        )
+    } else {
+        let world = node.world.point(point);
+        Vec3::new(
+            world[0] / PIXELS_PER_METRE,
+            -world[1] / PIXELS_PER_METRE,
+            0.0,
+        )
+    };
+    let matrix = worlds.get(&node.id).copied().unwrap_or(Mat4::IDENTITY);
+    camera.project(matrix.transform_point3(local), origin, scale)
+}
+
+/// Draws an adaptive XZ ground grid with coloured origin axes.
+pub(super) fn draw_grid(painter: &Painter, design: Rect, camera: Camera, scale: f32) {
+    let origin = design.center();
+    let raw = (camera.distance / 8.0).max(0.25);
+    let step = if raw < 1.0 { 1.0 } else { raw.round().max(1.0) };
+    let extent = (camera.distance * 3.0).clamp(12.0, 600.0);
+    let limit = (extent / step).ceil() as i32;
+    let project = |x: f32, z: f32| camera.project(Vec3::new(x, 0.0, z), origin, scale);
+    for index in -limit..=limit {
+        let value = index as f32 * step;
+        let tint = if index == 0 {
+            theme::AXIS_X
+        } else {
+            theme::GRID
+        };
+        painter.line_segment(
+            [project(value, -extent), project(value, extent)],
+            Stroke::new(if index == 0 { 1.6 } else { 1.0 }, tint),
+        );
+        let tint = if index == 0 {
+            theme::ANCHOR
+        } else {
+            theme::GRID
+        };
+        painter.line_segment(
+            [project(-extent, value), project(extent, value)],
+            Stroke::new(if index == 0 { 1.6 } else { 1.0 }, tint),
+        );
+    }
+}
+
+/// Draws a corner orientation widget with labelled X, Y and Z axes.
+pub(super) fn draw_axis_widget(painter: &Painter, rect: Rect, camera: Camera) {
+    let center = pos2(rect.right() - 42.0, rect.bottom() - 46.0);
+    let (right, up, _) = camera.basis();
+    let axes = [
+        (Vec3::X, theme::AXIS_X, "X"),
+        (Vec3::Y, theme::AXIS_Y, "Y"),
+        (Vec3::Z, theme::ANCHOR, "Z"),
+    ];
+    for (axis, tint, label) in axes {
+        let projected = right * axis.dot(right) + up * axis.dot(up);
+        let end = center + Vec2::new(projected.x, -projected.y) * 20.0;
+        painter.line_segment([center, end], Stroke::new(2.0, tint));
+        painter.circle_filled(end, 3.0, tint);
+        painter.text(
+            end + Vec2::new(6.0, -6.0),
+            egui::Align2::CENTER_CENTER,
+            label,
+            theme::font(),
+            tint,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -460,6 +665,31 @@ mod tests {
     }
 
     #[test]
+    fn panning_and_zooming_change_the_projected_view() {
+        let mut camera = Camera::default();
+        let origin = pos2(120.0, 80.0);
+        let before = camera.project(Vec3::ZERO, origin, 40.0);
+        camera.pan(Vec2::new(30.0, 12.0), 40.0);
+        assert_ne!(camera.project(Vec3::ZERO, origin, 40.0), before);
+        camera.zoom(10.0);
+        assert!(camera.distance > CAMERA_DISTANCE);
+        camera.zoom(-10.0);
+        assert!((camera.distance - CAMERA_DISTANCE).abs() < 0.001);
+    }
+
+    #[test]
+    fn ground_plane_intersection_maps_the_screen_back_to_xz() {
+        let camera = Camera::default();
+        let origin = pos2(120.0, 80.0);
+        let point = camera.project(Vec3::new(2.0, 0.0, -1.0), origin, 40.0);
+        let ground = camera
+            .screen_to_ground(point, origin, 40.0)
+            .unwrap_or(Vec3::NEG_INFINITY);
+        assert!((ground.x - 2.0).abs() < 0.01);
+        assert!((ground.z + 1.0).abs() < 0.01);
+    }
+
+    #[test]
     fn transform_tools_pick_their_visible_handles() {
         let center = pos2(10.0, 20.0);
         let axes = [
@@ -467,20 +697,8 @@ mod tests {
             (Vec2::new(0.0, -40.0), theme::AXIS_Y),
             (Vec2::new(-10.0, -5.0), theme::ANCHOR),
         ];
-        assert!(gizmo_hit(pos2(20.0, 15.0), center, &axes, 40.0, Mode::Move));
-        assert!(gizmo_hit(
-            pos2(10.0, -4.0),
-            center,
-            &axes,
-            40.0,
-            Mode::Rotate
-        ));
-        assert!(gizmo_hit(
-            pos2(10.0, -20.0),
-            center,
-            &axes,
-            40.0,
-            Mode::Scale
-        ));
+        assert!(gizmo_axis(pos2(20.0, 15.0), center, &axes, 40.0, Mode::Move).is_some());
+        assert!(gizmo_axis(pos2(10.0, -4.0), center, &axes, 40.0, Mode::Rotate).is_some());
+        assert!(gizmo_axis(pos2(10.0, -20.0), center, &axes, 40.0, Mode::Scale).is_some());
     }
 }
