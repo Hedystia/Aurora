@@ -18,6 +18,7 @@ import {
   registerComponentClass,
   registerComponentFactory,
   registerScriptResources,
+  assetManager,
   setScriptCallbackOwner,
   setScriptNodeScaleRotation,
   setScriptNodeTransform,
@@ -365,6 +366,65 @@ describe("resources", () => {
     expect(owner.resources.pendingCount).toBe(0);
     owner.resources._advance();
     expect(called).toBe(false);
+  });
+
+  test("bundle preload resolves every asset with progress", () => {
+    registerScriptResources(
+      ["audio/confirm.wav", "audio/score.wav"],
+      ["art/hero.png"],
+      [3],
+      [0],
+      ["prefabs/Enemy.prefab"],
+    );
+    bindScriptScene(["Root"], [-1], [], [], [], ["prefabs/Enemy.prefab"]);
+    const owner = new Component();
+    const bundle = owner.resources.bundle("");
+    const progress: string[] = [];
+    let completed = 0;
+    let result: unknown = null;
+
+    bundle.preloadAll((error, assets) => {
+      expect(error).toBeNull();
+      result = assets;
+    }, (done, total, path) => {
+      completed = done;
+      progress.push(`${done}/${total}:${path}`);
+    });
+
+    expect(owner.resources.pendingCount).toBe(4);
+    owner.resources._advance();
+    owner.resources._advance();
+    owner.resources._advance();
+    owner.resources._advance();
+
+    expect(completed).toBe(4);
+    expect(progress).toHaveLength(4);
+    expect(result).toMatchObject({
+      audio: [expect.any(Object), expect.any(Object)],
+      sprites: [expect.any(Object)],
+      prefabs: [expect.any(Object)],
+      errors: [],
+    });
+  });
+
+  test("the global asset manager preloads bundles through the resource phase", () => {
+    registerScriptResources(["audio/global.wav"], [], [], []);
+    bindScriptScene(["Root"], [-1], [], [], [], []);
+    assetManager.releaseAll();
+    let loaded = false;
+
+    const bundle = assetManager.loadBundle("audio", (error, value) => {
+      expect(error).toBeNull();
+      expect(value).toBe(bundle);
+      loaded = true;
+    });
+
+    expect(assetManager.pendingCount).toBe(1);
+    assetManager._advance();
+    expect(loaded).toBe(true);
+    expect(bundle.getAudioClip("global.wav")).not.toBeNull();
+    assetManager.releaseBundle("audio");
+    expect(() => bundle.getAudioClip("global.wav")).toThrow();
   });
 });
 
