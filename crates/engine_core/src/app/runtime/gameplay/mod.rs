@@ -24,11 +24,25 @@ pub(super) struct Gameplay {
     contacts: BTreeMap<EntityId, BTreeSet<EntityId>>,
     frames: BTreeMap<EntityId, Vec<AssetId>>,
     audio: Option<(Audio, AudioSource)>,
+    silent: bool,
     profile: Option<PathBuf>,
     pub(super) best: u32,
 }
 
 impl Gameplay {
+    /// Minimal resources for a scene with no authored gameplay document.
+    pub(super) fn empty(silent: bool) -> Self {
+        Self {
+            sensors: BTreeMap::new(),
+            contacts: BTreeMap::new(),
+            frames: BTreeMap::new(),
+            audio: None,
+            silent,
+            profile: None,
+            best: 0,
+        }
+    }
+
     pub(super) fn load(
         director: &mut Director,
         silent: bool,
@@ -97,6 +111,7 @@ impl Gameplay {
             contacts: BTreeMap::new(),
             frames,
             audio,
+            silent,
             profile: profile.map(Path::to_path_buf),
             best,
         }))
@@ -118,9 +133,19 @@ impl Gameplay {
         director.scene_mut().set_sprite(node, sprite)
     }
 
-    pub(super) fn sound(&mut self, index: usize) -> Result<()> {
+    pub(super) fn sound(&mut self, id: u64, dynamic: Option<&AudioClip>) -> Result<()> {
+        if let Some(clip) = dynamic {
+            if self.audio.is_none() {
+                self.audio = Some((Audio::new(self.silent)?, AudioSource::new(Vec::new())));
+            }
+            let Some((audio, _)) = self.audio.as_mut() else {
+                anyhow::bail!("Audio mixer is unavailable");
+            };
+            clip.play(audio)?;
+            return Ok(());
+        }
         let (audio, source) = self.audio.as_mut().context("Scene has no audio clips")?;
-        source.play_one_shot(audio, index)?;
+        source.play_one_shot(audio, id as usize)?;
         Ok(())
     }
 
