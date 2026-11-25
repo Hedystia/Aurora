@@ -372,4 +372,91 @@ mod tests {
         assert_eq!(director.step()?, [42]);
         Ok(())
     }
+
+    #[test]
+    fn autoplay_clip_drives_an_authored_spatial_node() -> Result<()> {
+        let scratch = tempfile::tempdir()?;
+        let path = scratch.path().join("spatial.scene");
+        SceneFile {
+            version: VERSION,
+            scene_kind: crate::save::SceneKind::ThreeD,
+            nodes: vec![NodeFile {
+                name: "Cube".into(),
+                parent: None,
+                transform: Transform2D::default(),
+                spatial: Some(crate::scene::spatial::SpatialNode::default()),
+                sprite: None,
+                visual: None,
+                appearance: None,
+                physics2d: None,
+                scripts: Vec::new(),
+            }],
+            instances: Vec::new(),
+            script_prefabs: Vec::new(),
+            animations: vec![Clip {
+                name: "Lift".into(),
+                sample_rate: 60,
+                duration: 2,
+                speed: 1.0,
+                wrap: Wrap::Once,
+                tracks: vec![
+                    Track {
+                        node: 0,
+                        property: Property::TranslationY,
+                        interpolation: Interpolation::Linear,
+                        keys: vec![
+                            Key {
+                                frame: 0,
+                                value: 0.0,
+                                tangents: None,
+                            },
+                            Key {
+                                frame: 2,
+                                value: 2.0,
+                                tangents: None,
+                            },
+                        ],
+                    },
+                    Track {
+                        node: 0,
+                        property: Property::RotationX,
+                        interpolation: Interpolation::Linear,
+                        keys: vec![
+                            Key {
+                                frame: 0,
+                                value: 0.0,
+                                tangents: None,
+                            },
+                            Key {
+                                frame: 2,
+                                value: 90.0,
+                                tangents: None,
+                            },
+                        ],
+                    },
+                ],
+                events: Vec::new(),
+            }],
+            autoplay: Some(0),
+            gameplay: None,
+            display: None,
+        }
+        .save(&path)?;
+
+        let mut director = Director::new(vec![path], None)?;
+        let node = director.primary().context("Missing root")?;
+        assert_eq!(
+            director
+                .scene()
+                .spatial(node)?
+                .context("Missing spatial")?
+                .position[1],
+            0.0
+        );
+        assert!(director.step()?.is_empty());
+        let spatial = director.scene().spatial(node)?.context("Missing spatial")?;
+        assert_eq!(spatial.position[1], 1.0);
+        assert_eq!(spatial.rotation[0], 45.0);
+        Ok(())
+    }
 }
