@@ -58,4 +58,36 @@ state = json.loads(pathlib.Path(sys.argv[1]).read_text())
 assert "nodes" in state or "entities" in state, "headless bundle produced no scene state"
 PY
 
+# An asset the scene never references must still ship in the bundle and be hashed.
+source="$work/source"
+cp -R scripts/game-template/jumpy "$source"
+cp "$source/assets/sky.png" "$source/assets/unreferenced.png"
+full="$work/FullExport"
+target/debug/aurora-editor \
+    --project "$source" \
+    --export "$full" \
+    >"$work/export-full.log" 2>&1
+
+python3 - "$full/export.json" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+manifest_path = pathlib.Path(sys.argv[1])
+manifest = json.loads(manifest_path.read_text())
+entries = {entry["path"]: entry for entry in manifest["files"]}
+relative = "assets/unreferenced.png"
+assert relative in entries, "unreferenced on-demand asset is missing from the manifest"
+payload = (manifest_path.parent / relative).read_bytes()
+assert hashlib.sha256(payload).hexdigest() == entries[relative]["sha256"], (
+    "on-demand asset hash does not match the manifest"
+)
+PY
+
+"$full/run-game.sh" \
+    --headless --frames 2 \
+    --asset-cache "$work/cache-full" \
+    >"$work/state-full.json"
+
 printf 'export smoke test passed: %s\n' "$destination"
