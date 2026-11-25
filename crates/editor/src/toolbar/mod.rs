@@ -73,6 +73,10 @@ pub(super) fn menus(ui: &mut Ui, editor: &mut Editor) {
             }
         });
         ui.menu_button(strings::PROJECT, |ui| {
+            if ui.button(strings::PROJECT_SETTINGS).clicked() {
+                editor.project_settings = true;
+                ui.close();
+            }
             if ui
                 .add_enabled(
                     !editor.project.prefab,
@@ -138,7 +142,7 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         let play = icons::action(
             ui,
             icons::Icon::Play,
-            strings::PLAY,
+            strings::RUN,
             Some(theme::PRIMARY),
             !running,
         );
