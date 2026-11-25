@@ -137,3 +137,9 @@ The TypeScript SDK adds a global `assetManager`, cached bundle views, project-wi
 `tools/test-export.sh` builds the editor and player, exports Jumpy Bird with its native scriptc game, validates `export.json` and the launcher, and runs the bundle headless.
 
 Verification: Bun typecheck and 25 script tests pass; the export smoke test passes on Linux.
+
+## 2026-11-25 · 3D animation and skin baking
+
+The animation model adds nine spatial scalar channels (XYZ translation in metres, XYZ Euler rotation in degrees and positive XYZ scale) applied to `SpatialNode` before physics. `PrefabFile` gains an optional `animations` list; prefab clips and `capture_with` helpers round-trip through save/load, and instance tracks are rebased into the scene's flat node order. The glTF importer converts step and linear samplers to 60 Hz clips, decomposes rotation quaternions into lossy Euler keys, rejects cubic-spline and morph-target channels, and bakes skin weights at the rest pose using inverse bind matrices and joint world transforms. No new dependency pins are required: glam, gltf and serde are already in the workspace.
+
+Verification: `cargo fmt --all --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings`, `cargo test --locked --workspace`, `cargo run --locked --bin aurora-player -- --3d --headless --frames 240`, `tools/test-export.sh` and `tools/golden_test.sh` pass; the Jumpy Bird digest remains `64e4400479526792aa932d5df8a8a49a83f4f69e716d62a5b960091c6e04b165`. No shader was changed, so no WGSL validation was needed. No graphical or visual verification was performed for the new animation and skin paths.
