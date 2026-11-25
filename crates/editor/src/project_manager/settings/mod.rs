@@ -16,7 +16,7 @@ pub(super) struct Settings {
 
 mod paths;
 use paths::home;
-pub(super) use paths::{catalog_file, config_file};
+pub(crate) use paths::{catalog_file, config_file};
 
 pub(super) fn suggested_directory() -> PathBuf {
     home()
