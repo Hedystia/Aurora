@@ -14,7 +14,15 @@ export declare class SpriteFrame {
 export type AudioClipCallback = (error: Error | null, clip: AudioClip | null) => void;
 export type SpriteFrameCallback = (error: Error | null, frame: SpriteFrame | null) => void;
 export type PrefabCallback = (error: Error | null, prefab: Prefab | null) => void;
-export declare function registerScriptResources(audio: string[], frames: string[], nodes: number[], slots: number[]): void;
+export type BundleProgressCallback = (completed: number, total: number, path: string) => void;
+export interface BundleAssets {
+    audio: AudioClip[];
+    sprites: SpriteFrame[];
+    prefabs: Prefab[];
+    errors: Error[];
+}
+export type BundleCallback = (error: Error | null, assets: BundleAssets | null) => void;
+export declare function registerScriptResources(audio: string[], frames: string[], nodes: number[], slots: number[], prefabs?: string[]): void;
 export declare class Resources {
     private readonly scene;
     private pending;
@@ -41,7 +49,8 @@ export declare class Resources {
     loadAudioClip(path: string, callback: AudioClipCallback): void;
     loadSpriteFrame(path: string, callback: SpriteFrameCallback): void;
     loadPrefab(path: string, callback: PrefabCallback): void;
-    private defer;
+    /** @internal Queues one callback for the next resource phase. */
+    _defer(callback: () => void): void;
     /** @internal Runs one queued resource callback per simulation phase. */
     _advance(): void;
     /** @internal Drops resource callbacks and handles during component teardown. */
@@ -56,6 +65,7 @@ export declare class AssetBundle {
     constructor(resources: Resources, root: string);
     private static path;
     private asset;
+    private paths;
     getAudioClip(path: string): AudioClip | null;
     getSpriteFrame(path: string): SpriteFrame | null;
     requireAudioClip(path: string): AudioClip;
@@ -67,6 +77,14 @@ export declare class AssetBundle {
     preloadAudioClip(path: string, callback: AudioClipCallback): void;
     preloadSpriteFrame(path: string, callback: SpriteFrameCallback): void;
     preloadPrefab(path: string, callback: PrefabCallback): void;
+    /**
+     * Resolves every registered asset under this bundle root, one resource phase
+     * at a time. Progress counts completed assets; the final callback receives
+     * all resolved handles and any per-asset errors.
+     */
+    preloadAll(callback?: BundleCallback, progress?: BundleProgressCallback): void;
+    /** Alias for preloadAll that also reports the resolved handles. */
+    loadAll(callback?: BundleCallback, progress?: BundleProgressCallback): void;
     releaseAudioClip(path: string): void;
     releaseSpriteFrame(path: string): void;
     /** Drops every handle owned by the component behind this bundle view. */
