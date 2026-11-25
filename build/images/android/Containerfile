@@ -1,0 +1,80 @@
+# syntax=docker/dockerfile:1.7
+# Aurora builder image · Android ARM64 (BLOCKED, toolchain groundwork only)
+#
+# This image provisions the Android command-line SDK, NDK and Rust target so a
+# future Android app shell can be built without Android Studio. Aurora has no
+# Android application runtime yet, so it cannot produce an APK/AAB. Do not
+# publish this image: Google's SDK/NDK terms must be reviewed first, and the
+# image is unverified in this repository's CI. See docs/BUILD_PACKAGES.md.
+
+FROM rust:1.99.1-bookworm
+
+ARG AURORA_VERSION=0.1.0
+ARG ANDROID_CMDLINE_TOOLS=11076708
+ARG ANDROID_NDK=27.0.12077973
+ARG ANDROID_PLATFORM=android-34
+
+LABEL org.opencontainers.image.title="Aurora game builder (experimental)"
+LABEL org.opencontainers.image.version="${AURORA_VERSION}"
+LABEL org.aurora.target="android-aarch64"
+LABEL org.aurora.triple="aarch64-linux-android"
+LABEL org.aurora.status="blocked"
+LABEL org.aurora.abiversion="1"
+LABEL org.aurora.engine_version="${AURORA_VERSION}"
+LABEL org.aurora.toolchain.rust="1.99.1"
+LABEL org.aurora.toolchain.scriptc="0.4.16"
+LABEL org.aurora.toolchain.bun="1.2.22"
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV ANDROID_HOME=/opt/android-sdk
+ENV ANDROID_SDK_ROOT=/opt/android-sdk
+ENV ANDROID_NDK_HOME=/opt/android-sdk/ndk/${ANDROID_NDK}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        clang \
+        curl \
+        file \
+        g++ \
+        libasound2-dev \
+        libudev-dev \
+        libwayland-dev \
+        libxkbcommon-dev \
+        openjdk-17-jdk-headless \
+        pkg-config \
+        tar \
+        unzip \
+        xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Provision the command-line SDK and NDK inside the image. No vendor SDK is
+# committed to this repository.
+RUN mkdir -p "${ANDROID_HOME}/cmdline-tools" /tmp/android-tools \
+    && curl -fsSL --retry 3 \
+        "https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_CMDLINE_TOOLS}_latest.zip" \
+        -o /tmp/android-tools/cmdline-tools.zip \
+    && unzip -q /tmp/android-tools/cmdline-tools.zip -d /tmp/android-tools \
+    && mv /tmp/android-tools/cmdline-tools "${ANDROID_HOME}/cmdline-tools/latest" \
+    && rm -rf /tmp/android-tools
+ENV PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${PATH}"
+
+RUN yes | sdkmanager --licenses >/dev/null \
+    && sdkmanager --install "platform-tools" "platforms;${ANDROID_PLATFORM}" "ndk;${ANDROID_NDK}" >/dev/null
+
+RUN useradd --uid 10001 --create-home --shell /bin/bash builder
+
+WORKDIR /opt/aurora
+COPY --chown=builder:builder . /opt/aurora
+COPY build/images/aurora-container-build.sh /usr/local/bin/aurora-container-build
+RUN chmod 0755 /usr/local/bin/aurora-container-build
+
+USER builder
+ENV HOME=/home/builder
+
+RUN rustup target add aarch64-linux-android
+ENV CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+RUN cargo fetch --locked
+
+# The container refuses to package until an Android application shell exists.
+ENTRYPOINT ["/usr/local/bin/aurora-container-build"]
