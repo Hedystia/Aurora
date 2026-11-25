@@ -269,7 +269,10 @@ impl Demo {
                     | Command::SetAngularVelocity3D(_)
                     | Command::RaycastStart(_)
                     | Command::RaycastChunk(..)
-                    | Command::RaycastEnd(_),
+                    | Command::RaycastEnd(_)
+                    | Command::OverlapStart(_)
+                    | Command::OverlapChunk(..)
+                    | Command::OverlapEnd(_),
                 ) => {
                     anyhow::bail!("Director commands require an authored scene");
                 }
