@@ -84,6 +84,10 @@ Protocol 12 streams local node transforms to the script and adds a per-tick twee
 
 Protocol 13 adds queued ScaleNode and RotateNode edits, so scripts and tweens can change local scale and rotation alongside position. `NodeRef` and `Node` gain `setScale`, `setAngle`, and writable `scaleX`, `scaleY`, and `angle` (degrees), and `tween` drives all three channels. The demo launcher now advances tweens and drains queued edits. `@property` accepts component classes and the editor serializes component references. Existing native scripts must be rebuilt.
 
+## 2026-11-25 · Script protocol 18
+
+Protocol 18 adds chunked on-demand import for audio and prefab files alongside PNGs, angular velocity, world-space raycasts and world transform streams, all inside the unchanged 60-byte envelope. Authored spatial physics gains kinematic bodies, trigger and shaped colliders, joints and Raycast queries. Existing native scripts must be rebuilt.
+
 ## 2026-11-25 · Project startup settings
 
 Project → Project Settings stores a relative default scene in `.aurora/project-session.json`. Opening a project folder restores the cached last-edited scene, falls back to that default, then to `main.scene`. Asset creation at the project root no longer reports a path escape, and the run bar shows one play icon.
