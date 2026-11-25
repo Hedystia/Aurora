@@ -188,12 +188,7 @@ impl Editor {
     fn refresh_assets(&mut self) {
         self.asset_paths = self.project.assets();
         if !self.asset_directory.starts_with(&self.project.root) || !self.asset_directory.is_dir() {
-            let assets = self.project.root.join("assets");
-            self.asset_directory = if assets.is_dir() {
-                assets
-            } else {
-                self.project.root.clone()
-            };
+            self.asset_directory = self.project.root.clone();
         }
         if self
             .selected_asset
