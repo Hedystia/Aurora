@@ -1,5 +1,6 @@
 //! Live transform editing and type-checked script properties.
 
+mod joints;
 mod physics;
 
 pub(crate) mod visual;
@@ -76,7 +77,11 @@ fn reference(kind: PropertyType, payload: &Drag) -> Option<PropertyValue> {
 }
 
 pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
+    let mut changed = joints::show(ui, editor);
     let Some(selected) = editor.project.selected else {
+        if changed {
+            editor.project.changed();
+        }
         ui.label(strings::NO_SELECTION);
         return;
     };
@@ -155,7 +160,6 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
     let parent_valid: Vec<bool> = (0..editor.project.document.nodes.len())
         .map(|target| editor.reparent_allowed(selected, Some(target)))
         .collect();
-    let mut changed = false;
     let mut reparent = None;
 
     egui::ScrollArea::vertical().show(ui, |ui| {
