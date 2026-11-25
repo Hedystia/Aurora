@@ -59,7 +59,13 @@ impl Authored {
             .script
             .as_mut()
             .context("Script disconnected")?
-            .exchange_control(kind, binding, node.value(), coordinates, detail)?;
+            .exchange_control(
+                kind,
+                binding,
+                node.value(),
+                [coordinates[0], coordinates[1], 0.0],
+                detail,
+            )?;
         ensure!(
             reply.command.is_none(),
             "Prefab control messages require an acknowledgement"
