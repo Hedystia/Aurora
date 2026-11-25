@@ -1,5 +1,5 @@
-import { AssetBundle, AudioClip, LoadedSpriteFrame, Resources, SpriteFrame } from "./resources.js";
-export { AssetBundle, AudioClip, LoadedSpriteFrame, Resources, SpriteFrame, registerScriptResources } from "./resources.js";
+import { AssetBundle, AudioClip, Resources, SpriteFrame } from "./resources.js";
+export { AssetBundle, AudioClip, LoadedAudioClip, LoadedSpriteFrame, Resources, SpriteFrame, registerScriptResources } from "./resources.js";
 export type { AudioClipCallback, BundleAssets, BundleCallback, BundleProgressCallback, PrefabCallback, SpriteFrameCallback } from "./resources.js";
 import { EventCallback, EventTarget, Input, PointerPhase, ScriptEvent } from "./events.js";
 import { ScheduledCallback } from "./scheduler.js";
@@ -57,6 +57,10 @@ export declare class Node {
     setPosition(x: number, y: number): void;
     /** Local Z position of a spatial node, or zero for a 2D node. */
     get z(): number;
+    /** World-space translation of a spatial node. */
+    get worldPosition(): [number, number, number];
+    /** World-space Euler rotation in degrees. */
+    get worldRotation(): [number, number, number];
     /** @internal Updates the cached Z position from a host transform stream. */
     set z(value: number);
     get scaleX(): number;
@@ -84,10 +88,16 @@ export declare class RigidBody2D {
 /** Script handle for an authored spatial cuboid body. */
 export declare class RigidBody3D {
     changed: boolean;
+    angularChanged: boolean;
     vx: number;
     vy: number;
     vz: number;
+    avx: number;
+    avy: number;
+    avz: number;
     setLinearVelocity(x: number, y: number, z: number): void;
+    /** Sets angular velocity in degrees per second. */
+    setAngularVelocity(x: number, y: number, z: number): void;
 }
 export declare class Collider2D {
     readonly node: NodeHandle;
@@ -100,8 +110,16 @@ export declare class Collider3D {
     readonly trigger: boolean;
     constructor(node: NodeHandle, trigger?: boolean);
 }
+/** Result of a world-space raycast. */
+export declare class RaycastHit3D {
+    readonly distance: number;
+    readonly normal: [number, number, number];
+    readonly node: NodeHandle | null;
+    constructor(distance: number, normal: [number, number, number], node: NodeHandle | null);
+}
 export declare class AudioSource {
     pending: number;
+    pendingHandle: number;
     playClip(clip: AudioClip): void;
     playOneShot(index: number): void;
 }
@@ -117,10 +135,17 @@ export declare class Director {
     loadScene(name: string): boolean;
     changeScene(index: number): void;
 }
-/** @internal Resolves one on-demand sprite import delivered by the host. */
+type AssetLoadType = 1 | 2 | 3;
+/** @internal Backward-compatible alias for the sprite resolver. */
 export declare function resolveSpriteLoad(requestId: number, handle: number, failed: boolean): void;
-/** @internal Drops unresolved sprite imports during teardown. */
-export declare function clearSpriteLoads(): void;
+/** @internal Resolves one on-demand asset import delivered by the host. */
+export declare function resolveAssetLoad(requestId: number, handle: number, failed: boolean, type: AssetLoadType): void;
+/** @internal Drops unresolved asset imports during teardown. */
+export declare function clearAssetLoads(): void;
+/** @internal Caches one authored world transform stream. */
+export declare function setScriptWorldTransform(reference: number, field: "position" | "rotation", value: [number, number, number]): void;
+/** @internal Delivers one raycast result to the owning callback. */
+export declare function dispatchRaycastResult(distance: number, missed: boolean, normal: [number, number, number], request: number): void;
 export declare class SceneEdit {
     kind: number;
     target: number;
@@ -140,10 +165,21 @@ export declare class SceneCommands {
     show(node: number, visible: boolean): void;
     frame(node: number, frame: number): void;
     setSpriteFrame(node: NodeRef, frame: SpriteFrame): void;
+    private queueChunks;
+    /** @internal Allocates a new request identity shared by all host requests. */
+    requestId(): number;
     /** Requests an on-demand PNG import. The callback runs on a later resource phase. */
     loadSprite(path: string, callback: (error: Error | null, frame: SpriteFrame | null) => void): void;
-    /** Releases one on-demand sprite handle. */
-    releaseSprite(frame: LoadedSpriteFrame): void;
+    /** Requests an on-demand audio import. */
+    loadAudio(path: string, callback: (error: Error | null, clip: AudioClip | null) => void): void;
+    /** Requests an on-demand prefab import. */
+    loadPrefabFile(path: string, callback: (error: Error | null, prefab: Prefab | null) => void): void;
+    /** Requests a world-space raycast; the result arrives as a component event. */
+    raycast(origin: [number, number, number], direction: [number, number, number], distance: number): void;
+    /** @internal Sends a raycast with a preallocated request identity. */
+    raycastWith(request: number, origin: [number, number, number], direction: [number, number, number], distance: number): void;
+    /** Releases one on-demand asset handle. */
+    releaseAsset(handle: number): void;
     setText(node: number, value: string): void;
     /** Persists one project config value as `name\0value` UTF-8 bytes. */
     setConfig(name: string, value: string): void;
@@ -182,6 +218,11 @@ export declare class AssetManager {
     requireSpriteFrame(path: string): SpriteFrame;
     loadAudioClip(path: string, callback: (error: Error | null, clip: AudioClip | null) => void): void;
     loadSpriteFrame(path: string, callback: (error: Error | null, frame: SpriteFrame | null) => void): void;
+    loadSpriteFile(path: string, callback: (error: Error | null, frame: SpriteFrame | null) => void): void;
+    loadAudioFile(path: string, callback: (error: Error | null, clip: AudioClip | null) => void): void;
+    loadPrefabFile(path: string, callback: (error: Error | null, prefab: Prefab | null) => void): void;
+    /** Releases any on-demand asset handle. */
+    releaseAssetHandle(handle: number): void;
     loadPrefab(path: string, callback: (error: Error | null, prefab: Prefab | null) => void): void;
     preloadAudioClip(path: string, callback: (error: Error | null, clip: AudioClip | null) => void): void;
     preloadSpriteFrame(path: string, callback: (error: Error | null, frame: SpriteFrame | null) => void): void;
@@ -224,6 +265,10 @@ export declare class NodeRef {
     get y(): number;
     /** Local Z position of a spatial node, or zero for a 2D node. */
     get z(): number;
+    /** World-space translation of a spatial node. */
+    get worldPosition(): [number, number, number];
+    /** World-space Euler rotation in degrees. */
+    get worldRotation(): [number, number, number];
     get scaleX(): number;
     set scaleX(value: number);
     get scaleY(): number;
@@ -262,6 +307,11 @@ export declare class Prefab {
     readonly path: string;
     readonly assetIndex: number;
     constructor(path: string, assetIndex?: number);
+}
+/** A prefab imported from disk on demand rather than the scene catalog. */
+export declare class LoadedPrefab extends Prefab {
+    readonly handle: number;
+    constructor(path: string, handle: number);
 }
 export declare class TextRef extends NodeRef {
     get content(): string;
@@ -380,6 +430,11 @@ export declare class Component {
     onEndContact(_other: Collider2D): void;
     onBeginContact3D(_other: Collider3D): void;
     onEndContact3D(_other: Collider3D): void;
+    /** Requests a world-space raycast. The result arrives on a later tick. */
+    raycast(origin: [number, number, number], direction: [number, number, number], distance: number, callback: (hit: RaycastHit3D | null) => void): void;
+    private readonly raycastCallbacks;
+    /** @internal Consumes one raycast callback. */
+    _takeRaycast(request: number): ((hit: RaycastHit3D | null) => void) | null;
     onAnimationEvent(_code: number): void;
     onBestScore(_score: number): void;
 }
