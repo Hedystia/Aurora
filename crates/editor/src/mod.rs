@@ -406,6 +406,7 @@ impl Editor {
             version: VERSION,
             nodes,
             animations: Vec::new(),
+            joints: Vec::new(),
         }
         .save(&path)?;
         self.refresh_assets();
