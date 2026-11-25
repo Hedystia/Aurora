@@ -35,5 +35,5 @@ oxijolt = { workspace = true, optional = true }
 glam.workspace = true
 kira.workspace = true
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 nix.workspace = true
