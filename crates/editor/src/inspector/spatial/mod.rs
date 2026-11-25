@@ -81,6 +81,8 @@ pub(super) fn show(ui: &mut Ui, node: &mut SpatialNode) -> bool {
                             (Collider::Cuboid, "Box"),
                             (Collider::Sphere, "Sphere"),
                             (Collider::Capsule, "Capsule (Y)"),
+                            (Collider::ConvexHull, "Convex hull"),
+                            (Collider::Mesh, "Triangle mesh (fixed)"),
                         ] {
                             changed |= ui
                                 .selectable_value(&mut node.collider, shape, label)
