@@ -24,7 +24,7 @@ pub enum Role {
     DirectionalLight,
 }
 
-/// Physics participation of a cube.
+/// Physics participation of a spatial node.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Body {
@@ -33,8 +33,23 @@ pub enum Body {
     None,
     /// Immovable collider.
     Fixed,
+    /// Solver-driven body that follows its authored transform.
+    Kinematic,
     /// Gravity-driven rigid body.
     Dynamic,
+}
+
+/// Collider shape used by a physics-enabled spatial node.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Collider {
+    /// Box sized by the node's local scale. This is the legacy shape.
+    #[default]
+    Cuboid,
+    /// Sphere with a radius of half the largest axis scale.
+    Sphere,
+    /// Y-aligned capsule with hemispherical caps.
+    Capsule,
 }
 
 /// Project-owned static triangle mesh in metres, imported from a glTF primitive.
@@ -104,6 +119,18 @@ pub struct SpatialNode {
     pub roughness: f32,
     /// Physics body type.
     pub body: Body,
+    /// Collider shape. Defaults to the original cuboid for older documents.
+    #[serde(default)]
+    pub collider: Collider,
+    /// Reports overlaps without applying contact forces.
+    #[serde(default)]
+    pub trigger: bool,
+    /// Contact friction. The legacy value is preserved for older documents.
+    #[serde(default)]
+    pub friction: f32,
+    /// Contact restitution. The legacy value is preserved for older documents.
+    #[serde(default)]
+    pub restitution: f32,
     /// Vertical field of view in degrees.
     pub fov: f32,
 }
@@ -122,6 +149,10 @@ impl Default for SpatialNode {
             metallic: 0.,
             roughness: 0.5,
             body: Body::None,
+            collider: Collider::Cuboid,
+            trigger: false,
+            friction: 0.65,
+            restitution: 0.12,
             fov: 45.,
         }
     }
@@ -187,7 +218,11 @@ impl SpatialNode {
         }
         ensure!(
             self.role == Role::Cube || self.body == Body::None,
-            "Only cubes support cuboid physics"
+            "Only cubes support physics colliders"
+        );
+        ensure!(
+            (0.0..=10.0).contains(&self.friction) && (0.0..=1.0).contains(&self.restitution),
+            "Invalid spatial physics material"
         );
         Ok(())
     }
