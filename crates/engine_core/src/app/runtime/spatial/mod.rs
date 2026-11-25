@@ -26,6 +26,7 @@ impl Spatial {
             extent: Vec3::new(3.6, 0.24, 2.65),
             orientation: Quat::IDENTITY,
             velocity: Vec3::ZERO,
+            angular_velocity: Vec3::ZERO,
             dynamic: false,
         };
         let cyan = Cuboid {
