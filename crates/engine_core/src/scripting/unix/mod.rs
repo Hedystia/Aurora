@@ -91,7 +91,7 @@ impl Session {
         [x, y]: [f32; 2],
         detail: u64,
     ) -> Result<Reply> {
-        self.exchange_control(kind, binding, node, [x.into(), y.into()], detail)
+        self.exchange_control(kind, binding, node, [x.into(), y.into(), 0.0], detail)
     }
 
     pub(crate) fn exchange_control(
@@ -99,7 +99,7 @@ impl Session {
         kind: Kind,
         binding: u32,
         node: u64,
-        [x, y]: [f64; 2],
+        [x, y, z]: [f64; 3],
         detail: u64,
     ) -> Result<Reply> {
         ensure!(binding < BINDING_ENABLED, "Too many script bindings");
@@ -112,6 +112,7 @@ impl Session {
                 node,
                 x,
                 y,
+                z,
                 detail,
                 binding,
             })
@@ -162,6 +163,14 @@ fn decode_command(reply: &Envelope) -> Result<Option<ScriptCommand>> {
             } else {
                 Ok(Some(ScriptCommand::SetLinearVelocity(vector)))
             }
+        }
+        Kind::SetLinearVelocity3D => {
+            let vector = [reply.x as f32, reply.y as f32, reply.z as f32];
+            ensure!(
+                vector.iter().all(|value| value.is_finite()),
+                "Script vector must be finite"
+            );
+            Ok(Some(ScriptCommand::SetLinearVelocity3D(vector)))
         }
         Kind::PlayOneShot => Ok(Some(ScriptCommand::PlayOneShot(reply.detail.try_into()?))),
         Kind::Pause => Ok(Some(ScriptCommand::Pause)),
@@ -337,6 +346,7 @@ mod tests {
             node: 0,
             x,
             y,
+            z: 0.0,
             detail,
             binding: 0,
         };
