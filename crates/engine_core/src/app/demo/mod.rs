@@ -254,7 +254,8 @@ impl Demo {
                     | Command::ShowLoading(_)
                     | Command::ConfigSetStart(_)
                     | Command::ConfigSetChunk(..)
-                    | Command::ConfigSetEnd(_),
+                    | Command::ConfigSetEnd(_)
+                    | Command::SetLinearVelocity3D(_),
                 ) => {
                     anyhow::bail!("Director commands require an authored scene");
                 }
