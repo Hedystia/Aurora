@@ -32,10 +32,10 @@ pub(crate) enum Command {
     RemoveComponent(u32, u32),
 }
 
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "linux")]
-pub(crate) use linux::Session;
+#[cfg(unix)]
+mod unix;
+#[cfg(unix)]
+pub(crate) use unix::Session;
 
 /// Configures the game logic process launched by the player.
 pub enum Script {
@@ -45,15 +45,15 @@ pub enum Script {
     Development(PathBuf),
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 pub(crate) struct Session;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 impl Session {
     pub(crate) fn begin_shutdown(&mut self) {}
 
     pub(crate) fn spawn(_: &Script) -> anyhow::Result<Self> {
-        anyhow::bail!("Script IPC is currently available on Linux")
+        anyhow::bail!("Script IPC is currently available on Unix hosts (Linux and macOS)")
     }
 
     pub(crate) fn exchange_control(
@@ -64,7 +64,7 @@ impl Session {
         _: [f64; 2],
         _: u64,
     ) -> anyhow::Result<Reply> {
-        anyhow::bail!("Script IPC is currently available on Linux")
+        anyhow::bail!("Script IPC is currently available on Unix hosts (Linux and macOS)")
     }
 
     pub(crate) fn exchange(
@@ -75,6 +75,6 @@ impl Session {
         _: [f32; 2],
         _: u64,
     ) -> anyhow::Result<Reply> {
-        anyhow::bail!("Script IPC is currently available on Linux")
+        anyhow::bail!("Script IPC is currently available on Unix hosts (Linux and macOS)")
     }
 }
