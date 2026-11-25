@@ -50,6 +50,10 @@ pub enum Collider {
     Sphere,
     /// Y-aligned capsule with hemispherical caps.
     Capsule,
+    /// Static triangle mesh from the node's geometry.
+    Mesh,
+    /// Dynamic convex hull enclosing the node's geometry.
+    ConvexHull,
 }
 
 /// Project-owned static triangle mesh in metres, imported from a glTF primitive.
@@ -85,6 +89,69 @@ impl Geometry {
                     .is_none_or(|uvs| uvs.len() == self.positions.len()
                         && uvs.iter().flatten().all(|v| v.is_finite())),
             "Invalid triangle mesh"
+        );
+        Ok(())
+    }
+}
+
+/// Constraint type between two spatial bodies.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JointKind {
+    /// Locks the two bodies together.
+    #[default]
+    Fixed,
+    /// Ball-and-socket joint.
+    Ball,
+    /// Hinge rotating around the authored axis.
+    Hinge,
+    /// Slider translating along the authored axis.
+    Slider,
+}
+
+/// A scene-level constraint between two authored bodies.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JointFile {
+    /// First body's node index in document order.
+    pub a: usize,
+    /// Second body's node index in document order.
+    pub b: usize,
+    /// Constraint type.
+    #[serde(default)]
+    pub kind: JointKind,
+    /// Anchor in the first body's local space.
+    #[serde(default)]
+    pub anchor_a: [f32; 3],
+    /// Anchor in the second body's local space.
+    #[serde(default)]
+    pub anchor_b: [f32; 3],
+    /// Hinge or slider axis.
+    #[serde(default = "default_joint_axis")]
+    pub axis: [f32; 3],
+}
+
+fn default_joint_axis() -> [f32; 3] {
+    [0.0, 1.0, 0.0]
+}
+
+impl JointFile {
+    pub(crate) fn validate(&self, node_count: usize) -> Result<()> {
+        ensure!(
+            self.a < node_count && self.b < node_count && self.a != self.b,
+            "Invalid joint endpoints"
+        );
+        ensure!(
+            self.anchor_a
+                .iter()
+                .chain(&self.anchor_b)
+                .chain(&self.axis)
+                .all(|v| v.is_finite()),
+            "Invalid joint coordinates"
+        );
+        ensure!(
+            self.axis.iter().any(|v| *v != 0.0),
+            "Joint axis must be nonzero"
         );
         Ok(())
     }
@@ -216,9 +283,21 @@ impl SpatialNode {
         if let Some(mesh) = &self.geometry {
             mesh.validate()?;
         }
+        let shaped = matches!(self.collider, Collider::Mesh | Collider::ConvexHull);
         ensure!(
-            self.role == Role::Cube || self.body == Body::None,
-            "Only cubes support physics colliders"
+            self.body == Body::None
+                || self.role == Role::Cube
+                || (self.role == Role::Mesh && shaped),
+            "Only cubes and meshes support physics colliders"
+        );
+        ensure!(
+            !matches!(self.collider, Collider::Mesh | Collider::ConvexHull)
+                || self.geometry.is_some(),
+            "Mesh and convex colliders require triangle geometry"
+        );
+        ensure!(
+            self.collider != Collider::Mesh || self.body != Body::Dynamic,
+            "Mesh colliders require a fixed body; use a convex hull for moving bodies"
         );
         ensure!(
             (0.0..=10.0).contains(&self.friction) && (0.0..=1.0).contains(&self.restitution),
