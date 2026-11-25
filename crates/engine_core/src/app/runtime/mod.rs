@@ -23,6 +23,7 @@ use crate::{
     input::InputEvent,
     physics3d::Backend,
     render::{Cube, Frame},
+    save::parent_dir,
     scene::{Affine2D, NodeState, Sprite, SpriteAppearance, Transform2D},
     scripting::{Command, Script, Session},
 };
@@ -84,6 +85,11 @@ impl Runtime {
                 pointers: BTreeMap::new(),
                 mutations: VecDeque::new(),
                 pending_text: BTreeMap::new(),
+                pending_sprites: BTreeMap::new(),
+                dynamic_frames: BTreeMap::new(),
+                asset_refs: BTreeMap::new(),
+                next_asset: 0x8000_0000,
+                pending_asset_events: Vec::new(),
                 next_binding: 0,
                 tearing_down: false,
                 transformed: BTreeSet::new(),
@@ -291,6 +297,11 @@ pub(super) struct Authored {
     pointers: BTreeMap<u64, (u32, [f32; 2])>,
     mutations: VecDeque<Mutation>,
     pending_text: BTreeMap<u32, Vec<u8>>,
+    pending_sprites: BTreeMap<u32, Vec<u8>>,
+    dynamic_frames: BTreeMap<u64, crate::assets::AssetId>,
+    asset_refs: BTreeMap<u64, u32>,
+    next_asset: u64,
+    pending_asset_events: Vec<(u32, u64, u64, bool)>,
     next_binding: u32,
     tearing_down: bool,
     /// Script references whose local transform the script already knows.
@@ -306,6 +317,11 @@ impl Authored {
         self.pointers.clear();
         self.mutations.clear();
         self.pending_text.clear();
+        self.pending_sprites.clear();
+        self.dynamic_frames.clear();
+        self.asset_refs.clear();
+        self.pending_asset_events.clear();
+        self.next_asset = 0x8000_0000;
         self.transformed.clear();
         for (index, &owner) in self.script_nodes.iter().enumerate() {
             let node = self
@@ -810,10 +826,87 @@ impl Authored {
             }
             Command::SelectFrame(index, frame) => {
                 let target = self.target(index)?;
-                self.gameplay
-                    .as_ref()
-                    .context("Scene has no gameplay resources")?
-                    .select_frame(&mut self.director, target, frame)?;
+                if frame >= 0x8000_0000 {
+                    let id = *self
+                        .dynamic_frames
+                        .get(&(frame as u64))
+                        .context("Unknown asset handle")?;
+                    let mut sprite = self
+                        .director
+                        .scene()
+                        .sprite(target)?
+                        .context("Missing sprite")?;
+                    sprite.texture = id;
+                    self.director.scene_mut().set_sprite(target, sprite)?;
+                } else {
+                    self.gameplay
+                        .as_ref()
+                        .context("Scene has no gameplay resources")?
+                        .select_frame(&mut self.director, target, frame)?;
+                }
+                return Ok(true);
+            }
+            Command::LoadSpriteStart(request) => {
+                anyhow::ensure!(
+                    self.pending_sprites.insert(request, Vec::new()).is_none(),
+                    "Sprite load is already in progress"
+                );
+                return Ok(true);
+            }
+            Command::LoadSpriteChunk(request, bytes, length) => {
+                let path = self
+                    .pending_sprites
+                    .get_mut(&request)
+                    .context("Sprite chunk has no matching start")?;
+                let length = usize::from(length);
+                anyhow::ensure!(
+                    (1..=bytes.len()).contains(&length) && path.len() + length <= 4096,
+                    "Sprite path exceeds its size limit"
+                );
+                path.extend_from_slice(&bytes[..length]);
+                return Ok(true);
+            }
+            Command::LoadSpriteEnd(request) => {
+                let bytes = self
+                    .pending_sprites
+                    .remove(&request)
+                    .context("Sprite load has no matching start")?;
+                let relative = String::from_utf8(bytes).context("Sprite path is not UTF-8")?;
+                let root = parent_dir(self.director.scene_path()).to_path_buf();
+                let target = root.join(&relative);
+                anyhow::ensure!(target.starts_with(&root), "Asset path escapes the project");
+                let binding = self
+                    .bindings
+                    .iter()
+                    .find(|(_, entry)| entry.node == node)
+                    .map(|(&binding, _)| binding)
+                    .context("Sprite load has no owning component")?;
+                let result = self.director.assets_mut().import_file(&target);
+                let (handle, failed) = match result {
+                    Ok(id) => {
+                        let handle = self.next_asset;
+                        self.next_asset += 1;
+                        self.dynamic_frames.insert(handle, id);
+                        *self.asset_refs.entry(handle).or_insert(0) += 1;
+                        (handle, false)
+                    }
+                    Err(_) => (0, true),
+                };
+                self.pending_asset_events
+                    .push((binding, u64::from(request), handle, failed));
+                return Ok(true);
+            }
+            Command::ReleaseAsset(handle) => {
+                if let std::collections::btree_map::Entry::Occupied(mut entry) =
+                    self.asset_refs.entry(handle)
+                {
+                    let remaining = entry.get_mut();
+                    *remaining = remaining.saturating_sub(1);
+                    if *remaining == 0 {
+                        entry.remove();
+                        self.dynamic_frames.remove(&handle);
+                    }
+                }
                 return Ok(true);
             }
             Command::QueueSound(index) => {
@@ -1054,7 +1147,26 @@ impl Authored {
         if let Some(gameplay) = &mut self.gameplay {
             gameplay.step_audio();
         }
-        self.dispatch_contacts()
+        self.dispatch_contacts()?;
+        self.flush_asset_events()
+    }
+
+    /// Delivers completed on-demand imports to their requesting components.
+    fn flush_asset_events(&mut self) -> Result<()> {
+        let events = std::mem::take(&mut self.pending_asset_events);
+        for (binding, request, handle, failed) in events {
+            let Some(node) = self.bindings.get(&binding).map(|entry| entry.node) else {
+                continue;
+            };
+            self.dispatch_raw(
+                binding,
+                node,
+                Kind::AssetLoaded,
+                request,
+                Some([handle as f64, if failed { 1.0 } else { 0.0 }]),
+            )?;
+        }
+        Ok(())
     }
 
     /// Delivers one pointer phase to the node captured for the pointer identity.
