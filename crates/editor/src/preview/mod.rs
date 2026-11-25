@@ -1388,6 +1388,7 @@ export class Driver extends Component {
                     },
                 ],
             }],
+            animations: Vec::new(),
         };
         prefab.save(&temp.path().join("Marker.prefab"))?;
         project
