@@ -196,8 +196,29 @@ impl Director {
         self.loaded.spatial_physics.set_velocity(node, velocity)
     }
 
+    pub(crate) fn set_angular_velocity_3d(
+        &mut self,
+        node: EntityId,
+        velocity: [f32; 3],
+    ) -> Result<()> {
+        self.loaded
+            .spatial_physics
+            .set_angular_velocity(node, velocity)
+    }
+
     pub(crate) fn physics3d_contacts(&self) -> &[crate::physics3d::authored::Contact] {
         self.loaded.spatial_physics.contacts()
+    }
+
+    pub(crate) fn physics3d_raycast(
+        &self,
+        origin: [f32; 3],
+        direction: [f32; 3],
+        max_distance: f32,
+    ) -> Result<Option<crate::physics3d::authored::RayHit3D>> {
+        self.loaded
+            .spatial_physics
+            .raycast(origin, direction, max_distance)
     }
 
     /// Starts an authored clip from its first sample.
@@ -242,6 +263,7 @@ mod tests {
         let path = scratch.path().join("text.scene");
         SceneFile {
             version: VERSION,
+            joints: Vec::new(),
             scene_kind: crate::save::SceneKind::TwoD,
             nodes: vec![NodeFile {
                 name: "Label".into(),
@@ -391,6 +413,7 @@ mod tests {
         let path = scratch.path().join("spatial.scene");
         SceneFile {
             version: VERSION,
+            joints: Vec::new(),
             scene_kind: crate::save::SceneKind::ThreeD,
             nodes: vec![NodeFile {
                 name: "Cube".into(),
