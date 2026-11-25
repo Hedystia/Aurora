@@ -84,6 +84,10 @@ Protocol 12 streams local node transforms to the script and adds a per-tick twee
 
 Protocol 13 adds queued ScaleNode and RotateNode edits, so scripts and tweens can change local scale and rotation alongside position. `NodeRef` and `Node` gain `setScale`, `setAngle`, and writable `scaleX`, `scaleY`, and `angle` (degrees), and `tween` drives all three channels. The demo launcher now advances tweens and drains queued edits. `@property` accepts component classes and the editor serializes component references. Existing native scripts must be rebuilt.
 
+## 2026-11-25 · Project startup settings
+
+Project → Project Settings stores a relative default scene in `.aurora/project-session.json`. Opening a project folder restores the cached last-edited scene, falls back to that default, then to `main.scene`. Asset creation at the project root no longer reports a path escape, and the run bar shows one play icon.
+
 ## 2026-11-25 · Script protocol 15
 
 Protocol 15 adds `SetLoading`, `ConfigSet`, `ConfigValue` and `SecretValue`. Scripts can toggle a host-rendered dim overlay that swallows gameplay input, read host-supplied config and secret values, and persist config writes through the host. Config is a project-local JSON file passed with `--config`; secrets are a per-user owner-only file passed with `--secrets` and are never bundled or written into generated sources. The editor File menu gains **New Scene**, and created scenes open automatically. Existing native scripts must be rebuilt because the player rejects older protocol versions.
