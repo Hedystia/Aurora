@@ -14,7 +14,7 @@ workspace = true
 [dependencies]
 bincode.workspace = true
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 anyhow.workspace = true
 memmap2.workspace = true
 nix.workspace = true
