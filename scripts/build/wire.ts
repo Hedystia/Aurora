@@ -1,5 +1,5 @@
-import { frameBytes, protocol, kindStart, kindUpdate, kindFixedUpdate, kindAck, kindSetPosition, kindCollisionEnter, kindCollisionExit, kindKeyDown, kindKeyUp, kindTouchStart, kindSetLinearVelocity, kindPlayOneShot, kindAnimationEvent, kindPause, kindResume, kindChangeScene, kindFlushCommands, kindMoveNode, kindShowNode, kindSelectFrame, kindQueueSound, kindRecordScore, kindRestoreScore, kindLoad, kindLateUpdate, kindEnable, kindDisable, kindDestroy, kindSchedule, kindPollEnabled, kindProcessResources, kindPointerTouch, kindPointerMove, kindPointerEnd, kindPointerCancel, kindPointerNodeMove, kindPointerNodeEnd, kindPointerNodeCancel, kindSceneStart, kindMouseWheel, kindPointerNodeWheel, kindNodeTransform, kindNodeScaleRotation, kindTween, kindScaleNode, kindRotateNode, kindSetText, kindSetLoading, kindConfigSet, kindConfigValue, kindSecretValue, kindNodeTransform3D, kindNodeRotation3D, kindNodeScale3D, kindSetLinearVelocity3D, kindCollisionEnter3D, kindCollisionExit3D, bindingEnabled } from "../../.aurora/scripts/metadata/protocol.mts";
-import { Component, Collider2D, Collider3D, InputEventType, NodeHandle, advanceTweens, setScriptCallbackOwner, setScriptNodeTransform, setScriptNodeScaleRotation, setScriptNodeTransform3D, advanceGestures, dispatchPointerEvent, dispatchWheelEvent, resetScriptScene, resetGestures, config, secrets } from "../aurora/index.ts";
+import { frameBytes, protocol, kindStart, kindUpdate, kindFixedUpdate, kindAck, kindSetPosition, kindCollisionEnter, kindCollisionExit, kindKeyDown, kindKeyUp, kindTouchStart, kindSetLinearVelocity, kindPlayOneShot, kindAnimationEvent, kindPause, kindResume, kindChangeScene, kindFlushCommands, kindMoveNode, kindShowNode, kindSelectFrame, kindQueueSound, kindRecordScore, kindRestoreScore, kindLoad, kindLateUpdate, kindEnable, kindDisable, kindDestroy, kindSchedule, kindPollEnabled, kindProcessResources, kindPointerTouch, kindPointerMove, kindPointerEnd, kindPointerCancel, kindPointerNodeMove, kindPointerNodeEnd, kindPointerNodeCancel, kindSceneStart, kindMouseWheel, kindPointerNodeWheel, kindNodeTransform, kindNodeScaleRotation, kindTween, kindScaleNode, kindRotateNode, kindSetText, kindSetLoading, kindConfigSet, kindConfigValue, kindSecretValue, kindNodeTransform3D, kindNodeRotation3D, kindNodeScale3D, kindSetLinearVelocity3D, kindCollisionEnter3D, kindCollisionExit3D, kindLoadSprite, kindAssetLoaded, kindReleaseAsset, bindingEnabled } from "../../.aurora/scripts/metadata/protocol.mts";
+import { Component, Collider2D, Collider3D, InputEventType, NodeHandle, advanceTweens, setScriptCallbackOwner, setScriptNodeTransform, setScriptNodeScaleRotation, setScriptNodeTransform3D, advanceGestures, dispatchPointerEvent, dispatchWheelEvent, resetScriptScene, resetGestures, resolveSpriteLoad, clearSpriteLoads, config, secrets } from "../aurora/index.ts";
 import { kindQueueCreateNode, kindQueueInstantiatePrefab, kindQueueReparentNode, kindQueueDestroyNode, kindQueueAddComponent, kindQueueRemoveComponent, kindRegisterComponent } from "../../.aurora/scripts/metadata/protocol.mts";
 
 import { kindRegisterPrefabNode, kindRegisterPrefabComponent, kindReleasePrefabNode, kindReleasePrefabComponent, kindUpdatePrefabParent } from "../../.aurora/scripts/metadata/protocol.mts";
@@ -101,6 +101,17 @@ export async function run(
       if (reply(bytes) !== 1) throw new Error("Aurora spatial transform reply failed");
       continue;
     }
+    if (kind === kindAssetLoaded) {
+      resolveSpriteLoad(
+        view.getUint32(48, true),
+        view.getFloat64(24, true),
+        view.getFloat64(32, true) !== 0,
+      );
+      view.setUint32(12, kindAck, true);
+      view.setUint32(56, binding + bindingEnabled, true);
+      if (reply(bytes) !== 1) throw new Error("Aurora asset reply failed");
+      continue;
+    }
     if (kind === kindConfigValue || kind === kindSecretValue) {
       const operation = view.getUint32(52, true);
       const entry = view.getUint32(48, true);
@@ -117,6 +128,7 @@ export async function run(
       secrets.reset();
       resetScriptScene();
       resetGestures();
+      clearSpriteLoads();
       view.setUint32(12, kindAck, true);
       view.setUint32(56, binding + bindingEnabled, true);
       if (reply(bytes) !== 1) throw new Error("Aurora scene reply failed");
@@ -291,6 +303,8 @@ export async function run(
       else if (edit.kind === 12) queued = kindRotateNode;
       else if (edit.kind >= 13 && edit.kind <= 15) queued = kindSetText;
       else if (edit.kind >= 16 && edit.kind <= 18) queued = kindConfigSet;
+      else if (edit.kind >= 19 && edit.kind <= 21) queued = kindLoadSprite;
+      else if (edit.kind === 22) queued = kindReleaseAsset;
       view.setUint32(12, queued, true);
       let detail = 0n;
       let x = 0;
@@ -311,6 +325,16 @@ export async function run(
         const length = Math.floor(edit.y / 2 ** 48);
         if (!Number.isInteger(length) || length < 1 || length > 12) {
           throw new Error("Invalid config chunk length");
+        }
+        detail = (BigInt(length) << 32n) | BigInt(edit.target);
+        x = edit.x;
+        y = edit.y - length * 2 ** 48;
+      } else if (edit.kind === 19) detail = BigInt(edit.target);
+      else if (edit.kind === 21) detail = (13n << 32n) | BigInt(edit.target);
+      else if (edit.kind === 20) {
+        const length = Math.floor(edit.y / 2 ** 48);
+        if (!Number.isInteger(length) || length < 1 || length > 12) {
+          throw new Error("Invalid sprite chunk length");
         }
         detail = (BigInt(length) << 32n) | BigInt(edit.target);
         x = edit.x;
