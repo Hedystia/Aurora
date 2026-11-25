@@ -4,16 +4,20 @@ use crate::{
     ecs::EntityId,
     scene::{
         Scene,
-        spatial::{Body, Collider, matrices},
+        spatial::{Body, Collider, Geometry, JointKind, matrices},
     },
 };
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use glam::{EulerRot, Mat4, Vec3};
 use rapier3d::prelude::{
-    ActiveCollisionTypes, ColliderBuilder, ColliderHandle, PhysicsWorld, Pose, RigidBodyBuilder,
-    RigidBodyHandle,
+    ActiveCollisionTypes, ColliderBuilder, ColliderHandle, FixedJointBuilder, ImpulseJointHandle,
+    PhysicsWorld, Pose, PrismaticJointBuilder, QueryFilter, Ray, RevoluteJointBuilder,
+    RigidBodyBuilder, RigidBodyHandle, SphericalJointBuilder,
 };
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    sync::Arc,
+};
 
 /// A contact or trigger transition for one scene tick.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,6 +26,27 @@ pub(crate) struct Contact {
     pub entered: bool,
     /// True when at least one collider in the pair is a trigger.
     pub trigger: bool,
+}
+
+/// Authored constraint between two scene bodies.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Joint {
+    pub a: EntityId,
+    pub b: EntityId,
+    pub kind: JointKind,
+    pub anchor_a: [f32; 3],
+    pub anchor_b: [f32; 3],
+    pub axis: [f32; 3],
+}
+
+/// Result of a world-space raycast against authored colliders.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RayHit3D {
+    /// Collider owner retained for diagnostics and future script delivery.
+    #[allow(dead_code)]
+    pub node: EntityId,
+    pub distance: f32,
+    pub normal: [f32; 3],
 }
 
 #[derive(Clone, Copy)]
@@ -34,6 +59,7 @@ struct AuthoredBody {
     friction: f32,
     restitution: f32,
     scale: Vec3,
+    geometry: Option<usize>,
 }
 
 #[derive(Default)]
@@ -42,8 +68,12 @@ pub(crate) struct AuthoredWorld {
     handles: BTreeMap<EntityId, AuthoredBody>,
     contacts: BTreeSet<(EntityId, EntityId)>,
     transitions: Vec<Contact>,
+    joints: Vec<Joint>,
+    joint_handles: Vec<ImpulseJointHandle>,
     pending: BTreeMap<EntityId, [f32; 3]>,
+    pending_angular: BTreeMap<EntityId, [f32; 3]>,
     kinematic: BTreeMap<EntityId, [f32; 3]>,
+    kinematic_spin: BTreeMap<EntityId, [f32; 3]>,
 }
 
 impl AuthoredWorld {
@@ -62,6 +92,66 @@ impl AuthoredWorld {
         Ok(())
     }
 
+    /// Queues angular velocity in degrees per second for a dynamic or kinematic body.
+    pub(crate) fn set_angular_velocity(
+        &mut self,
+        node: EntityId,
+        velocity: [f32; 3],
+    ) -> Result<()> {
+        ensure!(
+            velocity.iter().all(|value| value.is_finite()),
+            "3D angular velocity must be finite"
+        );
+        self.pending_angular.insert(node, velocity);
+        Ok(())
+    }
+
+    /// Replaces the authored constraints applied on the next step.
+    pub(crate) fn set_joints(&mut self, joints: Vec<Joint>) {
+        self.joints = joints;
+    }
+
+    /// Casts a world-space ray against the authored colliders.
+    pub(crate) fn raycast(
+        &self,
+        origin: [f32; 3],
+        direction: [f32; 3],
+        max_distance: f32,
+    ) -> Result<Option<RayHit3D>> {
+        let Some(world) = &self.world else {
+            return Ok(None);
+        };
+        let direction = Vec3::from_array(direction);
+        ensure!(
+            origin.iter().all(|v| v.is_finite())
+                && direction.to_array().iter().all(|v| v.is_finite())
+                && direction.length_squared() > 1e-8
+                && max_distance.is_finite()
+                && max_distance > 0.0,
+            "Invalid raycast parameters"
+        );
+        let direction = direction.normalize();
+        let ray = Ray::new(Vec3::from_array(origin), direction);
+        let Some((collider, hit)) =
+            world.cast_ray_and_get_normal(&ray, max_distance, true, QueryFilter::default())
+        else {
+            return Ok(None);
+        };
+        let Some(node) = self
+            .handles
+            .iter()
+            .find(|(_, body)| body.collider == collider)
+            .map(|(&node, _)| node)
+        else {
+            return Ok(None);
+        };
+        Ok(Some(RayHit3D {
+            node,
+            distance: hit.time_of_impact,
+            normal: hit.normal.to_array(),
+        }))
+    }
+
     /// Contact and trigger transitions produced by the most recent step.
     pub(crate) fn contacts(&self) -> &[Contact] {
         &self.transitions
@@ -70,10 +160,11 @@ impl AuthoredWorld {
     fn collider(
         shape: Collider,
         scale: Vec3,
+        geometry: Option<&Geometry>,
         trigger: bool,
         friction: f32,
         restitution: f32,
-    ) -> ColliderBuilder {
+    ) -> Result<ColliderBuilder> {
         let builder = match shape {
             Collider::Cuboid => {
                 let half = scale * 0.5;
@@ -85,12 +176,34 @@ impl AuthoredWorld {
                 let half_height = (scale.y * 0.5 - radius).max(0.0);
                 ColliderBuilder::capsule_y(half_height, radius)
             }
+            Collider::Mesh | Collider::ConvexHull => {
+                let geometry = geometry.context("Mesh collider needs geometry")?;
+                let points: Vec<Vec3> = geometry
+                    .positions
+                    .iter()
+                    .map(|point| Vec3::from_array(*point) * scale)
+                    .collect();
+                if shape == Collider::ConvexHull {
+                    ColliderBuilder::convex_hull(&points)
+                        .context("Convex hull needs non-degenerate geometry")?
+                } else {
+                    let indices: Vec<[u32; 3]> = geometry
+                        .indices
+                        .as_chunks::<3>()
+                        .0
+                        .iter()
+                        .map(|chunk| [chunk[0], chunk[1], chunk[2]])
+                        .collect();
+                    ColliderBuilder::trimesh(points, indices)
+                        .context("Invalid triangle mesh collider")?
+                }
+            }
         };
-        builder
+        Ok(builder
             .sensor(trigger)
             .active_collision_types(ActiveCollisionTypes::all())
             .friction(friction)
-            .restitution(restitution)
+            .restitution(restitution))
     }
 
     pub(crate) fn step(&mut self, scene: &mut Scene) -> Result<()> {
@@ -112,15 +225,28 @@ impl AuthoredWorld {
                 self.kinematic.insert(node, velocity);
             }
         }
-        self.kinematic.retain(|node, _| {
+        for (&node, &spin) in &self.pending_angular {
+            if nodes.iter().any(|state| {
+                state.id == node
+                    && state
+                        .spatial
+                        .as_ref()
+                        .is_some_and(|s| s.body == Body::Kinematic)
+            }) {
+                self.kinematic_spin.insert(node, spin);
+            }
+        }
+        let is_kinematic = |node: EntityId| {
             nodes.iter().any(|state| {
-                state.id == *node
+                state.id == node
                     && state
                         .spatial
                         .as_ref()
                         .is_some_and(|s| s.body == Body::Kinematic)
             })
-        });
+        };
+        self.kinematic.retain(|node, _| is_kinematic(*node));
+        self.kinematic_spin.retain(|node, _| is_kinematic(*node));
         for node in &mut nodes {
             let Some(velocity) = self.kinematic.get(&node.id) else {
                 continue;
@@ -130,6 +256,11 @@ impl AuthoredWorld {
             };
             for (value, delta) in spatial.position.iter_mut().zip(velocity) {
                 *value += delta * super::STEP;
+            }
+            if let Some(spin) = self.kinematic_spin.get(&node.id) {
+                for (value, delta) in spatial.rotation.iter_mut().zip(spin) {
+                    *value += delta * super::STEP;
+                }
             }
             scene.set_spatial(node.id, Some(spatial.clone()))?;
             node.spatial = Some(spatial);
@@ -168,7 +299,11 @@ impl AuthoredWorld {
                     && body.trigger == s.trigger
                     && (body.friction - s.friction).abs() < 0.0001
                     && (body.restitution - s.restitution).abs() < 0.0001
-                    && body.scale.abs_diff_eq(scale, 0.0001);
+                    && body.scale.abs_diff_eq(scale, 0.0001)
+                    && body.geometry
+                        == s.geometry
+                            .as_ref()
+                            .map(|geometry| Arc::as_ptr(geometry) as usize);
                 if unchanged {
                     match s.body {
                         Body::Fixed | Body::Kinematic => {
@@ -185,7 +320,14 @@ impl AuthoredWorld {
                 Body::Kinematic => RigidBodyBuilder::kinematic_position_based(),
                 Body::Fixed | Body::None => RigidBodyBuilder::fixed(),
             };
-            let collider = Self::collider(s.collider, scale, s.trigger, s.friction, s.restitution);
+            let collider = Self::collider(
+                s.collider,
+                scale,
+                s.geometry.as_deref(),
+                s.trigger,
+                s.friction,
+                s.restitution,
+            )?;
             let (handle, collider_handle) = world.insert(builder.pose(pose), collider);
             self.handles.insert(
                 node.id,
@@ -198,6 +340,10 @@ impl AuthoredWorld {
                     friction: s.friction,
                     restitution: s.restitution,
                     scale,
+                    geometry: s
+                        .geometry
+                        .as_ref()
+                        .map(|geometry| Arc::as_ptr(geometry) as usize),
                 },
             );
         }
@@ -208,6 +354,44 @@ impl AuthoredWorld {
             world.remove_body(body.handle);
             false
         });
+        for handle in self.joint_handles.drain(..) {
+            world.impulse_joints.remove(handle, true);
+        }
+        for joint in &self.joints {
+            let (Some(first), Some(second)) =
+                (self.handles.get(&joint.a), self.handles.get(&joint.b))
+            else {
+                continue;
+            };
+            let anchor_a = Vec3::from_array(joint.anchor_a);
+            let anchor_b = Vec3::from_array(joint.anchor_b);
+            let data: rapier3d::prelude::GenericJoint = match joint.kind {
+                JointKind::Fixed => FixedJointBuilder::new()
+                    .local_anchor1(anchor_a)
+                    .local_anchor2(anchor_b)
+                    .build()
+                    .into(),
+                JointKind::Ball => SphericalJointBuilder::new()
+                    .local_anchor1(anchor_a)
+                    .local_anchor2(anchor_b)
+                    .build()
+                    .into(),
+                JointKind::Hinge => RevoluteJointBuilder::new(Vec3::from_array(joint.axis))
+                    .local_anchor1(anchor_a)
+                    .local_anchor2(anchor_b)
+                    .build()
+                    .into(),
+                JointKind::Slider => PrismaticJointBuilder::new(Vec3::from_array(joint.axis))
+                    .local_anchor1(anchor_a)
+                    .local_anchor2(anchor_b)
+                    .build()
+                    .into(),
+            };
+            let handle = world
+                .impulse_joints
+                .insert(first.handle, second.handle, data, true);
+            self.joint_handles.push(handle);
+        }
         for (&node, &velocity) in &self.pending {
             if let Some(body) = self.handles.get(&node)
                 && body.kind == Body::Dynamic
@@ -215,7 +399,16 @@ impl AuthoredWorld {
                 world.bodies[body.handle].set_linvel(Vec3::from_array(velocity), true);
             }
         }
+        for (&node, &spin) in &self.pending_angular {
+            if let Some(body) = self.handles.get(&node)
+                && body.kind == Body::Dynamic
+            {
+                let radians = spin.map(f32::to_radians);
+                world.bodies[body.handle].set_angvel(Vec3::from_array(radians), true);
+            }
+        }
         self.pending.clear();
+        self.pending_angular.clear();
         world.step();
         let owners: HashMap<ColliderHandle, EntityId> = self
             .handles
@@ -320,6 +513,7 @@ impl AuthoredWorld {
 mod tests {
     use super::*;
     use crate::{director::Director, save::SceneFile};
+    use anyhow::Context;
 
     #[test]
     fn script_velocity_moves_an_authored_dynamic_cuboid() -> Result<()> {
@@ -454,6 +648,86 @@ mod tests {
                 "{shape} collider did not settle"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn fixed_joint_keeps_two_bodies_together() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("joint.scene");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"nodes":[
+          {"name":"Floor","spatial":{"role":"cube","body":"fixed","scale":[8,1,8]}},
+          {"name":"First","spatial":{"role":"cube","body":"dynamic","position":[0,3,0],"scale":[1,1,1]}},
+          {"name":"Second","spatial":{"role":"cube","body":"dynamic","position":[0,4,0],"scale":[1,1,1]}}
+        ],"joints":[{"a":1,"b":2,"kind":"fixed"}]}"#,
+        )?;
+        let mut director = Director::new(vec![path], None)?;
+        for _ in 0..180 {
+            director.step()?;
+        }
+        let nodes = director.scene().snapshot()?;
+        let first = nodes[1].spatial.as_ref().context("first body")?.position;
+        let second = nodes[2].spatial.as_ref().context("second body")?.position;
+        let distance = Vec3::from_array(first).distance(Vec3::from_array(second));
+        assert!(
+            distance < 2.0,
+            "joint did not keep the bodies together: {distance}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn raycast_reports_the_hit_node_and_distance() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("ray.scene");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"nodes":[
+          {"name":"Floor","spatial":{"role":"cube","body":"fixed","position":[0,0,0],"scale":[8,1,8]}}
+        ]}"#,
+        )?;
+        let mut director = Director::new(vec![path], None)?;
+        director.step()?;
+        let hit = director
+            .physics3d_raycast([0.0, 4.0, 0.0], [0.0, -1.0, 0.0], 10.0)?
+            .context("ray did not hit the floor")?;
+        assert_eq!(hit.node, director.script_node(0)?);
+        assert!((hit.distance - 3.5).abs() < 0.05);
+        assert!(
+            director
+                .physics3d_raycast([0.0, 4.0, 0.0], [1.0, 0.0, 0.0], 10.0)?
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn script_angular_velocity_spins_a_dynamic_cuboid() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("spin.scene");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"nodes":[
+          {"name":"Floor","spatial":{"role":"cube","body":"fixed","scale":[8,1,8]}},
+          {"name":"Top","spatial":{"role":"cube","body":"dynamic","position":[0,1,0],"scale":[1,1,1]}}
+        ]}"#,
+        )?;
+        let mut director = Director::new(vec![path], None)?;
+        let top = director.script_node(1)?;
+        director.set_angular_velocity_3d(top, [0.0, 360.0, 0.0])?;
+        for _ in 0..15 {
+            director.step()?;
+        }
+        let nodes = director.scene().snapshot()?;
+        assert!(
+            nodes[1]
+                .spatial
+                .as_ref()
+                .is_some_and(|s| s.rotation[1].abs() > 1.0),
+            "angular velocity did not spin the body"
+        );
         Ok(())
     }
 
