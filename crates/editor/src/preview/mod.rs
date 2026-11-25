@@ -594,7 +594,11 @@ pub(super) fn script_entry_for(
         "registerScriptScenes({});",
         serde_json::to_string(scene_names)?
     )?;
-    crate::script_assets::write_catalog(&mut entry, project)?;
+    let prefab_paths = prefabs
+        .keys()
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .collect::<Vec<_>>();
+    crate::script_assets::write_catalog(&mut entry, project, &prefab_paths)?;
     let mut attachments = Vec::new();
     for (node, content) in nodes.iter().enumerate() {
         for attachment in &content.scripts {
