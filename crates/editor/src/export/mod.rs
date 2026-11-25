@@ -18,6 +18,10 @@ use crate::{
     project::Project,
 };
 
+/// Upper bounds for the on-demand assets copied into an export at project-relative paths.
+const MAX_ON_DEMAND_ASSETS: usize = 4096;
+const MAX_ON_DEMAND_BYTES: u64 = 64 * 1024 * 1024;
+
 pub(super) fn export(project: &Project, includes: &[PathBuf], output: &Path) -> Result<()> {
     ensure!(
         !project.prefab && project.path.is_file(),
@@ -201,6 +205,7 @@ fn pack_scene(
             *path = assets.file(&project.root.join(&*path))?;
         }
     }
+    assets.stage_on_demand_from(&project.root)?;
     document.save(&output.join("main.scene"))?;
 
     let native = build.join("scripts/build/native.ts");
@@ -378,6 +383,63 @@ impl<'a> Assets<'a> {
         Ok(target)
     }
 
+    /// Stages every loadable asset under `root` at its project-relative path.
+    ///
+    /// Authored references are content-addressed under `data`, but on-demand
+    /// `*File` loaders pass literal project-relative paths to the player. Keeping
+    /// the original layout lets those paths resolve in an export without changing
+    /// the script protocol or resource catalog.
+    fn stage_on_demand_from(&mut self, root: &Path) -> Result<()> {
+        let mut sources = Vec::new();
+        collect_on_demand(root, &mut sources)?;
+        sources.sort();
+        ensure!(
+            sources.len() <= MAX_ON_DEMAND_ASSETS,
+            "Too many on-demand assets in the project"
+        );
+        for source in sources {
+            let relative = source
+                .strip_prefix(root)
+                .context("On-demand asset lies outside the project")?;
+            // `data` holds the content-addressed copies of authored references.
+            if relative.starts_with("data") {
+                continue;
+            }
+            let resolved = source
+                .canonicalize()
+                .with_context(|| format!("Resolving asset {}", source.display()))?;
+            ensure!(
+                resolved.starts_with(self.root) && resolved.is_file(),
+                "Asset lies outside the project: {}",
+                source.display()
+            );
+            let size = fs::metadata(&resolved)?.len();
+            ensure!(
+                size <= MAX_ON_DEMAND_BYTES,
+                "On-demand asset is too large: {}",
+                source.display()
+            );
+            let logical = relative
+                .to_str()
+                .context("On-demand asset paths must be UTF-8")?
+                .replace('\\', "/");
+            ensure!(
+                logical
+                    .split('/')
+                    .all(|part| !part.is_empty() && part != "." && part != ".."),
+                "Invalid on-demand asset path: {logical}"
+            );
+            let destination = self.output.join(relative);
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            if self.written.insert(destination.clone()) {
+                fs::copy(&resolved, &destination)?;
+            }
+        }
+        Ok(())
+    }
+
     fn rewrite_nodes(
         &mut self,
         nodes: &mut [NodeFile],
@@ -399,6 +461,94 @@ impl<'a> Assets<'a> {
                 };
             }
         }
+        Ok(())
+    }
+}
+
+fn collect_on_demand(directory: &Path, results: &mut Vec<PathBuf>) -> Result<()> {
+    let mut entries = fs::read_dir(directory)?.collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let kind = fs::symlink_metadata(&path)?.file_type();
+        if kind.is_symlink() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') || matches!(name.as_ref(), "node_modules" | "target") {
+            continue;
+        }
+        if kind.is_dir() {
+            collect_on_demand(&path, results)?;
+        } else if kind.is_file() && on_demand_asset(&path) {
+            results.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn on_demand_asset(path: &Path) -> bool {
+    matches!(
+        crate::project::extension(path),
+        "png" | "wav" | "mp3" | "ogg" | "flac" | "prefab" | "aurora-prefab"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn on_demand_assets_keep_project_paths() -> Result<()> {
+        let project = tempfile::tempdir()?;
+        let output = tempfile::tempdir()?;
+        fs::create_dir_all(project.path().join("assets/ui"))?;
+        fs::write(project.path().join("assets/ui/button.png"), b"png")?;
+        fs::write(project.path().join("assets/hit.wav"), b"wav")?;
+        fs::write(project.path().join("pillars.prefab"), b"prefab")?;
+        fs::write(project.path().join("assets/notes.txt"), b"skip")?;
+        fs::create_dir(project.path().join(".aurora"))?;
+        fs::write(project.path().join(".aurora/hidden.png"), b"skip")?;
+        fs::create_dir(project.path().join("data"))?;
+        fs::write(project.path().join("data/reserved.png"), b"skip")?;
+        fs::write(project.path().join("main.scene"), b"scene")?;
+
+        let mut assets = Assets::new(project.path(), output.path());
+        assets.stage_on_demand_from(project.path())?;
+
+        assert_eq!(
+            fs::read(output.path().join("assets/ui/button.png"))?,
+            b"png".to_vec()
+        );
+        assert!(output.path().join("assets/hit.wav").is_file());
+        assert!(output.path().join("pillars.prefab").is_file());
+        assert!(!output.path().join("assets/notes.txt").exists());
+        assert!(!output.path().join(".aurora/hidden.png").exists());
+        assert!(!output.path().join("data/reserved.png").exists());
+        assert!(!output.path().join("main.scene").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn on_demand_staging_rejects_oversized_files() -> Result<()> {
+        let project = tempfile::tempdir()?;
+        let output = tempfile::tempdir()?;
+        fs::File::create(project.path().join("huge.png"))?.set_len(MAX_ON_DEMAND_BYTES + 1)?;
+        let mut assets = Assets::new(project.path(), output.path());
+        assert!(assets.stage_on_demand_from(project.path()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn on_demand_staging_rejects_too_many_files() -> Result<()> {
+        let project = tempfile::tempdir()?;
+        let output = tempfile::tempdir()?;
+        for index in 0..=MAX_ON_DEMAND_ASSETS {
+            fs::File::create(project.path().join(format!("{index}.png")))?;
+        }
+        let mut assets = Assets::new(project.path(), output.path());
+        assert!(assets.stage_on_demand_from(project.path()).is_err());
         Ok(())
     }
 }
