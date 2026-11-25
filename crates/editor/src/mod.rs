@@ -68,6 +68,11 @@ struct Options {
 enum ConfirmAction {
     Open(PathBuf),
     Delete(PathBuf),
+    Create {
+        directory: PathBuf,
+        name: String,
+        scene_kind: SceneKind,
+    },
 }
 
 struct Editor {
@@ -186,6 +191,22 @@ impl Editor {
     pub(crate) fn begin_new_asset(&mut self, kind: assets_browser::AssetKind) {
         self.new_asset = Some(kind);
         self.asset_name.clear();
+    }
+
+    fn create_scene(&mut self, directory: &Path, name: &str, scene_kind: SceneKind) -> Result<()> {
+        let root = self.project.root.clone();
+        let path = assets_browser::create_with_scene_kind(
+            &root,
+            directory,
+            name,
+            assets_browser::AssetKind::Scene,
+            scene_kind,
+        )?;
+        self.selected_asset = Some(path.clone());
+        self.pending_open = Some(path);
+        self.new_asset = None;
+        self.refresh_assets();
+        Ok(())
     }
 
     fn delete_asset(&mut self, path: &Path) -> Result<()> {
@@ -688,7 +709,16 @@ impl Editor {
                 );
                 if ui.button(strings::CREATE).clicked() {
                     if kind == assets_browser::AssetKind::Scene && self.project.dirty {
-                        self.report(Err(anyhow::anyhow!(strings::SAVE_FIRST_CREATE)));
+                        self.confirm_action = Some(ConfirmAction::Create {
+                            directory: directory.clone(),
+                            name: self.asset_name.trim().to_owned(),
+                            scene_kind: self.new_scene_kind,
+                        });
+                        self.new_asset = None;
+                    } else if kind == assets_browser::AssetKind::Scene {
+                        let name = self.asset_name.trim().to_owned();
+                        let result = self.create_scene(&directory, &name, self.new_scene_kind);
+                        self.report(result);
                     } else {
                         let result = assets_browser::create_with_scene_kind(
                             &root,
@@ -699,10 +729,7 @@ impl Editor {
                         );
                         match result {
                             Ok(path) => {
-                                self.selected_asset = Some(path.clone());
-                                if kind == assets_browser::AssetKind::Scene {
-                                    self.pending_open = Some(path);
-                                }
+                                self.selected_asset = Some(path);
                                 self.new_asset = None;
                                 self.refresh_assets();
                             }
@@ -783,6 +810,7 @@ impl Editor {
             let mut resolved = false;
             let mut save_result = None;
             let mut delete_result = None;
+            let mut create_result = None;
             egui::Window::new(strings::UNSAVED_CHANGES)
                 .open(&mut open)
                 .show(ctx, |ui| {
@@ -814,6 +842,20 @@ impl Editor {
                             delete_result = Some(self.delete_asset(path));
                         }
                     }
+                    ConfirmAction::Create {
+                        directory,
+                        name,
+                        scene_kind,
+                    } => {
+                        if resolved {
+                            create_result = Some(self.create_scene(directory, name, *scene_kind));
+                        } else {
+                            self.new_asset = Some(assets_browser::AssetKind::Scene);
+                            self.asset_name = name.clone();
+                            self.new_scene_kind = *scene_kind;
+                            self.asset_directory = directory.clone();
+                        }
+                    }
                 }
                 self.confirm_action = None;
             }
@@ -821,6 +863,9 @@ impl Editor {
                 self.report(result);
             }
             if let Some(result) = delete_result {
+                self.report(result);
+            }
+            if let Some(result) = create_result {
                 self.report(result);
             }
         }
