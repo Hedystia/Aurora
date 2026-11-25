@@ -1,7 +1,7 @@
 //! Startup project browser and persistent recent-project catalog.
 
 mod browser;
-mod settings;
+pub(crate) mod settings;
 
 use std::{
     fs::{self, OpenOptions},
