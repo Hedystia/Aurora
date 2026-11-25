@@ -19,10 +19,11 @@ pub(super) const FOREGROUND: Color32 = Color32::from_rgb(230, 237, 244);
 const BODY_FONT: f32 = 13.0;
 const CONTROL_HEIGHT: f32 = 22.0;
 const CONTROL_RADIUS: u8 = 4;
-pub(super) const LEFT_WIDTH: f32 = 0.22;
+pub(super) const LEFT_WIDTH: f32 = 0.21;
 pub(super) const LEFT_TOP_HEIGHT: f32 = 0.56;
 pub(super) const CENTER_WIDTH: f32 = 0.74;
 pub(super) const TOP_HEIGHT: f32 = 0.74;
+pub(super) const RIGHT_BOTTOM_HEIGHT: f32 = 0.42;
 
 pub(super) fn apply(ctx: &Context) {
     let mut visuals = Visuals::dark();
