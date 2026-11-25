@@ -437,7 +437,11 @@ impl SceneFile {
             scene.set_visual(id, node.visual.clone())?;
             scene.set_appearance(id, node.appearance)?;
             scene.set_body2d(id, node.physics2d.clone())?;
-            scene.set_spatial(id, node.spatial.clone())?;
+            let mut spatial = node.spatial.clone();
+            if let Some(spatial) = &mut spatial {
+                spatial.resolve(directory, assets)?;
+            }
+            scene.set_spatial(id, spatial)?;
             ids.push(id);
         }
         let mut prefabs = BTreeMap::new();
@@ -541,12 +545,16 @@ impl PrefabFile {
         self.validate()?;
         let mut nodes = Vec::new();
         for node in &self.nodes {
+            let mut spatial = node.spatial.clone();
+            if let Some(spatial) = &mut spatial {
+                spatial.resolve(directory, assets)?;
+            }
             nodes.push(PrefabNode {
                 name: node.name.clone(),
                 parent: node.parent,
                 pose: node.transform,
                 physics2d: node.physics2d.clone(),
-                spatial: node.spatial.clone(),
+                spatial,
                 appearance: node.appearance,
                 visual: node.visual.clone(),
                 sprite: node.resolve_visual(directory, assets)?,
