@@ -471,13 +471,12 @@ pub(super) fn create_with_scene_kind(
     let root = root
         .canonicalize()
         .context("Project directory is missing")?;
-    confine(&root, directory)?;
     let directory = directory.canonicalize()?;
     let target = directory.join(match kind.extension() {
         Some(extension) => format!("{name}.{extension}"),
         None => name.to_owned(),
     });
-    ensure!(target.starts_with(&root), "Asset path escapes the project");
+    confine(&root, &target)?;
     match kind {
         AssetKind::Folder => {
             fs::create_dir(&target)?;
@@ -583,6 +582,21 @@ fn node(name: &str, parent: Option<usize>) -> NodeFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn assets_can_be_created_at_the_project_root() -> Result<()> {
+        let project = tempfile::tempdir()?;
+        let scene = create_with_scene_kind(
+            project.path(),
+            project.path(),
+            "Arena",
+            AssetKind::Scene,
+            SceneKind::ThreeD,
+        )?;
+        assert_eq!(scene, project.path().join("Arena.scene"));
+        assert!(SceneFile::load(&scene).is_ok());
+        Ok(())
+    }
 
     #[test]
     fn search_finds_assets_in_nested_folders_and_skips_hidden_ones() -> Result<()> {
