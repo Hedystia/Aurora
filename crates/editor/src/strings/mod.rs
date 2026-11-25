@@ -150,6 +150,7 @@ pub(super) const COMPONENT_QUERY: &str = "Search components";
 pub(super) const RELOADING: &str = "Reloading changed script or prefab";
 pub(super) const STARTED: &str = "Player started";
 pub(super) const SAVE_FIRST: &str = "Save the current document before opening another project.";
+pub(super) const SAVE_FIRST_CREATE: &str = "Save the current document before creating a scene.";
 pub(super) const DISCARD: &str = "Discard Changes";
 pub(super) const LAUNCH_FAILED: &str = "Error: Preview launch was interrupted";
 
