@@ -6,7 +6,7 @@ pub mod transport;
 use bincode::{Decode, Encode};
 
 /// Current script protocol version.
-pub const VERSION: u32 = 16;
+pub const VERSION: u32 = 17;
 /// Fixed byte count of an encoded envelope.
 pub const ENVELOPE_BYTES: usize = 60;
 /// Size of the protocol, sequence and kind prefix.
@@ -157,6 +157,12 @@ pub enum Kind {
     CollisionEnter3D,
     /// The bound spatial body stopped touching another body identified by detail.
     CollisionExit3D,
+    /// Requests on-demand PNG import. Detail packs the operation and request index; chunks carry the path.
+    LoadSprite,
+    /// Delivers an imported sprite handle. X is the handle, Y is one for a failed import.
+    AssetLoaded,
+    /// Releases one script-owned asset handle.
+    ReleaseAsset,
 }
 
 /// Wire message encoded with bincode 2 fixed-width, little-endian configuration.
@@ -266,6 +272,9 @@ mod tests {
         assert_eq!(Kind::SetLinearVelocity3D as u32, 66);
         assert_eq!(Kind::CollisionEnter3D as u32, 67);
         assert_eq!(Kind::CollisionExit3D as u32, 68);
-        assert_eq!(VERSION, 16);
+        assert_eq!(Kind::LoadSprite as u32, 69);
+        assert_eq!(Kind::AssetLoaded as u32, 70);
+        assert_eq!(Kind::ReleaseAsset as u32, 71);
+        assert_eq!(VERSION, 17);
     }
 }
