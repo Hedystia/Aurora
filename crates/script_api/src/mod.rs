@@ -6,7 +6,7 @@ pub mod transport;
 use bincode::{Decode, Encode};
 
 /// Current script protocol version.
-pub const VERSION: u32 = 14;
+pub const VERSION: u32 = 15;
 /// Fixed byte count of an encoded envelope.
 pub const ENVELOPE_BYTES: usize = 52;
 /// Size of the protocol, sequence and kind prefix.
@@ -137,6 +137,14 @@ pub enum Kind {
     RotateNode,
     /// Replaces the text content of an authored text node.
     SetText,
+    /// Shows or hides the script-controlled blocking overlay. Detail is 1 to show, 0 to hide.
+    SetLoading,
+    /// Queues a persisted config entry. Detail packs the operation and entry index.
+    ConfigSet,
+    /// Delivers a config entry as `name\0value` UTF-8 chunks. Detail packs the operation.
+    ConfigValue,
+    /// Delivers a secret entry as `name\0value` UTF-8 chunks. Detail packs the operation.
+    SecretValue,
 }
 
 /// Wire message encoded with bincode 2 fixed-width, little-endian configuration.
@@ -232,6 +240,10 @@ mod tests {
         assert_eq!(Kind::ScaleNode as u32, 56);
         assert_eq!(Kind::RotateNode as u32, 57);
         assert_eq!(Kind::SetText as u32, 58);
-        assert_eq!(VERSION, 14);
+        assert_eq!(Kind::SetLoading as u32, 59);
+        assert_eq!(Kind::ConfigSet as u32, 60);
+        assert_eq!(Kind::ConfigValue as u32, 61);
+        assert_eq!(Kind::SecretValue as u32, 62);
+        assert_eq!(VERSION, 15);
     }
 }
