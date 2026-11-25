@@ -19,6 +19,15 @@ use crate::{
     strings,
 };
 
+/// Stable per-project key for host-only secret files outside the project tree.
+fn project_key(root: &Path) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in root.to_string_lossy().bytes() {
+        hash = (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
 pub(super) struct Preview {
     run: Option<Run>,
     pending: Option<Receiver<Result<Run>>>,
@@ -112,6 +121,17 @@ impl Preview {
             command
                 .arg("--profile")
                 .arg(project.root.join(".aurora/best-score"));
+        }
+        command
+            .arg("--config")
+            .arg(project.root.join(".aurora/game-config.json"));
+        if let Some(user) = crate::project_manager::settings::config_file()
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+        {
+            command.arg("--secrets").arg(
+                user.join("secrets")
+                    .join(format!("{}.json", project_key(&project.root))),
+            );
         }
         let (entry, bindings) = script_entry_for(
             project,
@@ -1153,6 +1173,18 @@ pub(super) fn identifier(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_keys_are_stable_and_path_specific() {
+        assert_eq!(
+            project_key(Path::new("/tmp/aurora-game")),
+            project_key(Path::new("/tmp/aurora-game"))
+        );
+        assert_ne!(
+            project_key(Path::new("/tmp/aurora-game")),
+            project_key(Path::new("/tmp/other-game"))
+        );
+    }
 
     #[test]
     fn decorator_entry_resolves_default_exports_and_typed_inspector_references() -> Result<()> {
