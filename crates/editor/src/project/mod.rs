@@ -162,6 +162,7 @@ impl Project {
                 version: VERSION,
                 nodes: self.document.nodes.clone(),
                 animations: self.document.animations.clone(),
+                joints: Vec::new(),
             }
             .save(&self.path)?;
         } else {
@@ -660,6 +661,7 @@ fn empty() -> SceneFile {
         autoplay: None,
         gameplay: None,
         display: None,
+        joints: Vec::new(),
     }
 }
 
