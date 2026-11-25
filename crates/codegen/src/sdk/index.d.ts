@@ -454,6 +454,86 @@ export declare class Tween {
     /** @internal Advances this tween. Returns false when it has finished. */
     _advance(dt: number): boolean;
 }
+/** A chainable tween for any numeric script property. */
+export declare class ValueTween {
+    private readonly get;
+    private readonly set;
+    private readonly steps;
+    private index;
+    private elapsed;
+    private repeats;
+    private forever;
+    private running;
+    constructor(get: () => number, set: (value: number) => void);
+    to(value: number, duration: number, options?: {
+        easing?: EasingName;
+    }): this;
+    by(delta: number, duration: number, options?: {
+        easing?: EasingName;
+    }): this;
+    delay(seconds: number): this;
+    call(callback: () => void): this;
+    repeat(times?: number): this;
+    repeatForever(): this;
+    start(): this;
+    stop(): this;
+    /** @internal Advances this value tween once per simulation tick. */
+    _advance(dt: number): boolean;
+    private resetSteps;
+    private apply;
+}
+/** Creates a tween for any numeric property with a getter and setter. */
+export declare function tweenValue(get: () => number, set: (value: number) => void): ValueTween;
+/** High-level pointer gesture delivered by a GestureDetector. */
+export declare class GestureEvent {
+    readonly type: string;
+    readonly x: number;
+    readonly y: number;
+    readonly deltaX: number;
+    readonly deltaY: number;
+    readonly direction: string;
+    constructor(type: string, x: number, y: number, deltaX?: number, deltaY?: number, direction?: string);
+}
+interface GestureOptions {
+    /** Node-local pixel movement that starts a pan or cancels a tap. */
+    tapDistance?: number;
+    /** Held seconds before a long press fires. */
+    longPressSeconds?: number;
+    /** Minimum node-local travel for a swipe on release. */
+    swipeDistance?: number;
+}
+/** Recognises tap, double tap, long press, pan and swipe on one node. */
+export declare class GestureDetector {
+    private readonly node;
+    private readonly listeners;
+    private pointer;
+    private startX;
+    private startY;
+    private lastX;
+    private lastY;
+    private held;
+    private moved;
+    private longPressed;
+    private lastTap;
+    private clock;
+    private readonly tapDistance;
+    private readonly longPressSeconds;
+    private readonly swipeDistance;
+    constructor(node: NodeRef, options?: GestureOptions);
+    on(type: string, callback: (event: GestureEvent) => void): void;
+    private emit;
+    private readonly onStart;
+    private readonly onMove;
+    private readonly onEnd;
+    private readonly onCancel;
+    /** @internal Advances gesture timers once per simulation tick. */
+    _advance(dt: number): void;
+    destroy(): void;
+}
+/** @internal Advances every active gesture detector once per simulation tick. */
+export declare function advanceGestures(dt: number): void;
+/** @internal Drops gesture listeners before a new scene loads. */
+export declare function resetGestures(): void;
 /** Creates a node tween for a script or component node. */
 export declare function tween(target: NodeRef | Node): Tween;
 /** @internal Advances every active tween once per simulation tick. */
