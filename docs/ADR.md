@@ -68,6 +68,7 @@
 ## Project preferences and TypeScript SDK
 
 - Project manager preferences are per user, while the project catalog retains its existing Linux data location. New projects use the configured parent folder and claim a fresh child directory before writing.
+- Per-project startup state lives in `.aurora/project-session.json`, separate from the bare `DockState` in `layout.json` so older layouts keep loading. Opening a folder prefers the cached last scene, then the configured default scene, then `main.scene`; paths are relative, validated, and rejected when they escape the project.
 - The editor and CLI share the same embedded declarations and protocol generator. The editor refreshes its generated TypeScript config and stamps the declarations with its version. Existing root configs belong to the project. A cross-version stamp requires confirmation, while matching versions refresh changed generated contents on open.
 
 ## TypeScript authoring decorators
