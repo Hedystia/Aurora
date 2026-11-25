@@ -1,6 +1,9 @@
 //! Validated runtime creation and removal of script-owned scene subtrees.
 
-use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
+use std::{
+    collections::{BTreeMap, BTreeSet, btree_map::Entry},
+    path::Path,
+};
 
 use anyhow::{Context, Result, ensure};
 
@@ -72,6 +75,17 @@ impl Director {
         } else {
             self.dynamic_script_node(reference)
         }
+    }
+
+    /// Registers a disk-backed prefab in the scene's import catalog.
+    pub(crate) fn register_script_prefab(&mut self, path: &Path) -> Result<u32> {
+        let index = self.loaded.script_prefabs.len();
+        ensure!(
+            index < u32::MAX as usize && index < MAX_NODES,
+            "Too many script prefabs"
+        );
+        self.loaded.script_prefabs.push(path.to_path_buf());
+        Ok(index as u32)
     }
 
     pub(crate) fn dynamic_script_node(&self, reference: u32) -> Result<EntityId> {
