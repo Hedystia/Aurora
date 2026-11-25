@@ -172,7 +172,7 @@ fn decode_command(reply: &Envelope) -> Result<Option<ScriptCommand>> {
             );
             Ok(Some(ScriptCommand::SetLinearVelocity3D(vector)))
         }
-        Kind::PlayOneShot => Ok(Some(ScriptCommand::PlayOneShot(reply.detail.try_into()?))),
+        Kind::PlayOneShot => Ok(Some(ScriptCommand::PlayOneShot(reply.detail))),
         Kind::Pause => Ok(Some(ScriptCommand::Pause)),
         Kind::Resume => Ok(Some(ScriptCommand::Resume)),
         Kind::ChangeScene => Ok(Some(ScriptCommand::ChangeScene(reply.detail.try_into()?))),
@@ -245,6 +245,50 @@ fn decode_command(reply: &Envelope) -> Result<Option<ScriptCommand>> {
                 _ => anyhow::bail!("Invalid script sprite load operation"),
             }
         }
+        Kind::LoadAudio | Kind::LoadPrefab | Kind::Raycast3D => {
+            let request = reply.detail as u32;
+            let operation = (reply.detail >> 32) as u32;
+            let chunk = |length: u32| -> Result<([u8; 12], u8)> {
+                decode_chunk_bytes(length, reply.x, reply.y)
+            };
+            match (reply.kind, operation) {
+                (_, 0) if reply.kind == Kind::LoadAudio => {
+                    Ok(Some(ScriptCommand::LoadAudioStart(request)))
+                }
+                (_, 0) if reply.kind == Kind::LoadPrefab => {
+                    Ok(Some(ScriptCommand::LoadPrefabStart(request)))
+                }
+                (_, 0) => Ok(Some(ScriptCommand::RaycastStart(request))),
+                (_, 13) if reply.kind == Kind::LoadAudio => {
+                    Ok(Some(ScriptCommand::LoadAudioEnd(request)))
+                }
+                (_, 13) if reply.kind == Kind::LoadPrefab => {
+                    Ok(Some(ScriptCommand::LoadPrefabEnd(request)))
+                }
+                (_, 13) => Ok(Some(ScriptCommand::RaycastEnd(request))),
+                (Kind::LoadAudio, length @ 1..=12) => {
+                    let (bytes, length) = chunk(length)?;
+                    Ok(Some(ScriptCommand::LoadAudioChunk(request, bytes, length)))
+                }
+                (Kind::LoadPrefab, length @ 1..=12) => {
+                    let (bytes, length) = chunk(length)?;
+                    Ok(Some(ScriptCommand::LoadPrefabChunk(request, bytes, length)))
+                }
+                (Kind::Raycast3D, length @ 1..=12) => {
+                    let (bytes, length) = chunk(length)?;
+                    Ok(Some(ScriptCommand::RaycastChunk(request, bytes, length)))
+                }
+                _ => anyhow::bail!("Invalid script chunk operation"),
+            }
+        }
+        Kind::SetAngularVelocity3D => {
+            let vector = [reply.x as f32, reply.y as f32, reply.z as f32];
+            ensure!(
+                vector.iter().all(|value| value.is_finite()),
+                "Script angular velocity must be finite"
+            );
+            Ok(Some(ScriptCommand::SetAngularVelocity3D(vector)))
+        }
         Kind::ReleaseAsset => Ok(Some(ScriptCommand::ReleaseAsset(reply.detail))),
         Kind::ShowNode if reply.x == 0.0 || reply.x == 1.0 => Ok(Some(ScriptCommand::ShowNode(
             reply.detail.try_into()?,
@@ -258,7 +302,7 @@ fn decode_command(reply: &Envelope) -> Result<Option<ScriptCommand>> {
                 reply.x as usize,
             )))
         }
-        Kind::QueueSound => Ok(Some(ScriptCommand::QueueSound(reply.detail.try_into()?))),
+        Kind::QueueSound => Ok(Some(ScriptCommand::QueueSound(reply.detail))),
         Kind::RecordScore => Ok(Some(ScriptCommand::RecordScore(reply.detail.try_into()?))),
         Kind::QueueCreateNode => Ok(Some(ScriptCommand::CreateNode(
             reply.detail.try_into()?,
