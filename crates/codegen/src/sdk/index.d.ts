@@ -1,5 +1,5 @@
-import { AssetBundle, AudioClip, Resources, SpriteFrame } from "./resources.js";
-export { AssetBundle, AudioClip, Resources, SpriteFrame, registerScriptResources } from "./resources.js";
+import { AssetBundle, AudioClip, LoadedSpriteFrame, Resources, SpriteFrame } from "./resources.js";
+export { AssetBundle, AudioClip, LoadedSpriteFrame, Resources, SpriteFrame, registerScriptResources } from "./resources.js";
 export type { AudioClipCallback, BundleAssets, BundleCallback, BundleProgressCallback, PrefabCallback, SpriteFrameCallback } from "./resources.js";
 import { EventCallback, EventTarget, Input, PointerPhase, ScriptEvent } from "./events.js";
 import { ScheduledCallback } from "./scheduler.js";
@@ -115,6 +115,10 @@ export declare class Director {
     loadScene(name: string): boolean;
     changeScene(index: number): void;
 }
+/** @internal Resolves one on-demand sprite import delivered by the host. */
+export declare function resolveSpriteLoad(requestId: number, handle: number, failed: boolean): void;
+/** @internal Drops unresolved sprite imports during teardown. */
+export declare function clearSpriteLoads(): void;
 export declare class SceneEdit {
     kind: number;
     target: number;
@@ -134,6 +138,10 @@ export declare class SceneCommands {
     show(node: number, visible: boolean): void;
     frame(node: number, frame: number): void;
     setSpriteFrame(node: NodeRef, frame: SpriteFrame): void;
+    /** Requests an on-demand PNG import. The callback runs on a later resource phase. */
+    loadSprite(path: string, callback: (error: Error | null, frame: SpriteFrame | null) => void): void;
+    /** Releases one on-demand sprite handle. */
+    releaseSprite(frame: LoadedSpriteFrame): void;
     setText(node: number, value: string): void;
     /** Persists one project config value as `name\0value` UTF-8 bytes. */
     setConfig(name: string, value: string): void;
