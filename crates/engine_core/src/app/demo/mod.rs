@@ -222,7 +222,7 @@ impl Demo {
                     .bird
                     .as_mut()
                     .context("No bound audio source")?
-                    .play(index)?,
+                    .play(index as usize)?,
                 Some(Command::ScaleNode(_, scale)) => {
                     let mut transform = self.scene.transform(self.primary)?;
                     transform.scale = scale;
@@ -259,7 +259,17 @@ impl Demo {
                     | Command::LoadSpriteStart(_)
                     | Command::LoadSpriteChunk(..)
                     | Command::LoadSpriteEnd(_)
-                    | Command::ReleaseAsset(_),
+                    | Command::ReleaseAsset(_)
+                    | Command::LoadAudioStart(_)
+                    | Command::LoadAudioChunk(..)
+                    | Command::LoadAudioEnd(_)
+                    | Command::LoadPrefabStart(_)
+                    | Command::LoadPrefabChunk(..)
+                    | Command::LoadPrefabEnd(_)
+                    | Command::SetAngularVelocity3D(_)
+                    | Command::RaycastStart(_)
+                    | Command::RaycastChunk(..)
+                    | Command::RaycastEnd(_),
                 ) => {
                     anyhow::bail!("Director commands require an authored scene");
                 }
