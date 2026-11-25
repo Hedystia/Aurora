@@ -13,6 +13,7 @@ use engine_core::{
     save::{
         NodeFile, PrefabFile, PropertyValue, SceneFile, SceneKind, ScriptFile, SpriteFile, VERSION,
     },
+    scene::spatial::{Body, JointFile, JointKind},
 };
 use serde::{Deserialize, Serialize};
 
@@ -194,6 +195,37 @@ impl Project {
         self.selected = Some(id);
         self.changed();
         id
+    }
+
+    /// Adds a fixed joint between the first two spatial bodies in document order.
+    pub fn add_joint(&mut self) -> Option<usize> {
+        let endpoints: Vec<_> = self
+            .document
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| {
+                node.spatial
+                    .as_ref()
+                    .is_some_and(|spatial| spatial.body != Body::None)
+            })
+            .map(|(index, _)| index)
+            .take(2)
+            .collect();
+        let [a, b] = endpoints.as_slice() else {
+            return None;
+        };
+        let index = self.document.joints.len();
+        self.document.joints.push(JointFile {
+            a: *a,
+            b: *b,
+            kind: JointKind::Fixed,
+            anchor_a: [0.; 3],
+            anchor_b: [0.; 3],
+            axis: [0., 1., 0.],
+        });
+        self.changed();
+        Some(index)
     }
 
     pub fn add_to_selection(&mut self, name: &str) -> usize {
@@ -386,15 +418,26 @@ impl Project {
                 true
             });
         }
-        if let Some(gameplay) = &mut self.document.gameplay {
-            let new_count = self.document.nodes.len();
-            let remap = |index: usize| {
-                if index >= original {
-                    Some(new_count + index - original)
-                } else {
-                    map[index]
-                }
+        let new_count = self.document.nodes.len();
+        let remap = |index: usize| {
+            if index >= original {
+                Some(new_count + index - original)
+            } else {
+                map[index]
+            }
+        };
+        self.document.joints.retain_mut(|joint| {
+            let (Some(a), Some(b)) = (remap(joint.a), remap(joint.b)) else {
+                return false;
             };
+            if a == b {
+                return false;
+            }
+            joint.a = a;
+            joint.b = b;
+            true
+        });
+        if let Some(gameplay) = &mut self.document.gameplay {
             gameplay.sensors.retain_mut(|sensor| {
                 let Some(node) = remap(sensor.node) else {
                     return false;
@@ -753,6 +796,45 @@ mod tests {
         project.selected = None;
         let fallback = project.add_to_selection("Empty Node");
         assert_eq!(project.document.nodes[fallback].parent, Some(0));
+        Ok(())
+    }
+
+    #[test]
+    fn scene_save_round_trips_joints_and_node_removal_rebases_them() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut project = Project::open(directory.path())?;
+        let mut bodies = Vec::new();
+        for _ in 0..3 {
+            let node = project.add("Cube 3D", Some(0));
+            project.document.nodes[node]
+                .spatial
+                .as_mut()
+                .context("cube has a spatial component")?
+                .body = Body::Fixed;
+            bodies.push(node);
+        }
+        assert_eq!(project.add_joint(), Some(0));
+        project.document.joints[0].kind = JointKind::Hinge;
+        project.document.joints.push(JointFile {
+            a: bodies[1],
+            b: bodies[2],
+            kind: JointKind::Slider,
+            anchor_a: [0.; 3],
+            anchor_b: [1., 0., 0.],
+            axis: [1., 0., 0.],
+        });
+        project.save()?;
+        assert!(!project.dirty);
+
+        let mut reopened = Project::open(&project.path)?;
+        assert_eq!(reopened.document.joints.len(), 2);
+        assert_eq!(reopened.document.joints[0].kind, JointKind::Hinge);
+        reopened.remove(bodies[0])?;
+        assert_eq!(reopened.document.joints.len(), 1);
+        assert_eq!(reopened.document.joints[0].a, bodies[1] - 1);
+        assert_eq!(reopened.document.joints[0].b, bodies[2] - 1);
+        assert_eq!(reopened.document.joints[0].kind, JointKind::Slider);
+        reopened.save()?;
         Ok(())
     }
 
