@@ -1,5 +1,5 @@
 import { frameBytes, protocol, kindStart, kindUpdate, kindFixedUpdate, kindAck, kindSetPosition, kindCollisionEnter, kindCollisionExit, kindKeyDown, kindKeyUp, kindTouchStart, kindSetLinearVelocity, kindPlayOneShot, kindAnimationEvent, kindPause, kindResume, kindChangeScene, kindFlushCommands, kindMoveNode, kindShowNode, kindSelectFrame, kindQueueSound, kindRecordScore, kindRestoreScore, kindLoad, kindLateUpdate, kindEnable, kindDisable, kindDestroy, kindSchedule, kindPollEnabled, kindProcessResources, kindPointerTouch, kindPointerMove, kindPointerEnd, kindPointerCancel, kindPointerNodeMove, kindPointerNodeEnd, kindPointerNodeCancel, kindSceneStart, kindMouseWheel, kindPointerNodeWheel, kindNodeTransform, kindNodeScaleRotation, kindTween, kindScaleNode, kindRotateNode, kindSetText, kindSetLoading, kindConfigSet, kindConfigValue, kindSecretValue, kindNodeTransform3D, kindNodeRotation3D, kindNodeScale3D, kindSetLinearVelocity3D, kindCollisionEnter3D, kindCollisionExit3D, bindingEnabled } from "../../.aurora/scripts/metadata/protocol.mts";
-import { Component, Collider2D, Collider3D, InputEventType, NodeHandle, advanceTweens, setScriptCallbackOwner, setScriptNodeTransform, setScriptNodeScaleRotation, setScriptNodeTransform3D, dispatchPointerEvent, dispatchWheelEvent, resetScriptScene, config, secrets } from "../aurora/index.ts";
+import { Component, Collider2D, Collider3D, InputEventType, NodeHandle, advanceTweens, setScriptCallbackOwner, setScriptNodeTransform, setScriptNodeScaleRotation, setScriptNodeTransform3D, advanceGestures, dispatchPointerEvent, dispatchWheelEvent, resetScriptScene, resetGestures, config, secrets } from "../aurora/index.ts";
 import { kindQueueCreateNode, kindQueueInstantiatePrefab, kindQueueReparentNode, kindQueueDestroyNode, kindQueueAddComponent, kindQueueRemoveComponent, kindRegisterComponent } from "../../.aurora/scripts/metadata/protocol.mts";
 
 import { kindRegisterPrefabNode, kindRegisterPrefabComponent, kindReleasePrefabNode, kindReleasePrefabComponent, kindUpdatePrefabParent } from "../../.aurora/scripts/metadata/protocol.mts";
@@ -116,6 +116,7 @@ export async function run(
       config.reset();
       secrets.reset();
       resetScriptScene();
+      resetGestures();
       view.setUint32(12, kindAck, true);
       view.setUint32(56, binding + bindingEnabled, true);
       if (reply(bytes) !== 1) throw new Error("Aurora scene reply failed");
@@ -231,7 +232,10 @@ export async function run(
           view.getFloat64(32, true),
         );
       }
-      else if (kind === kindTween) advanceTweens(fixedDt);
+      else if (kind === kindTween) {
+        advanceTweens(fixedDt);
+        advanceGestures(fixedDt);
+      }
       else if (kind === kindMouseWheel) {
         component._dispatchWheel(view.getFloat64(24, true), view.getFloat64(32, true));
       }
