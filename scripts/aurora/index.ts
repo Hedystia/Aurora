@@ -1,8 +1,8 @@
 //! Aurora’s TypeScript component and scene scripting API.
 
-import { AssetBundle, AudioClip, Resources, SpriteFrame } from "./resources.ts";
+import { AssetBundle, AudioClip, LoadedSpriteFrame, Resources, SpriteFrame } from "./resources.ts";
 
-export { AssetBundle, AudioClip, Resources, SpriteFrame, registerScriptResources } from "./resources.ts";
+export { AssetBundle, AudioClip, LoadedSpriteFrame, Resources, SpriteFrame, registerScriptResources } from "./resources.ts";
 export type { AudioClipCallback, BundleAssets, BundleCallback, BundleProgressCallback, PrefabCallback, SpriteFrameCallback } from "./resources.ts";
 
 import { EventCallback, EventPhase, EventTarget, Input, InputEventType, PointerPhase, ScriptEvent, input } from "./events.ts";
@@ -274,6 +274,30 @@ export class Director {
   }
 }
 
+interface SpriteLoad {
+  path: string;
+  callback: (error: Error | null, frame: SpriteFrame | null) => void;
+}
+
+const pendingSpriteLoads = new Map<number, SpriteLoad>();
+let nextSpriteRequest = 1;
+
+/** @internal Resolves one on-demand sprite import delivered by the host. */
+export function resolveSpriteLoad(requestId: number, handle: number, failed: boolean): void {
+  const request = pendingSpriteLoads.get(requestId);
+  if (request === undefined) return;
+  pendingSpriteLoads.delete(requestId);
+  request.callback(
+    failed ? new Error(`Sprite import failed: ${request.path}`) : null,
+    failed ? null : new LoadedSpriteFrame(request.path, handle),
+  );
+}
+
+/** @internal Drops unresolved sprite imports during teardown. */
+export function clearSpriteLoads(): void {
+  pendingSpriteLoads.clear();
+}
+
 export class SceneEdit {
   kind: number;
   target: number;
@@ -325,6 +349,38 @@ export class SceneCommands {
     const slot = frame.frameFor(node.index);
     if (slot === -1) throw new Error("Sprite frame is not registered for this node");
     this.frame(node.index, slot);
+  }
+
+  /** Requests an on-demand PNG import. The callback runs on a later resource phase. */
+  loadSprite(path: string, callback: (error: Error | null, frame: SpriteFrame | null) => void): void {
+    const bytes = new TextEncoder().encode(path);
+    if (bytes.length < 1 || bytes.length > 4096) throw new Error("Sprite path exceeds its size limit");
+    const request = nextSpriteRequest++;
+    if (request > 0xffffffff) throw new Error("Sprite request limit reached");
+    pendingSpriteLoads.set(request, { path, callback });
+    const buffer = callbackSceneCommands ?? this;
+    const edits = Math.ceil(bytes.length / 12) + 2;
+    if (buffer.edits.length + edits > 128) {
+      throw new Error("Sprite import exceeds the scene command limit");
+    }
+    this.push(19, request, 0, 0);
+    for (let offset = 0; offset < bytes.length; offset += 12) {
+      const chunk = bytes.subarray(offset, offset + 12);
+      const packed = (start: number): number => {
+        let value = 0;
+        for (let index = 0; index < 6; index++) {
+          value += (chunk[start + index] ?? 0) * 2 ** (index * 8);
+        }
+        return value;
+      };
+      this.push(20, request, packed(0), packed(6) + chunk.length * 2 ** 48);
+    }
+    this.push(21, request, 0, 0);
+  }
+
+  /** Releases one on-demand sprite handle. */
+  releaseSprite(frame: LoadedSpriteFrame): void {
+    this.push(22, frame.handle, 0, 0);
   }
   setText(node: number, value: string): void {
     if (typeof value !== "string") throw new Error("Text content must be a string");
