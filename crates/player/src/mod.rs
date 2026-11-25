@@ -86,6 +86,18 @@ struct Options {
 
 fn main() -> anyhow::Result<()> {
     let mut options = Options::parse();
+    // A desktop app bundle opens its packaged game when it receives no explicit mode.
+    if options.bundle.is_none()
+        && options.scene.is_empty()
+        && !options.bird
+        && !options.three_d
+        && options.sprite.is_none()
+        && options.script.is_none()
+        && options.script_dev.is_none()
+        && options.preview_dir.is_none()
+    {
+        options.bundle = bundle::adjacent();
+    }
     let mut scene_programs = Vec::new();
     if let Some(path) = &options.bundle {
         (options.scene, scene_programs) = bundle::load(path)?;
