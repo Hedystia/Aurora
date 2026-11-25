@@ -49,8 +49,8 @@ struct Options {
     /// Run the native 3D cuboid drop test.
     #[arg(long = "3d", conflicts_with_all = ["bird", "scene", "sprite", "script", "script_dev", "flap_at", "touch_at", "pointer_at", "wheel_at"])]
     three_d: bool,
-    /// Select the solver for the 3D drop test.
-    #[arg(long, value_enum, requires = "three_d")]
+    /// Select the solver for authored 3D scenes or the drop test.
+    #[arg(long, value_enum)]
     physics_backend: Option<PhysicsBackend>,
     /// Register an authored scene. The first path opens at startup.
     #[arg(long, conflicts_with_all = ["bird", "sprite"])]
@@ -112,6 +112,15 @@ fn main() -> anyhow::Result<()> {
         options.profile.is_none() || !options.scene.is_empty(),
         "--profile requires a scene or bundle"
     );
+    let backend = match options.physics_backend.unwrap_or_default() {
+        PhysicsBackend::Rapier => Backend::Rapier,
+        PhysicsBackend::Jolt => Backend::Jolt,
+    };
+    anyhow::ensure!(
+        options.physics_backend.is_none() || options.three_d || !options.scene.is_empty(),
+        "--physics-backend requires --3d or an authored scene"
+    );
+    engine_core::physics3d::set_authored_backend(backend)?;
     let cache = Some(options.asset_cache);
     let script = options
         .script
@@ -174,12 +183,7 @@ fn main() -> anyhow::Result<()> {
     );
     let scenario = Scenario {
         bird: options.bird,
-        spatial: options
-            .three_d
-            .then(|| match options.physics_backend.unwrap_or_default() {
-                PhysicsBackend::Rapier => Backend::Rapier,
-                PhysicsBackend::Jolt => Backend::Jolt,
-            }),
+        spatial: options.three_d.then_some(backend),
         scenes: &options.scene,
         script_nodes: &options.script_node,
         scene_programs: &scene_programs,
