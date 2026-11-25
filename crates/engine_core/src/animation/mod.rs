@@ -43,6 +43,24 @@ pub enum Property {
     ScaleX,
     /// Vertical local scale.
     ScaleY,
+    /// Spatial translation along local X, in metres.
+    TranslationX,
+    /// Spatial translation along local Y, in metres.
+    TranslationY,
+    /// Spatial translation along local Z, in metres.
+    TranslationZ,
+    /// Spatial Euler rotation around local X, in degrees.
+    RotationX,
+    /// Spatial Euler rotation around local Y, in degrees.
+    RotationY,
+    /// Spatial Euler rotation around local Z, in degrees.
+    RotationZ,
+    /// Spatial scale along local X. Values must be positive.
+    SpatialScaleX,
+    /// Spatial scale along local Y. Values must be positive.
+    SpatialScaleY,
+    /// Spatial scale along local Z. Values must be positive.
+    SpatialScaleZ,
 }
 
 /// Scalar keyframe at an authored sample.
@@ -157,6 +175,13 @@ impl Clip {
                             .tangents
                             .is_none_or(|slopes| slopes.into_iter().all(f32::is_finite))),
                 "Invalid animation keys"
+            );
+            ensure!(
+                !matches!(
+                    track.property,
+                    Property::SpatialScaleX | Property::SpatialScaleY | Property::SpatialScaleZ
+                ) || track.keys.iter().all(|key| key.value > 0.0),
+                "Spatial scale animation keys must be positive"
             );
             ensure!(
                 track
@@ -277,16 +302,48 @@ impl Playback {
     fn apply(&self, scene: &mut Scene, frame: f64) -> Result<()> {
         for track in &self.clip.tracks {
             let node = self.nodes[track.node];
-            let mut transform = scene.transform(node)?;
             let Some(value) = track.sample(frame) else {
                 continue;
             };
+            use Property as P;
+            if matches!(
+                track.property,
+                P::TranslationX
+                    | P::TranslationY
+                    | P::TranslationZ
+                    | P::RotationX
+                    | P::RotationY
+                    | P::RotationZ
+                    | P::SpatialScaleX
+                    | P::SpatialScaleY
+                    | P::SpatialScaleZ
+            ) {
+                let Some(mut spatial) = scene.spatial(node)? else {
+                    anyhow::bail!("Spatial animation track targets a node without a 3D component");
+                };
+                match track.property {
+                    P::TranslationX => spatial.position[0] = value,
+                    P::TranslationY => spatial.position[1] = value,
+                    P::TranslationZ => spatial.position[2] = value,
+                    P::RotationX => spatial.rotation[0] = value,
+                    P::RotationY => spatial.rotation[1] = value,
+                    P::RotationZ => spatial.rotation[2] = value,
+                    P::SpatialScaleX => spatial.scale[0] = value,
+                    P::SpatialScaleY => spatial.scale[1] = value,
+                    P::SpatialScaleZ => spatial.scale[2] = value,
+                    _ => unreachable!("Spatial channels handled above"),
+                }
+                scene.set_spatial(node, Some(spatial))?;
+                continue;
+            }
+            let mut transform = scene.transform(node)?;
             match track.property {
-                Property::X => transform.position[0] = value,
-                Property::Y => transform.position[1] = value,
-                Property::Rotation => transform.rotation = value,
-                Property::ScaleX => transform.scale[0] = value,
-                Property::ScaleY => transform.scale[1] = value,
+                P::X => transform.position[0] = value,
+                P::Y => transform.position[1] = value,
+                P::Rotation => transform.rotation = value,
+                P::ScaleX => transform.scale[0] = value,
+                P::ScaleY => transform.scale[1] = value,
+                _ => unreachable!("2D channels handled above"),
             }
             scene.set_transform(node, transform)?;
         }
@@ -297,6 +354,99 @@ impl Playback {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Context;
+
+    #[test]
+    fn spatial_channels_apply_to_spatial_nodes_and_leave_2d_poses_alone() -> Result<()> {
+        use crate::scene::spatial::SpatialNode;
+
+        let mut scene = Scene::default();
+        let (node, _) = scene.spawn("Cube", None, Default::default())?;
+        scene.set_spatial(node, Some(SpatialNode::default()))?;
+        let key = |frame, value| Key {
+            frame,
+            value,
+            tangents: None,
+        };
+        let clip = Clip {
+            name: "Spatial".into(),
+            sample_rate: 60,
+            duration: 2,
+            speed: 1.0,
+            wrap: Wrap::Once,
+            tracks: vec![
+                Track {
+                    node: 0,
+                    property: Property::TranslationX,
+                    interpolation: Interpolation::Linear,
+                    keys: vec![key(0, 0.0), key(2, 2.0)],
+                },
+                Track {
+                    node: 0,
+                    property: Property::RotationY,
+                    interpolation: Interpolation::Step,
+                    keys: vec![key(0, 10.0), key(1, 90.0)],
+                },
+                Track {
+                    node: 0,
+                    property: Property::SpatialScaleZ,
+                    interpolation: Interpolation::Linear,
+                    keys: vec![key(0, 1.0), key(2, 2.0)],
+                },
+            ],
+            events: Vec::new(),
+        };
+        let mut playback = Playback::new(clip, vec![node])?;
+        playback.start(&mut scene)?;
+        assert_eq!(
+            scene.spatial(node)?.context("Missing spatial")?.position[0],
+            0.0
+        );
+        playback.step(&mut scene)?;
+        let spatial = scene.spatial(node)?.context("Missing spatial")?;
+        assert_eq!(spatial.position[0], 1.0);
+        assert_eq!(spatial.rotation[1], 90.0);
+        assert_eq!(spatial.scale[2], 1.5);
+        assert_eq!(scene.transform(node)?.position, [0.0, 0.0]);
+        playback.step(&mut scene)?;
+        let spatial = scene.spatial(node)?.context("Missing spatial")?;
+        assert_eq!(
+            (spatial.position[0], spatial.rotation[1], spatial.scale[2]),
+            (2.0, 90.0, 2.0)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn spatial_channels_require_a_spatial_node_and_positive_scale() -> Result<()> {
+        let clip = Clip {
+            name: "Invalid".into(),
+            sample_rate: 60,
+            duration: 1,
+            speed: 1.0,
+            wrap: Wrap::Once,
+            tracks: vec![Track {
+                node: 0,
+                property: Property::SpatialScaleX,
+                interpolation: Interpolation::Linear,
+                keys: vec![Key {
+                    frame: 0,
+                    value: -1.0,
+                    tangents: None,
+                }],
+            }],
+            events: Vec::new(),
+        };
+        assert!(clip.validate(1).is_err());
+
+        let mut scene = Scene::default();
+        let (node, _) = scene.spawn("Sprite", None, Default::default())?;
+        let mut clip = clip;
+        clip.tracks[0].keys[0].value = 1.0;
+        let mut playback = Playback::new(clip, vec![node])?;
+        assert!(playback.start(&mut scene).is_err());
+        Ok(())
+    }
 
     #[test]
     fn wrap_modes_sample_correctly_and_emit_crossed_markers() -> Result<()> {
