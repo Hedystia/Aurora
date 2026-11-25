@@ -60,6 +60,7 @@
 - Every new editor export includes `export.json` with the engine version, exporting host target, sorted file SHA-256 values, and a digest of those records. The player verifies the complete file set and hashes before loading a bundle that has this manifest. This detects content changes relative to the manifest; it does not authenticate a publisher or a modified manifest.
 - The editor copies its sibling player into each local export and creates a host launcher. This makes the exported folder directly runnable on its build host without requiring a separately installed Aurora player; it does not provide cross-compilation or a downloadable target template.
 - Older exports without the integrity manifest remain supported. The manifest does not imply the bundle contains a portable target runtime or that its scripts can run on a different platform.
+- Exports stage every supported on-demand asset (PNG, audio, prefab) under each scene at its original project-relative path, with bounded file size and count. Authored references still use content-addressed `data` copies; those paths stay reserved so on-demand staging cannot overwrite them. The `*File` loaders already send a literal relative path to the host, so the resource catalog keeps encoding only authored bank indices and the scene prefab catalog rather than duplicating on-demand paths. The integrity manifest covers the staged files automatically because it hashes the complete staged tree.
 
 ## Scene component bindings
 
