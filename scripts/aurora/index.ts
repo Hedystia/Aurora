@@ -349,6 +349,13 @@ export function clearAssetLoads(): void {
   pendingAssetLoads.clear();
 }
 
+/** @internal Delivers one overlap hit to the owning component. */
+export function dispatchOverlapHit(request: number, reference: number, last: boolean): void {
+  const owner = callbackOwner;
+  if (owner === null || !owner._takeOverlap(request)) return;
+  owner.onOverlapHit(reference === 0xffffffff ? null : new NodeHandle(reference, 0), last);
+}
+
 /** @internal Caches one authored world transform stream. */
 export function setScriptWorldTransform(
   reference: number,
@@ -503,20 +510,50 @@ export class SceneCommands {
     this.raycastWith(this.requestId(), origin, direction, distance);
   }
 
-  /** @internal Sends a raycast with a preallocated request identity. */
+  /** @internal Sends a raycast or shape cast with a preallocated request identity. */
   raycastWith(
     request: number,
     origin: [number, number, number],
     direction: [number, number, number],
     distance: number,
+    halfExtents: [number, number, number] = [0, 0, 0],
   ): void {
-    const bytes = new Uint8Array(28);
+    const bytes = new Uint8Array(44);
     const view = new DataView(bytes.buffer);
-    const values = [...origin, ...direction, distance];
+    const values = [
+      halfExtents[0] > 0 ? 2 : 1,
+      ...origin,
+      ...direction,
+      distance,
+      ...halfExtents,
+    ];
     for (let index = 0; index < values.length; index++) {
       view.setFloat32(index * 4, values[index], true);
     }
-    this.queueChunks([29, 30, 31], request, bytes, "Raycast");
+    this.queueChunks([29, 30, 31], request, bytes, "Spatial query");
+  }
+
+  /** Requests a box overlap query; hits arrive as component events. */
+  overlap(
+    halfExtents: [number, number, number],
+    position: [number, number, number],
+  ): void {
+    this.overlapWith(this.requestId(), halfExtents, position);
+  }
+
+  /** @internal Sends an overlap query with a preallocated request identity. */
+  overlapWith(
+    request: number,
+    halfExtents: [number, number, number],
+    position: [number, number, number],
+  ): void {
+    const bytes = new Uint8Array(24);
+    const view = new DataView(bytes.buffer);
+    const values = [...halfExtents, ...position];
+    for (let index = 0; index < values.length; index++) {
+      view.setFloat32(index * 4, values[index], true);
+    }
+    this.queueChunks([32, 33, 34], request, bytes, "Overlap query");
   }
 
   /** Releases one on-demand asset handle. */
@@ -1136,6 +1173,38 @@ export class Component {
     this.raycastCallbacks.set(request, callback);
     this.scene.raycastWith(request, origin, direction, distance);
   }
+  /** Requests a box shape cast. The result arrives as a raycast callback. */
+  shapeCast(
+    halfExtents: [number, number, number],
+    origin: [number, number, number],
+    direction: [number, number, number],
+    distance: number,
+    callback: (hit: RaycastHit3D | null) => void,
+  ): void {
+    const request = this.scene.requestId();
+    this.raycastCallbacks.set(request, callback);
+    this.scene.raycastWith(request, origin, direction, distance, halfExtents);
+  }
+
+  /** Requests a box overlap query. Each hit arrives through `onOverlapHit`. */
+  overlap(
+    halfExtents: [number, number, number],
+    position: [number, number, number],
+  ): void {
+    const request = this.scene.requestId();
+    this.overlapRequests.set(request, true);
+    this.scene.overlapWith(request, halfExtents, position);
+  }
+
+  /** Called for each box overlap hit. `last` marks the final hit or an empty result. */
+  onOverlapHit(_node: NodeHandle | null, _last: boolean): void {}
+
+  /** @internal Consumes one overlap callback request. */
+  _takeOverlap(request: number): boolean {
+    return this.overlapRequests.get(request) ?? false;
+  }
+  private readonly overlapRequests = new Map<number, boolean>();
+
   private readonly raycastCallbacks = new Map<number, (hit: RaycastHit3D | null) => void>();
   /** @internal Consumes one raycast callback. */
   _takeRaycast(request: number): ((hit: RaycastHit3D | null) => void) | null {
