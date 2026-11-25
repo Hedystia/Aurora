@@ -18,6 +18,7 @@ use winit::{
 };
 
 use crate::{
+    audio::AudioClip,
     director::Director,
     ecs::EntityId,
     input::InputEvent,
@@ -86,10 +87,16 @@ impl Runtime {
                 mutations: VecDeque::new(),
                 pending_text: BTreeMap::new(),
                 pending_sprites: BTreeMap::new(),
+                pending_audio: BTreeMap::new(),
+                pending_prefabs: BTreeMap::new(),
+                pending_raycasts: BTreeMap::new(),
                 dynamic_frames: BTreeMap::new(),
+                dynamic_audio: BTreeMap::new(),
+                dynamic_prefabs: BTreeMap::new(),
                 asset_refs: BTreeMap::new(),
                 next_asset: 0x8000_0000,
                 pending_asset_events: Vec::new(),
+                pending_raycast_events: Vec::new(),
                 next_binding: 0,
                 tearing_down: false,
                 transformed: BTreeSet::new(),
@@ -298,10 +305,17 @@ pub(super) struct Authored {
     mutations: VecDeque<Mutation>,
     pending_text: BTreeMap<u32, Vec<u8>>,
     pending_sprites: BTreeMap<u32, Vec<u8>>,
+    pending_audio: BTreeMap<u32, Vec<u8>>,
+    pending_prefabs: BTreeMap<u32, Vec<u8>>,
+    pending_raycasts: BTreeMap<u32, Vec<u8>>,
     dynamic_frames: BTreeMap<u64, crate::assets::AssetId>,
+    dynamic_audio: BTreeMap<u64, AudioClip>,
+    dynamic_prefabs: BTreeMap<u64, u32>,
     asset_refs: BTreeMap<u64, u32>,
     next_asset: u64,
-    pending_asset_events: Vec<(u32, u64, u64, bool)>,
+    /// Binding, request, handle, failure flag and asset kind (1 sprite, 2 audio, 3 prefab).
+    pending_asset_events: Vec<(u32, u64, u64, bool, u32)>,
+    pending_raycast_events: Vec<(u32, u64, f32, [f32; 3], bool)>,
     next_binding: u32,
     tearing_down: bool,
     /// Script references whose local transform the script already knows.
@@ -318,9 +332,15 @@ impl Authored {
         self.mutations.clear();
         self.pending_text.clear();
         self.pending_sprites.clear();
+        self.pending_audio.clear();
+        self.pending_prefabs.clear();
+        self.pending_raycasts.clear();
         self.dynamic_frames.clear();
+        self.dynamic_audio.clear();
+        self.dynamic_prefabs.clear();
         self.asset_refs.clear();
         self.pending_asset_events.clear();
+        self.pending_raycast_events.clear();
         self.next_asset = 0x8000_0000;
         self.transformed.clear();
         for (index, &owner) in self.script_nodes.iter().enumerate() {
@@ -401,7 +421,9 @@ impl Authored {
         let Some((binding, host)) = self.running_binding()? else {
             return Ok(());
         };
-        for state in self.director.scene().snapshot()? {
+        let nodes = self.director.scene().snapshot()?;
+        let worlds = crate::scene::spatial::matrices(&nodes);
+        for state in nodes {
             let Some(reference) = self.director.script_reference(state.id) else {
                 continue;
             };
@@ -444,6 +466,24 @@ impl Authored {
                     Kind::NodeScale3D,
                     u64::from(reference),
                     spatial.scale,
+                )?;
+            }
+            if let Some(world) = worlds.get(&state.id) {
+                let (_, rotation, position) = world.to_scale_rotation_translation();
+                let (x, y, z) = rotation.to_euler(glam::EulerRot::XYZ);
+                self.dispatch_spatial(
+                    binding,
+                    host,
+                    Kind::NodeWorldTransform3D,
+                    u64::from(reference),
+                    position.to_array(),
+                )?;
+                self.dispatch_spatial(
+                    binding,
+                    host,
+                    Kind::NodeWorldRotation3D,
+                    u64::from(reference),
+                    [x.to_degrees(), y.to_degrees(), z.to_degrees()],
                 )?;
             }
         }
@@ -706,9 +746,54 @@ impl Authored {
     }
 
     fn require_gameplay(&mut self) -> Result<&mut gameplay::Gameplay> {
+        if self.gameplay.is_none() {
+            self.gameplay = Some(gameplay::Gameplay::empty(self.silent));
+        }
         self.gameplay
             .as_mut()
-            .context("Scene has no gameplay resources")
+            .context("Gameplay resources are unavailable")
+    }
+
+    fn append_asset_chunk(
+        pending: &mut BTreeMap<u32, Vec<u8>>,
+        request: u32,
+        bytes: [u8; 12],
+        length: u8,
+    ) -> Result<()> {
+        let path = pending
+            .get_mut(&request)
+            .context("Asset chunk has no matching start")?;
+        let length = usize::from(length);
+        anyhow::ensure!(
+            (1..=bytes.len()).contains(&length) && path.len() + length <= 4096,
+            "Asset path exceeds its size limit"
+        );
+        path.extend_from_slice(&bytes[..length]);
+        Ok(())
+    }
+
+    fn finish_asset_path(pending: &mut BTreeMap<u32, Vec<u8>>, request: u32) -> Result<String> {
+        let bytes = pending
+            .remove(&request)
+            .context("Asset load has no matching start")?;
+        ensure!(!bytes.is_empty(), "Asset path is empty");
+        String::from_utf8(bytes).context("Asset path is not UTF-8")
+    }
+
+    fn binding_for_node(&self, node: EntityId) -> Result<u32> {
+        self.bindings
+            .iter()
+            .find(|(_, entry)| entry.node == node)
+            .map(|(&binding, _)| binding)
+            .context("Asset load has no owning component")
+    }
+
+    fn allocate_asset(&mut self) -> Result<u64> {
+        let handle = self.next_asset;
+        ensure!(handle < 0xffff_ffff, "Asset handle space exhausted");
+        self.next_asset += 1;
+        *self.asset_refs.entry(handle).or_insert(0) += 1;
+        Ok(handle)
     }
 
     fn apply(&mut self, node: EntityId, command: Command) -> Result<bool> {
@@ -725,12 +810,57 @@ impl Authored {
                 );
                 self.pending_scene = Some(index);
             }
-            Command::PlayOneShot(index) => self.require_gameplay()?.sound(index)?,
+            Command::PlayOneShot(id) => {
+                let clip = self.dynamic_audio.get(&id).cloned();
+                self.require_gameplay()?.sound(id, clip.as_ref())?
+            }
             Command::SetLinearVelocity(velocity) => {
                 self.director.set_linear_velocity(node, velocity)?
             }
             Command::SetLinearVelocity3D(velocity) => {
                 self.director.set_linear_velocity_3d(node, velocity)?
+            }
+            Command::SetAngularVelocity3D(velocity) => {
+                self.director.set_angular_velocity_3d(node, velocity)?
+            }
+            Command::RaycastStart(request) => {
+                anyhow::ensure!(
+                    self.pending_raycasts.insert(request, Vec::new()).is_none(),
+                    "Raycast is already in progress"
+                );
+                return Ok(true);
+            }
+            Command::RaycastChunk(request, bytes, length) => {
+                Self::append_asset_chunk(&mut self.pending_raycasts, request, bytes, length)?;
+                return Ok(true);
+            }
+            Command::RaycastEnd(request) => {
+                let bytes = self
+                    .pending_raycasts
+                    .remove(&request)
+                    .context("Raycast has no matching start")?;
+                anyhow::ensure!(bytes.len() == 28, "Raycast payload must be 28 bytes");
+                let mut values = [0.0_f32; 7];
+                for (index, value) in values.iter_mut().enumerate() {
+                    let start = index * 4;
+                    let bits = u32::from_le_bytes(
+                        bytes[start..start + 4]
+                            .try_into()
+                            .context("Raycast chunk")?,
+                    );
+                    *value = f32::from_bits(bits);
+                }
+                let binding = self.binding_for_node(node)?;
+                let hit = self.director.physics3d_raycast(
+                    [values[0], values[1], values[2]],
+                    [values[3], values[4], values[5]],
+                    values[6],
+                )?;
+                self.pending_raycast_events.push(match hit {
+                    Some(hit) => (binding, u64::from(request), hit.distance, hit.normal, false),
+                    None => (binding, u64::from(request), 0.0, [0.0; 3], true),
+                });
+                return Ok(true);
             }
             Command::MoveNode(index, position) => {
                 self.move_node(self.target(index)?, position)?;
@@ -866,46 +996,95 @@ impl Authored {
                 return Ok(true);
             }
             Command::LoadSpriteChunk(request, bytes, length) => {
-                let path = self
-                    .pending_sprites
-                    .get_mut(&request)
-                    .context("Sprite chunk has no matching start")?;
-                let length = usize::from(length);
-                anyhow::ensure!(
-                    (1..=bytes.len()).contains(&length) && path.len() + length <= 4096,
-                    "Sprite path exceeds its size limit"
-                );
-                path.extend_from_slice(&bytes[..length]);
+                Self::append_asset_chunk(&mut self.pending_sprites, request, bytes, length)?;
                 return Ok(true);
             }
             Command::LoadSpriteEnd(request) => {
-                let bytes = self
-                    .pending_sprites
-                    .remove(&request)
-                    .context("Sprite load has no matching start")?;
-                let relative = String::from_utf8(bytes).context("Sprite path is not UTF-8")?;
+                let relative = Self::finish_asset_path(&mut self.pending_sprites, request)?;
+                let binding = self.binding_for_node(node)?;
                 let root = parent_dir(self.director.scene_path()).to_path_buf();
                 let target = root.join(&relative);
                 anyhow::ensure!(target.starts_with(&root), "Asset path escapes the project");
-                let binding = self
-                    .bindings
-                    .iter()
-                    .find(|(_, entry)| entry.node == node)
-                    .map(|(&binding, _)| binding)
-                    .context("Sprite load has no owning component")?;
                 let result = self.director.assets_mut().import_file(&target);
                 let (handle, failed) = match result {
                     Ok(id) => {
-                        let handle = self.next_asset;
-                        self.next_asset += 1;
+                        let handle = self.allocate_asset()?;
                         self.dynamic_frames.insert(handle, id);
-                        *self.asset_refs.entry(handle).or_insert(0) += 1;
                         (handle, false)
                     }
                     Err(_) => (0, true),
                 };
                 self.pending_asset_events
-                    .push((binding, u64::from(request), handle, failed));
+                    .push((binding, u64::from(request), handle, failed, 1));
+                return Ok(true);
+            }
+            Command::LoadAudioStart(request) => {
+                anyhow::ensure!(
+                    self.pending_audio.insert(request, Vec::new()).is_none(),
+                    "Audio load is already in progress"
+                );
+                return Ok(true);
+            }
+            Command::LoadAudioChunk(request, bytes, length) => {
+                Self::append_asset_chunk(&mut self.pending_audio, request, bytes, length)?;
+                return Ok(true);
+            }
+            Command::LoadAudioEnd(request) => {
+                let relative = Self::finish_asset_path(&mut self.pending_audio, request)?;
+                let binding = self.binding_for_node(node)?;
+                let root = parent_dir(self.director.scene_path()).to_path_buf();
+                let target = root.join(&relative);
+                anyhow::ensure!(target.starts_with(&root), "Asset path escapes the project");
+                let result = (|| -> Result<AudioClip> {
+                    use std::io::Read;
+                    let mut bytes = Vec::new();
+                    std::fs::File::open(&target)?
+                        .take(16_777_217)
+                        .read_to_end(&mut bytes)?;
+                    ensure!(bytes.len() <= 16_777_216, "Scene sound exceeds 16 MiB");
+                    AudioClip::decode(bytes)
+                })();
+                let (handle, failed) = match result {
+                    Ok(clip) => {
+                        let handle = self.allocate_asset()?;
+                        self.dynamic_audio.insert(handle, clip);
+                        (handle, false)
+                    }
+                    Err(_) => (0, true),
+                };
+                self.pending_asset_events
+                    .push((binding, u64::from(request), handle, failed, 2));
+                return Ok(true);
+            }
+            Command::LoadPrefabStart(request) => {
+                anyhow::ensure!(
+                    self.pending_prefabs.insert(request, Vec::new()).is_none(),
+                    "Prefab load is already in progress"
+                );
+                return Ok(true);
+            }
+            Command::LoadPrefabChunk(request, bytes, length) => {
+                Self::append_asset_chunk(&mut self.pending_prefabs, request, bytes, length)?;
+                return Ok(true);
+            }
+            Command::LoadPrefabEnd(request) => {
+                let relative = Self::finish_asset_path(&mut self.pending_prefabs, request)?;
+                let binding = self.binding_for_node(node)?;
+                let root = parent_dir(self.director.scene_path()).to_path_buf();
+                let target = root.join(&relative);
+                anyhow::ensure!(target.starts_with(&root), "Asset path escapes the project");
+                let result = crate::save::PrefabFile::load(&target);
+                let (handle, failed) = match result {
+                    Ok(_) => {
+                        let handle = self.allocate_asset()?;
+                        let catalog = self.director.register_script_prefab(&target)?;
+                        self.dynamic_prefabs.insert(handle, catalog);
+                        (handle, false)
+                    }
+                    Err(_) => (0, true),
+                };
+                self.pending_asset_events
+                    .push((binding, u64::from(request), handle, failed, 3));
                 return Ok(true);
             }
             Command::ReleaseAsset(handle) => {
@@ -917,12 +1096,15 @@ impl Authored {
                     if *remaining == 0 {
                         entry.remove();
                         self.dynamic_frames.remove(&handle);
+                        self.dynamic_audio.remove(&handle);
+                        self.dynamic_prefabs.remove(&handle);
                     }
                 }
                 return Ok(true);
             }
-            Command::QueueSound(index) => {
-                self.require_gameplay()?.sound(index)?;
+            Command::QueueSound(id) => {
+                let clip = self.dynamic_audio.get(&id).cloned();
+                self.require_gameplay()?.sound(id, clip.as_ref())?;
                 return Ok(true);
             }
             Command::RecordScore(score) => {
@@ -943,9 +1125,17 @@ impl Authored {
                     !self.tearing_down,
                     "Cannot instantiate a prefab during scene teardown"
                 );
+                let catalog = if asset >= 0x8000_0000 {
+                    *self
+                        .dynamic_prefabs
+                        .get(&u64::from(asset))
+                        .context("Unknown prefab handle")?
+                } else {
+                    asset
+                };
                 let clone = self
                     .director
-                    .create_script_node(reference, parent, Some(asset))?;
+                    .create_script_node(reference, parent, Some(catalog))?;
                 self.mutations.push_back(Mutation::Attach(clone));
                 return Ok(true);
             }
@@ -1160,22 +1350,62 @@ impl Authored {
             gameplay.step_audio();
         }
         self.dispatch_contacts()?;
-        self.flush_asset_events()
+        self.flush_asset_events()?;
+        self.flush_raycast_events()
+    }
+
+    /// Delivers completed raycasts to their requesting components.
+    fn flush_raycast_events(&mut self) -> Result<()> {
+        let events = std::mem::take(&mut self.pending_raycast_events);
+        for (binding, request, distance, normal, missed) in events {
+            let Some(node) = self.bindings.get(&binding).map(|entry| entry.node) else {
+                continue;
+            };
+            // The node slot carries the remaining normal components as f32 bits;
+            // results are not associated with a scene node.
+            let packed_node =
+                u64::from(normal[1].to_bits()) | (u64::from(normal[2].to_bits()) << 32);
+            let reply = self
+                .script
+                .as_mut()
+                .context("Script disconnected")?
+                .exchange_control(
+                    Kind::RaycastResult,
+                    binding,
+                    packed_node,
+                    [
+                        f64::from(distance),
+                        if missed { 1.0 } else { 0.0 },
+                        f64::from(normal[0]),
+                    ],
+                    request,
+                )?;
+            self.bindings
+                .get_mut(&binding)
+                .context("Unknown component binding")?
+                .lifecycle
+                .enabled = reply.enabled;
+            if let Some(command) = reply.command {
+                self.apply(node, command)?;
+            }
+        }
+        Ok(())
     }
 
     /// Delivers completed on-demand imports to their requesting components.
     fn flush_asset_events(&mut self) -> Result<()> {
         let events = std::mem::take(&mut self.pending_asset_events);
-        for (binding, request, handle, failed) in events {
+        for (binding, request, handle, failed, kind) in events {
             let Some(node) = self.bindings.get(&binding).map(|entry| entry.node) else {
                 continue;
             };
-            self.dispatch_raw(
+            self.dispatch_raw_z(
                 binding,
                 node,
                 Kind::AssetLoaded,
                 request,
                 Some([handle as f64, if failed { 1.0 } else { 0.0 }]),
+                Some(f64::from(kind)),
             )?;
         }
         Ok(())
