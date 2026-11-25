@@ -1,4 +1,4 @@
-//! Pan, zoom, sprite previews, picking and Game view presentation.
+//! Pan, zoom, 3D orbit, sprite previews, picking and Game view presentation.
 
 mod collider;
 
@@ -26,6 +26,7 @@ pub(super) struct Viewport {
     game_focus: bool,
     spatial_drag: Option<usize>,
     spatial_mode: spatial::Mode,
+    spatial_camera: spatial::Camera,
     two_d_drag: Option<TwoDDrag>,
     editing_text: Option<usize>,
     focus_text_edit: bool,
@@ -57,6 +58,7 @@ impl Default for Viewport {
             game_focus: true,
             spatial_drag: None,
             spatial_mode: spatial::Mode::Move,
+            spatial_camera: spatial::Camera::default(),
             two_d_drag: None,
             editing_text: None,
             focus_text_edit: false,
@@ -73,6 +75,7 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
                 if ui.button(strings::FRAME_VIEW).clicked() {
                     editor.viewport.pan = Vec2::ZERO;
                     editor.viewport.zoom = 1.0;
+                    editor.viewport.spatial_camera = spatial::Camera::default();
                 }
                 ui.label(
                     egui::RichText::new(format!("{:.0}%", editor.viewport.zoom * 100.0)).weak(),
@@ -96,6 +99,7 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
             ] {
                 ui.selectable_value(&mut editor.viewport.spatial_mode, mode, label);
             }
+            ui.label(egui::RichText::new(strings::ORBIT_HINT).weak());
         });
     }
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
@@ -257,6 +261,11 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
     if response.dragged_by(egui::PointerButton::Secondary) {
         viewport.pan += ui.input(|input| input.pointer.delta());
     }
+    if response.dragged_by(egui::PointerButton::Middle) {
+        viewport
+            .spatial_camera
+            .orbit(ui.input(|input| input.pointer.delta()));
+    }
     if response.hovered() {
         let scroll = ui.input(|input| input.smooth_scroll_delta.y);
         viewport.zoom = (viewport.zoom * (scroll * theme::ZOOM_FACTOR).exp())
@@ -312,6 +321,7 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         spatial::Interaction {
             dragging: &mut viewport.spatial_drag,
             mode: viewport.spatial_mode,
+            camera: viewport.spatial_camera,
         },
         &mut editor.project,
     );
