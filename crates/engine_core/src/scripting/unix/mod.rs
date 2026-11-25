@@ -140,109 +140,126 @@ impl Session {
             .seq
             .checked_add(1)
             .context("Script sequence exhausted")?;
-        let command: Result<Option<ScriptCommand>> = match reply.kind {
-            Kind::Ack => Ok(None),
-            Kind::SetPosition | Kind::SetLinearVelocity => {
-                let vector = [reply.x as f32, reply.y as f32];
-                ensure!(
-                    vector.iter().all(|value| value.is_finite()),
-                    "Script vector must be finite"
-                );
-                if reply.kind == Kind::SetPosition {
-                    Ok(Some(ScriptCommand::SetPosition(vector)))
-                } else {
-                    Ok(Some(ScriptCommand::SetLinearVelocity(vector)))
-                }
-            }
-            Kind::PlayOneShot => Ok(Some(ScriptCommand::PlayOneShot(reply.detail.try_into()?))),
-            Kind::Pause => Ok(Some(ScriptCommand::Pause)),
-            Kind::Resume => Ok(Some(ScriptCommand::Resume)),
-            Kind::ChangeScene => Ok(Some(ScriptCommand::ChangeScene(reply.detail.try_into()?))),
-            Kind::MoveNode => {
-                let position = [reply.x as f32, reply.y as f32];
-                ensure!(
-                    position.iter().all(|value| value.is_finite()),
-                    "Invalid node position"
-                );
-                Ok(Some(ScriptCommand::MoveNode(
-                    reply.detail.try_into()?,
-                    position,
-                )))
-            }
-            Kind::ScaleNode => {
-                let scale = [reply.x as f32, reply.y as f32];
-                ensure!(
-                    scale.iter().all(|value| value.is_finite()),
-                    "Invalid node scale"
-                );
-                Ok(Some(ScriptCommand::ScaleNode(
-                    reply.detail.try_into()?,
-                    scale,
-                )))
-            }
-            Kind::RotateNode => {
-                let angle = reply.x as f32;
-                ensure!(angle.is_finite(), "Invalid node rotation");
-                Ok(Some(ScriptCommand::RotateNode(
-                    reply.detail.try_into()?,
-                    angle,
-                )))
-            }
-            Kind::SetText => {
-                let target = reply.detail as u32;
-                let operation = (reply.detail >> 32) as u32;
-                match operation {
-                    0 => Ok(Some(ScriptCommand::SetTextStart(target))),
-                    13 => Ok(Some(ScriptCommand::SetTextEnd(target))),
-                    length @ 1..=12 => {
-                        Ok(Some(decode_text_chunk(target, length, reply.x, reply.y)?))
-                    }
-                    _ => anyhow::bail!("Invalid script text operation"),
-                }
-            }
-            Kind::ShowNode if reply.x == 0.0 || reply.x == 1.0 => Ok(Some(
-                ScriptCommand::ShowNode(reply.detail.try_into()?, reply.x == 1.0),
-            )),
-            Kind::SelectFrame
-                if (0.0..=f64::from(u16::MAX)).contains(&reply.x) && reply.x.fract() == 0.0 =>
-            {
-                Ok(Some(ScriptCommand::SelectFrame(
-                    reply.detail.try_into()?,
-                    reply.x as usize,
-                )))
-            }
-            Kind::QueueSound => Ok(Some(ScriptCommand::QueueSound(reply.detail.try_into()?))),
-            Kind::RecordScore => Ok(Some(ScriptCommand::RecordScore(reply.detail.try_into()?))),
-            Kind::QueueCreateNode => Ok(Some(ScriptCommand::CreateNode(
-                reply.detail.try_into()?,
-                optional_index(reply.x)?,
-            ))),
-            Kind::QueueInstantiatePrefab => Ok(Some(ScriptCommand::InstantiatePrefab(
-                reply.detail.try_into()?,
-                optional_index(reply.x)?,
-                index(reply.y)?,
-            ))),
-            Kind::QueueReparentNode => Ok(Some(ScriptCommand::ReparentNode(
-                reply.detail.try_into()?,
-                optional_index(reply.x)?,
-            ))),
-            Kind::QueueDestroyNode => {
-                Ok(Some(ScriptCommand::DestroyNode(reply.detail.try_into()?)))
-            }
-            Kind::QueueAddComponent => Ok(Some(ScriptCommand::AddComponent(
-                reply.detail.try_into()?,
-                index(reply.x)?,
-            ))),
-            Kind::QueueRemoveComponent => Ok(Some(ScriptCommand::RemoveComponent(
-                reply.detail.try_into()?,
-                index(reply.x)?,
-            ))),
-            _ => anyhow::bail!("Unexpected script reply kind {:?}", reply.kind),
-        };
+        let command = decode_command(&reply);
         Ok(Reply {
             command: command?,
             enabled: reply.binding & BINDING_ENABLED != 0,
         })
+    }
+}
+
+fn decode_command(reply: &Envelope) -> Result<Option<ScriptCommand>> {
+    match reply.kind {
+        Kind::Ack => Ok(None),
+        Kind::SetPosition | Kind::SetLinearVelocity => {
+            let vector = [reply.x as f32, reply.y as f32];
+            ensure!(
+                vector.iter().all(|value| value.is_finite()),
+                "Script vector must be finite"
+            );
+            if reply.kind == Kind::SetPosition {
+                Ok(Some(ScriptCommand::SetPosition(vector)))
+            } else {
+                Ok(Some(ScriptCommand::SetLinearVelocity(vector)))
+            }
+        }
+        Kind::PlayOneShot => Ok(Some(ScriptCommand::PlayOneShot(reply.detail.try_into()?))),
+        Kind::Pause => Ok(Some(ScriptCommand::Pause)),
+        Kind::Resume => Ok(Some(ScriptCommand::Resume)),
+        Kind::ChangeScene => Ok(Some(ScriptCommand::ChangeScene(reply.detail.try_into()?))),
+        Kind::MoveNode => {
+            let position = [reply.x as f32, reply.y as f32];
+            ensure!(
+                position.iter().all(|value| value.is_finite()),
+                "Invalid node position"
+            );
+            Ok(Some(ScriptCommand::MoveNode(
+                reply.detail.try_into()?,
+                position,
+            )))
+        }
+        Kind::ScaleNode => {
+            let scale = [reply.x as f32, reply.y as f32];
+            ensure!(
+                scale.iter().all(|value| value.is_finite()),
+                "Invalid node scale"
+            );
+            Ok(Some(ScriptCommand::ScaleNode(
+                reply.detail.try_into()?,
+                scale,
+            )))
+        }
+        Kind::RotateNode => {
+            let angle = reply.x as f32;
+            ensure!(angle.is_finite(), "Invalid node rotation");
+            Ok(Some(ScriptCommand::RotateNode(
+                reply.detail.try_into()?,
+                angle,
+            )))
+        }
+        Kind::SetText => {
+            let target = reply.detail as u32;
+            let operation = (reply.detail >> 32) as u32;
+            match operation {
+                0 => Ok(Some(ScriptCommand::SetTextStart(target))),
+                13 => Ok(Some(ScriptCommand::SetTextEnd(target))),
+                length @ 1..=12 => Ok(Some(decode_text_chunk(target, length, reply.x, reply.y)?)),
+                _ => anyhow::bail!("Invalid script text operation"),
+            }
+        }
+        Kind::SetLoading if reply.detail <= 1 => {
+            Ok(Some(ScriptCommand::ShowLoading(reply.detail == 1)))
+        }
+        Kind::ConfigSet => {
+            let entry = reply.detail as u32;
+            let operation = (reply.detail >> 32) as u32;
+            match operation {
+                0 => Ok(Some(ScriptCommand::ConfigSetStart(entry))),
+                13 => Ok(Some(ScriptCommand::ConfigSetEnd(entry))),
+                length @ 1..=12 => {
+                    let (bytes, length) = decode_chunk_bytes(length, reply.x, reply.y)?;
+                    Ok(Some(ScriptCommand::ConfigSetChunk(entry, bytes, length)))
+                }
+                _ => anyhow::bail!("Invalid script config operation"),
+            }
+        }
+        Kind::ShowNode if reply.x == 0.0 || reply.x == 1.0 => Ok(Some(ScriptCommand::ShowNode(
+            reply.detail.try_into()?,
+            reply.x == 1.0,
+        ))),
+        Kind::SelectFrame
+            if (0.0..=f64::from(u16::MAX)).contains(&reply.x) && reply.x.fract() == 0.0 =>
+        {
+            Ok(Some(ScriptCommand::SelectFrame(
+                reply.detail.try_into()?,
+                reply.x as usize,
+            )))
+        }
+        Kind::QueueSound => Ok(Some(ScriptCommand::QueueSound(reply.detail.try_into()?))),
+        Kind::RecordScore => Ok(Some(ScriptCommand::RecordScore(reply.detail.try_into()?))),
+        Kind::QueueCreateNode => Ok(Some(ScriptCommand::CreateNode(
+            reply.detail.try_into()?,
+            optional_index(reply.x)?,
+        ))),
+        Kind::QueueInstantiatePrefab => Ok(Some(ScriptCommand::InstantiatePrefab(
+            reply.detail.try_into()?,
+            optional_index(reply.x)?,
+            index(reply.y)?,
+        ))),
+        Kind::QueueReparentNode => Ok(Some(ScriptCommand::ReparentNode(
+            reply.detail.try_into()?,
+            optional_index(reply.x)?,
+        ))),
+        Kind::QueueDestroyNode => Ok(Some(ScriptCommand::DestroyNode(reply.detail.try_into()?))),
+        Kind::QueueAddComponent => Ok(Some(ScriptCommand::AddComponent(
+            reply.detail.try_into()?,
+            index(reply.x)?,
+        ))),
+        Kind::QueueRemoveComponent => Ok(Some(ScriptCommand::RemoveComponent(
+            reply.detail.try_into()?,
+            index(reply.x)?,
+        ))),
+        _ => anyhow::bail!("Unexpected script reply kind {:?}", reply.kind),
     }
 }
 
@@ -254,11 +271,8 @@ fn packed_text_value(value: f64, maximum: u64) -> Result<u64> {
     Ok(value as u64)
 }
 
-fn decode_text_chunk(target: u32, length: u32, x: f64, y: f64) -> Result<ScriptCommand> {
-    ensure!(
-        (1..=12).contains(&length),
-        "Invalid script text chunk length"
-    );
+fn decode_chunk_bytes(length: u32, x: f64, y: f64) -> Result<([u8; 12], u8)> {
+    ensure!((1..=12).contains(&length), "Invalid script chunk length");
     let x = packed_text_value(x, (1_u64 << 48) - 1)?;
     let y = packed_text_value(y, (1_u64 << 48) - 1)?;
     let mut bytes = [0; 12];
@@ -268,7 +282,12 @@ fn decode_text_chunk(target: u32, length: u32, x: f64, y: f64) -> Result<ScriptC
     for (index, byte) in bytes[6..].iter_mut().enumerate() {
         *byte = (y >> (index * 8)) as u8;
     }
-    Ok(ScriptCommand::SetTextChunk(target, bytes, length as u8))
+    Ok((bytes, length as u8))
+}
+
+fn decode_text_chunk(target: u32, length: u32, x: f64, y: f64) -> Result<ScriptCommand> {
+    let (bytes, length) = decode_chunk_bytes(length, x, y)?;
+    Ok(ScriptCommand::SetTextChunk(target, bytes, length))
 }
 
 fn index(value: f64) -> Result<u32> {
@@ -306,6 +325,36 @@ mod tests {
             .enumerate()
             .map(|(index, byte)| f64::from(*byte) * 2.0_f64.powi((index * 8) as i32))
             .sum()
+    }
+
+    #[test]
+    fn decodes_config_chunks_and_loading_commands() -> Result<()> {
+        let chunk = *b"Config......";
+        let envelope = |kind, detail, x, y| Envelope {
+            protocol: VERSION,
+            seq: 0,
+            kind,
+            node: 0,
+            x,
+            y,
+            detail,
+            binding: 0,
+        };
+        assert!(matches!(
+            decode_command(&envelope(Kind::SetLoading, 1, 0.0, 0.0))?,
+            Some(ScriptCommand::ShowLoading(true))
+        ));
+        assert!(decode_command(&envelope(Kind::SetLoading, 2, 0.0, 0.0)).is_err());
+        assert!(matches!(
+            decode_command(&envelope(
+                Kind::ConfigSet,
+                (6_u64 << 32) | 3,
+                pack_six(&chunk[..6]),
+                pack_six(&chunk[6..]),
+            ))?,
+            Some(ScriptCommand::ConfigSetChunk(3, _, 6))
+        ));
+        Ok(())
     }
 
     #[test]
