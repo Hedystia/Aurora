@@ -1,8 +1,8 @@
 //! Aurora’s TypeScript component and scene scripting API.
 
-import { AssetBundle, AudioClip, LoadedSpriteFrame, Resources, SpriteFrame } from "./resources.ts";
+import { AssetBundle, AudioClip, LoadedAudioClip, LoadedSpriteFrame, Resources, SpriteFrame } from "./resources.ts";
 
-export { AssetBundle, AudioClip, LoadedSpriteFrame, Resources, SpriteFrame, registerScriptResources } from "./resources.ts";
+export { AssetBundle, AudioClip, LoadedAudioClip, LoadedSpriteFrame, Resources, SpriteFrame, registerScriptResources } from "./resources.ts";
 export type { AudioClipCallback, BundleAssets, BundleCallback, BundleProgressCallback, PrefabCallback, SpriteFrameCallback } from "./resources.ts";
 
 import { EventCallback, EventPhase, EventTarget, Input, InputEventType, PointerPhase, ScriptEvent, input } from "./events.ts";
@@ -144,6 +144,10 @@ export class Node {
 
   /** Local Z position of a spatial node, or zero for a 2D node. */
   get z(): number { return scriptScene.nodeZ(this.sceneIndex); }
+  /** World-space translation of a spatial node. */
+  get worldPosition(): [number, number, number] { return scriptScene.nodeWorld(this.sceneIndex, "position"); }
+  /** World-space Euler rotation in degrees. */
+  get worldRotation(): [number, number, number] { return scriptScene.nodeWorld(this.sceneIndex, "rotation"); }
   /** @internal Updates the cached Z position from a host transform stream. */
   set z(value: number) {
     const position = scriptScene.nodeSpatial(this.sceneIndex, "position");
@@ -196,15 +200,27 @@ export class RigidBody2D {
 /** Script handle for an authored spatial cuboid body. */
 export class RigidBody3D {
   changed = false;
+  angularChanged = false;
   vx = 0;
   vy = 0;
   vz = 0;
+  avx = 0;
+  avy = 0;
+  avz = 0;
 
   setLinearVelocity(x: number, y: number, z: number): void {
     this.vx = x;
     this.vy = y;
     this.vz = z;
     this.changed = true;
+  }
+
+  /** Sets angular velocity in degrees per second. */
+  setAngularVelocity(x: number, y: number, z: number): void {
+    this.avx = x;
+    this.avy = y;
+    this.avz = z;
+    this.angularChanged = true;
   }
 }
 
@@ -226,11 +242,27 @@ export class Collider3D {
   }
 }
 
+/** Result of a world-space raycast. */
+export class RaycastHit3D {
+  constructor(
+    readonly distance: number,
+    readonly normal: [number, number, number],
+    readonly node: NodeHandle | null,
+  ) {}
+}
+
 export class AudioSource {
   pending = -1;
+  pendingHandle = -1;
 
   playClip(clip: AudioClip): void {
     const commands = callbackSceneCommands;
+    const handle = (clip as LoadedAudioClip).handle;
+    if (typeof handle === "number" && handle >= 0x80000000) {
+      if (commands === null) this.pendingHandle = handle;
+      else commands.sound(handle);
+      return;
+    }
     if (commands === null) this.playOneShot(clip.index);
     else commands.sound(clip.index);
   }
@@ -277,28 +309,68 @@ export class Director {
   }
 }
 
-interface SpriteLoad {
-  path: string;
-  callback: (error: Error | null, frame: SpriteFrame | null) => void;
-}
+type AssetLoadType = 1 | 2 | 3;
+type AssetLoadCallback = (error: Error | null, asset: unknown) => void;
 
-const pendingSpriteLoads = new Map<number, SpriteLoad>();
-let nextSpriteRequest = 1;
-
-/** @internal Resolves one on-demand sprite import delivered by the host. */
+/** @internal Backward-compatible alias for the sprite resolver. */
 export function resolveSpriteLoad(requestId: number, handle: number, failed: boolean): void {
-  const request = pendingSpriteLoads.get(requestId);
-  if (request === undefined) return;
-  pendingSpriteLoads.delete(requestId);
-  request.callback(
-    failed ? new Error(`Sprite import failed: ${request.path}`) : null,
-    failed ? null : new LoadedSpriteFrame(request.path, handle),
-  );
+  resolveAssetLoad(requestId, handle, failed, 1);
 }
 
-/** @internal Drops unresolved sprite imports during teardown. */
-export function clearSpriteLoads(): void {
-  pendingSpriteLoads.clear();
+interface AssetLoad {
+  path: string;
+  type: AssetLoadType;
+  callback: AssetLoadCallback;
+}
+
+const pendingAssetLoads = new Map<number, AssetLoad>();
+let nextAssetRequest = 1;
+
+/** @internal Resolves one on-demand asset import delivered by the host. */
+export function resolveAssetLoad(
+  requestId: number,
+  handle: number,
+  failed: boolean,
+  type: AssetLoadType,
+): void {
+  const request = pendingAssetLoads.get(requestId);
+  if (request === undefined) return;
+  pendingAssetLoads.delete(requestId);
+  const error = failed ? new Error(`Asset import failed: ${request.path}`) : null;
+  let asset: SpriteFrame | AudioClip | Prefab | null = null;
+  if (!failed && type === 1) asset = new LoadedSpriteFrame(request.path, handle);
+  else if (!failed && type === 2) asset = new LoadedAudioClip(request.path, handle);
+  else if (!failed && type === 3) asset = new LoadedPrefab(request.path, handle);
+  request.callback(error, asset);
+}
+
+/** @internal Drops unresolved asset imports during teardown. */
+export function clearAssetLoads(): void {
+  pendingAssetLoads.clear();
+}
+
+/** @internal Caches one authored world transform stream. */
+export function setScriptWorldTransform(
+  reference: number,
+  field: "position" | "rotation",
+  value: [number, number, number],
+): void {
+  scriptScene.setWorld(reference, field, value);
+}
+
+/** @internal Delivers one raycast result to the owning callback. */
+export function dispatchRaycastResult(
+  distance: number,
+  missed: boolean,
+  normal: [number, number, number],
+  request: number,
+): void {
+  const owner = callbackOwner;
+  if (owner === null) return;
+  const callback = owner._takeRaycast(request);
+  if (callback !== null) {
+    callback(missed ? null : new RaycastHit3D(distance, normal, null));
+  }
 }
 
 export class SceneEdit {
@@ -354,19 +426,18 @@ export class SceneCommands {
     this.frame(node.index, slot);
   }
 
-  /** Requests an on-demand PNG import. The callback runs on a later resource phase. */
-  loadSprite(path: string, callback: (error: Error | null, frame: SpriteFrame | null) => void): void {
-    const bytes = new TextEncoder().encode(path);
-    if (bytes.length < 1 || bytes.length > 4096) throw new Error("Sprite path exceeds its size limit");
-    const request = nextSpriteRequest++;
-    if (request > 0xffffffff) throw new Error("Sprite request limit reached");
-    pendingSpriteLoads.set(request, { path, callback });
+  private queueChunks(
+    kinds: [number, number, number],
+    target: number,
+    bytes: Uint8Array,
+    label: string,
+  ): void {
     const buffer = callbackSceneCommands ?? this;
     const edits = Math.ceil(bytes.length / 12) + 2;
     if (buffer.edits.length + edits > 128) {
-      throw new Error("Sprite import exceeds the scene command limit");
+      throw new Error(`${label} exceeds the scene command limit`);
     }
-    this.push(19, request, 0, 0);
+    this.push(kinds[0], target, 0, 0);
     for (let offset = 0; offset < bytes.length; offset += 12) {
       const chunk = bytes.subarray(offset, offset + 12);
       const packed = (start: number): number => {
@@ -376,14 +447,81 @@ export class SceneCommands {
         }
         return value;
       };
-      this.push(20, request, packed(0), packed(6) + chunk.length * 2 ** 48);
+      this.push(kinds[1], target, packed(0), packed(6) + chunk.length * 2 ** 48);
     }
-    this.push(21, request, 0, 0);
+    this.push(kinds[2], target, 0, 0);
   }
 
-  /** Releases one on-demand sprite handle. */
-  releaseSprite(frame: LoadedSpriteFrame): void {
-    this.push(22, frame.handle, 0, 0);
+  /** @internal Allocates a new request identity shared by all host requests. */
+  requestId(): number {
+    const request = nextAssetRequest++;
+    if (request > 0xffffffff) throw new Error("Asset request limit reached");
+    return request;
+  }
+
+  /** Requests an on-demand PNG import. The callback runs on a later resource phase. */
+  loadSprite(path: string, callback: (error: Error | null, frame: SpriteFrame | null) => void): void {
+    const bytes = new TextEncoder().encode(path);
+    if (bytes.length < 1 || bytes.length > 4096) throw new Error("Sprite path exceeds its size limit");
+    const request = this.requestId();
+    pendingAssetLoads.set(request, {
+      path,
+      type: 1,
+      callback: (error, asset) => callback(error, asset as SpriteFrame | null),
+    });
+    this.queueChunks([19, 20, 21], request, bytes, "Sprite import");
+  }
+
+  /** Requests an on-demand audio import. */
+  loadAudio(path: string, callback: (error: Error | null, clip: AudioClip | null) => void): void {
+    const bytes = new TextEncoder().encode(path);
+    if (bytes.length < 1 || bytes.length > 4096) throw new Error("Audio path exceeds its size limit");
+    const request = this.requestId();
+    pendingAssetLoads.set(request, {
+      path,
+      type: 2,
+      callback: (error, asset) => callback(error, asset as AudioClip | null),
+    });
+    this.queueChunks([23, 24, 25], request, bytes, "Audio import");
+  }
+
+  /** Requests an on-demand prefab import. */
+  loadPrefabFile(path: string, callback: (error: Error | null, prefab: Prefab | null) => void): void {
+    const bytes = new TextEncoder().encode(path);
+    if (bytes.length < 1 || bytes.length > 4096) throw new Error("Prefab path exceeds its size limit");
+    const request = this.requestId();
+    pendingAssetLoads.set(request, {
+      path,
+      type: 3,
+      callback: (error, asset) => callback(error, asset as Prefab | null),
+    });
+    this.queueChunks([26, 27, 28], request, bytes, "Prefab import");
+  }
+
+  /** Requests a world-space raycast; the result arrives as a component event. */
+  raycast(origin: [number, number, number], direction: [number, number, number], distance: number): void {
+    this.raycastWith(this.requestId(), origin, direction, distance);
+  }
+
+  /** @internal Sends a raycast with a preallocated request identity. */
+  raycastWith(
+    request: number,
+    origin: [number, number, number],
+    direction: [number, number, number],
+    distance: number,
+  ): void {
+    const bytes = new Uint8Array(28);
+    const view = new DataView(bytes.buffer);
+    const values = [...origin, ...direction, distance];
+    for (let index = 0; index < values.length; index++) {
+      view.setFloat32(index * 4, values[index], true);
+    }
+    this.queueChunks([29, 30, 31], request, bytes, "Raycast");
+  }
+
+  /** Releases one on-demand asset handle. */
+  releaseAsset(handle: number): void {
+    this.push(22, handle, 0, 0);
   }
   setText(node: number, value: string): void {
     if (typeof value !== "string") throw new Error("Text content must be a string");
@@ -470,8 +608,12 @@ export class SceneCommands {
   }
 
   instantiate(prefab: Prefab, parent?: NodeRef): NodeRef {
-    if (prefab.assetIndex < 0) throw new Error("Prefab has no runtime asset index");
-    return this.create(6, parent, prefab.assetIndex);
+    const handle = (prefab as LoadedPrefab).handle;
+    const asset = typeof handle === "number" && handle >= 0x80000000
+      ? handle
+      : prefab.assetIndex;
+    if (asset < 0) throw new Error("Prefab has no runtime asset index");
+    return this.create(6, parent, asset);
   }
 
   private create(kind: number, parent: NodeRef | undefined, asset: number): NodeRef {
@@ -546,6 +688,23 @@ export class AssetManager {
 
   loadSpriteFrame(path: string, callback: (error: Error | null, frame: SpriteFrame | null) => void): void {
     this.resources.loadSpriteFrame(path, callback);
+  }
+
+  loadSpriteFile(path: string, callback: (error: Error | null, frame: SpriteFrame | null) => void): void {
+    this.resources.loadSpriteFile(path, callback);
+  }
+
+  loadAudioFile(path: string, callback: (error: Error | null, clip: AudioClip | null) => void): void {
+    this.resources.loadAudioFile(path, callback);
+  }
+
+  loadPrefabFile(path: string, callback: (error: Error | null, prefab: Prefab | null) => void): void {
+    this.resources.loadPrefabFile(path, callback);
+  }
+
+  /** Releases any on-demand asset handle. */
+  releaseAssetHandle(handle: number): void {
+    this.resources.releaseAssetHandle(handle);
   }
 
   loadPrefab(path: string, callback: (error: Error | null, prefab: Prefab | null) => void): void {
@@ -631,6 +790,10 @@ export class NodeRef {
   get y(): number { return scriptScene.nodeY(this.index); }
   /** Local Z position of a spatial node, or zero for a 2D node. */
   get z(): number { return scriptScene.nodeZ(this.index); }
+  /** World-space translation of a spatial node. */
+  get worldPosition(): [number, number, number] { return scriptScene.nodeWorld(this.index, "position"); }
+  /** World-space Euler rotation in degrees. */
+  get worldRotation(): [number, number, number] { return scriptScene.nodeWorld(this.index, "rotation"); }
   get scaleX(): number { return scriptScene.nodeScaleX(this.index); }
   set scaleX(value: number) { this.setScale(value, this.scaleY); }
   get scaleY(): number { return scriptScene.nodeScaleY(this.index); }
@@ -707,6 +870,16 @@ export class NodeRef {
 
 export class Prefab {
   constructor(readonly path: string, readonly assetIndex = -1) {}
+}
+
+/** A prefab imported from disk on demand rather than the scene catalog. */
+export class LoadedPrefab extends Prefab {
+  readonly handle: number;
+
+  constructor(path: string, handle: number) {
+    super(path, -1);
+    this.handle = handle;
+  }
 }
 
 export class TextRef extends NodeRef {
@@ -952,6 +1125,24 @@ export class Component {
   onEndContact(_other: Collider2D): void {}
   onBeginContact3D(_other: Collider3D): void {}
   onEndContact3D(_other: Collider3D): void {}
+  /** Requests a world-space raycast. The result arrives on a later tick. */
+  raycast(
+    origin: [number, number, number],
+    direction: [number, number, number],
+    distance: number,
+    callback: (hit: RaycastHit3D | null) => void,
+  ): void {
+    const request = this.scene.requestId();
+    this.raycastCallbacks.set(request, callback);
+    this.scene.raycastWith(request, origin, direction, distance);
+  }
+  private readonly raycastCallbacks = new Map<number, (hit: RaycastHit3D | null) => void>();
+  /** @internal Consumes one raycast callback. */
+  _takeRaycast(request: number): ((hit: RaycastHit3D | null) => void) | null {
+    const callback = this.raycastCallbacks.get(request) ?? null;
+    this.raycastCallbacks.delete(request);
+    return callback;
+  }
   onAnimationEvent(_code: number): void {}
   onBestScore(_score: number): void {}
 }
@@ -1066,6 +1257,8 @@ class ScriptScene {
     this.spatialPosition.clear();
     this.spatialRotation.clear();
     this.spatialScale.clear();
+    this.worldPosition.clear();
+    this.worldRotation.clear();
   }
 
   childPath(index: number, path: string, commands: SceneCommands): NodeRef | null {
@@ -1265,6 +1458,18 @@ class ScriptScene {
   private readonly spatialPosition = new Map<number, [number, number, number]>();
   private readonly spatialRotation = new Map<number, [number, number, number]>();
   private readonly spatialScale = new Map<number, [number, number, number]>();
+  private readonly worldPosition = new Map<number, [number, number, number]>();
+  private readonly worldRotation = new Map<number, [number, number, number]>();
+
+  setWorld(reference: number, field: "position" | "rotation", value: [number, number, number]): void {
+    if (field === "position") this.worldPosition.set(reference, value);
+    else this.worldRotation.set(reference, value);
+  }
+
+  nodeWorld(reference: number, field: "position" | "rotation"): [number, number, number] {
+    const store = field === "position" ? this.worldPosition : this.worldRotation;
+    return store.get(reference) ?? [0, 0, 0];
+  }
 
   setSpatial(reference: number, field: "position" | "rotation" | "scale", value: [number, number, number]): void {
     if (field === "position") this.spatialPosition.set(reference, value);
