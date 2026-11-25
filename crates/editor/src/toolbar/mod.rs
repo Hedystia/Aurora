@@ -11,6 +11,10 @@ use crate::{
 pub(super) fn menus(ui: &mut Ui, editor: &mut Editor) {
     egui::MenuBar::new().ui(ui, |ui| {
         ui.menu_button(strings::FILE, |ui| {
+            if ui.button(strings::NEW_SCENE).clicked() {
+                editor.begin_new_asset(crate::assets_browser::AssetKind::Scene);
+                ui.close();
+            }
             if ui.button(strings::OPEN_PROJECT).clicked() {
                 editor.open_dialog = true;
                 ui.close();
