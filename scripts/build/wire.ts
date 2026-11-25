@@ -41,15 +41,18 @@ function chunkBytes(view: DataView): number[] {
   return bytes;
 }
 
-export function run(
+export async function run(
   components: Component[],
   receive: (bytes: Uint8Array) => number,
   reply: (bytes: Uint8Array) => number,
-): void {
+): Promise<void> {
   const bytes = new Uint8Array(frameBytes);
   const view = new DataView(bytes.buffer);
   while (true) {
     const status = receive(bytes);
+    // A native receive blocks on the socket, so promise continuations queued by
+    // the previous callback only run when this loop yields between frames.
+    await Promise.resolve();
     if (status === 0) return;
     if (status !== 1 || view.getUint32(0, true) !== protocol) {
       throw new Error("Invalid Aurora script frame");
