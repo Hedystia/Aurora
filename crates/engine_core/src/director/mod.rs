@@ -188,6 +188,18 @@ impl Director {
         &self.physics.contacts
     }
 
+    pub(crate) fn set_linear_velocity_3d(
+        &mut self,
+        node: EntityId,
+        velocity: [f32; 3],
+    ) -> Result<()> {
+        self.loaded.spatial_physics.set_velocity(node, velocity)
+    }
+
+    pub(crate) fn physics3d_contacts(&self) -> &[crate::physics3d::authored::Contact] {
+        self.loaded.spatial_physics.contacts()
+    }
+
     /// Starts an authored clip from its first sample.
     pub fn play(&mut self, index: usize) -> Result<()> {
         self.loaded.play(index)
