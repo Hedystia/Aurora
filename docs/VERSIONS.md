@@ -129,3 +129,11 @@ Adds a disabled `.github/workflows/packages.yml.disabled` and removes the separa
 The editor Scene view now projects spatial nodes through an orbitable perspective camera instead of the fixed isometric projection. Middle-drag orbits the camera, **Reset view** restores the default angle, and projected picking, translation on the node's XY plane, and gizmo handles use the same camera. Authored 3D data and the player's runtime camera are unchanged.
 
 Verification: `cargo fmt --all --check`, `cargo clippy --locked -p editor --all-targets -- -D warnings`, and all 41 editor tests pass, including perspective target projection, orbit pitch clamping, screen-drag round trips, and gizmo picking.
+
+## 2026-11-25 · Scripting asset manager and export verification
+
+The TypeScript SDK adds a global `assetManager`, cached bundle views, project-wide prefab enumeration, and `AssetBundle.preloadAll`/`loadAll` callbacks with per-asset progress and errors. Bundle release drops its script handles, while the player continues to own scene-registered audio and sprite-frame data. The generated script catalog now registers every prefab exported with the project.
+
+`tools/test-export.sh` builds the editor and player, exports Jumpy Bird with its native scriptc game, validates `export.json` and the launcher, and runs the bundle headless.
+
+Verification: Bun typecheck and 25 script tests pass; the export smoke test passes on Linux.
