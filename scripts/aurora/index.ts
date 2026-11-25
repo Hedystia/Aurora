@@ -1,9 +1,9 @@
 //! Aurora’s TypeScript component and scene scripting API.
 
-import { AudioClip, Resources, SpriteFrame } from "./resources.ts";
+import { AssetBundle, AudioClip, Resources, SpriteFrame } from "./resources.ts";
 
 export { AssetBundle, AudioClip, Resources, SpriteFrame, registerScriptResources } from "./resources.ts";
-export type { AudioClipCallback, PrefabCallback, SpriteFrameCallback } from "./resources.ts";
+export type { AudioClipCallback, BundleAssets, BundleCallback, BundleProgressCallback, PrefabCallback, SpriteFrameCallback } from "./resources.ts";
 
 import { EventCallback, EventPhase, EventTarget, Input, InputEventType, PointerPhase, ScriptEvent, input } from "./events.ts";
 import { ScheduledCallback, Scheduler } from "./scheduler.ts";
@@ -377,6 +377,93 @@ export class SceneCommands {
   }
 }
 
+/**
+ * Scene-wide asset manager for code that is not tied to one component.
+ *
+ * Handles resolve from the same catalog as `Component.resources`. Bundle-wide
+ * preload and load callbacks share the fixed resource phase, and `release`
+ * drops the bundle's script handles without touching scene-owned asset data.
+ */
+export class AssetManager {
+  private readonly resources = new Resources(new SceneCommands());
+  private readonly bundles = new Map<string, AssetBundle>();
+
+  /** Returns a cached directory-scoped view of the current scene catalog. */
+  bundle(root = ""): AssetBundle {
+    const key = root.split("\\").join("/").replace(/^\.\/+|\/+$/g, "");
+    const cached = this.bundles.get(key);
+    if (cached !== undefined) return cached;
+    const bundle = new AssetBundle(this.resources, key);
+    this.bundles.set(key, bundle);
+    return bundle;
+  }
+
+  /** Resolves every asset in a bundle and calls back with the bundle. */
+  loadBundle(root: string, callback: (error: Error | null, bundle: AssetBundle | null) => void): AssetBundle {
+    const bundle = this.bundle(root);
+    bundle.preloadAll((error) => callback(error, error === null ? bundle : null));
+    return bundle;
+  }
+
+  preloadBundle(root: string, callback: (error: Error | null, bundle: AssetBundle | null) => void): AssetBundle {
+    return this.loadBundle(root, callback);
+  }
+
+  releaseBundle(root: string): void {
+    const key = root.split("\\").join("/").replace(/^\.\/+|\/+$/g, "");
+    const bundle = this.bundles.get(key);
+    if (bundle === undefined) return;
+    bundle.release();
+    this.bundles.delete(key);
+  }
+
+  getAudioClip(path: string): AudioClip | null { return this.resources.getAudioClip(path); }
+  getSpriteFrame(path: string): SpriteFrame | null { return this.resources.getSpriteFrame(path); }
+  getPrefab(path: string): Prefab | null { return this.resources.getPrefab(path); }
+
+  requireAudioClip(path: string): AudioClip { return this.resources.requireAudioClip(path); }
+  requireSpriteFrame(path: string): SpriteFrame { return this.resources.requireSpriteFrame(path); }
+
+  loadAudioClip(path: string, callback: (error: Error | null, clip: AudioClip | null) => void): void {
+    this.resources.loadAudioClip(path, callback);
+  }
+
+  loadSpriteFrame(path: string, callback: (error: Error | null, frame: SpriteFrame | null) => void): void {
+    this.resources.loadSpriteFrame(path, callback);
+  }
+
+  loadPrefab(path: string, callback: (error: Error | null, prefab: Prefab | null) => void): void {
+    this.resources.loadPrefab(path, callback);
+  }
+
+  preloadAudioClip(path: string, callback: (error: Error | null, clip: AudioClip | null) => void): void {
+    this.resources.loadAudioClip(path, callback);
+  }
+
+  preloadSpriteFrame(path: string, callback: (error: Error | null, frame: SpriteFrame | null) => void): void {
+    this.resources.loadSpriteFrame(path, callback);
+  }
+
+  preloadPrefab(path: string, callback: (error: Error | null, prefab: Prefab | null) => void): void {
+    this.resources.loadPrefab(path, callback);
+  }
+
+  releaseAudioClip(path: string): void { this.resources.releaseAudioClip(path); }
+  releaseSpriteFrame(path: string): void { this.resources.releaseSpriteFrame(path); }
+  releaseAll(): void { this.resources.releaseAll(); this.bundles.clear(); }
+  cancelLoads(): void { this.resources.cancelLoads(); }
+  get pendingCount(): number { return this.resources.pendingCount; }
+
+  /** @internal Advances one global asset callback per simulation tick. */
+  _advance(): void { this.resources._advance(); }
+
+  /** @internal Drops manager handles when a scene starts. */
+  _reset(): void { this.releaseAll(); }
+}
+
+/** Global asset manager for bundle and non-component resource work. */
+export const assetManager = new AssetManager();
+
 export class NodeRef {
   constructor(readonly index: number, private readonly commands: SceneCommands) {}
 
@@ -591,6 +678,7 @@ export class Component {
   /** @internal Delivers a resource completion in its own callback transaction. */
   _tickResources(): void {
     this.resources._advance();
+    assetManager._advance();
   }
 
   /** @internal Routes one player key notification. */
@@ -1243,6 +1331,7 @@ export function setScriptNodeScaleRotation(
 /** @internal Resets scene-local handles before a scene's bindings load. */
 export function resetScriptScene(): void {
   scriptScene.resetScene();
+  assetManager._reset();
 }
 
 export function registerRuntimeComponent(binding: number, owner: number, factory: number): Component {
