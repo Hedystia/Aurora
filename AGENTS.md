@@ -1,10 +1,10 @@
 # Aurora Engine
 
-Read the project skills in `.codex/skills/` for the subsystem being changed.
+Read the project skills in `.agents/skills/` for the subsystem being changed.
 
 ## Build and verification
 
-- Run `tools/setup.sh` from a Linux host with Bash, curl, unzip, tar, sha256sum and a C linker. Use `tools/setup.sh --print-runtime` to resolve the development runtime and `tools/setup.sh --print-scriptc` to resolve the release compiler.
+- Run `tools/setup.sh` on Linux or macOS with Bash, curl, unzip, tar, a SHA-256 tool (`sha256sum` or `shasum`), and a C linker. Use `tools/setup.sh --print-runtime` to resolve the development runtime and `tools/setup.sh --print-scriptc` to resolve the release compiler.
 - Run `cargo fmt --all --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings` and `cargo test --locked --workspace`.
 - Run `cargo run --locked --bin aurora-player -- --screenshot /tmp/aurora-player.png` and `cargo run --locked --bin aurora-editor -- --screenshot /tmp/aurora-editor.png` from a graphical session. For X11 CI, use Xvfb and Mesa Vulkan.
 
@@ -28,6 +28,12 @@ Read the project skills in `.codex/skills/` for the subsystem being changed.
 - Open `scripts/game-template/jumpy` in the editor to play Jumpy Bird. Run `tools/golden_test.sh` for the committed 600-frame check. See [the game and baseline workflow](docs/JUMPY_BIRD.md).
 
 - Run `cargo run --locked --bin aurora-player -- --3d` for the native 3D drop test. Add `--headless --frames 240` to inspect the settled poses. See [3D commands and the roadmap](docs/ROADMAP.md).
+
+- List build targets and build a game package inside the versioned container image: `cargo run --locked --bin aurora -- targets` and `cargo run --locked --bin aurora -- build --project PATH --target linux --output DIR`. Add `--dry-run` to inspect the container command.
+- Build and smoke-test the Linux builder image locally with `tools/test-builder-images.sh`; it prints `SKIP` when Docker or Podman is unavailable. Windows and Android remain blocked; see [the build package model](docs/BUILD_PACKAGES.md).
+- On an Apple-branded host, `cargo run --locked --bin aurora -- build --project PATH --target macos --output Game.app` exports and packages a `.app`, including native scripts; add `--sign IDENTITY` and `--notarize KEYCHAIN_PROFILE` for distribution. This host path needs no container engine, and native scripts use the Unix shared-memory transport. There is deliberately no macOS container image.
+- On macOS, run `tools/test-macos-app.sh [OUTPUT.app] [debug|release]` to package and headless-smoke-test a scriptless baseline app, and `tools/package-macos.sh ARCHIVE.tar.gz [debug|release]` for the per-architecture engine kit. `.github/workflows/packages.yml.disabled` runs these on `macos-14` and `macos-15-intel`.
+- `.github/workflows/packages.yml.disabled` is the package CI and publisher. Pull requests and `main` pushes build and test release artifacts without publishing; `v*` tags publish Linux, macOS, and Windows engine archives plus host kits. It uses `taiki-e/upload-rust-binary-action`, tests the Linux Docker/Podman builder path, and publishes only the Linux builder image. Windows and Android images stay unpublishable.
 
 ## Conventions
 
