@@ -5,9 +5,9 @@ declare function nativeReceive(bytes: Uint8Array): number;
 declare function nativeReply(bytes: Uint8Array): number;
 
 export function launch(component: Component): void {
-  launchMany([component]);
+  void launchMany([component]);
 }
 
-export function launchMany(components: Component[]): void {
-  run(components, (bytes) => nativeReceive(bytes), (bytes) => nativeReply(bytes));
+export async function launchMany(components: Component[]): Promise<void> {
+  await run(components, (bytes) => nativeReceive(bytes), (bytes) => nativeReply(bytes));
 }
