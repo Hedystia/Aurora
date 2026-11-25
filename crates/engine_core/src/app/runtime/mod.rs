@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use script_api::Kind;
 use winit::{
     event::{ElementState, WindowEvent},
@@ -407,7 +407,56 @@ impl Authored {
                 detail,
                 Some(state.local.scale.map(f64::from)),
             )?;
+            if let Some(spatial) = state.spatial {
+                self.dispatch_spatial(
+                    binding,
+                    host,
+                    Kind::NodeTransform3D,
+                    u64::from(reference),
+                    spatial.position,
+                )?;
+                self.dispatch_spatial(
+                    binding,
+                    host,
+                    Kind::NodeRotation3D,
+                    u64::from(reference),
+                    spatial.rotation,
+                )?;
+                self.dispatch_spatial(
+                    binding,
+                    host,
+                    Kind::NodeScale3D,
+                    u64::from(reference),
+                    spatial.scale,
+                )?;
+            }
         }
+        Ok(())
+    }
+
+    /// Sends one spatial transform stream and requires an acknowledgement.
+    fn dispatch_spatial(
+        &mut self,
+        binding: u32,
+        node: EntityId,
+        kind: Kind,
+        detail: u64,
+        vector: [f32; 3],
+    ) -> Result<()> {
+        let reply = self
+            .script
+            .as_mut()
+            .context("Script disconnected")?
+            .exchange_control(kind, binding, node.0, vector.map(f64::from), detail)?;
+        ensure!(
+            reply.command.is_none(),
+            "Spatial transform streams require an acknowledgement"
+        );
+        self.bindings
+            .get_mut(&binding)
+            .context("Unknown component binding")?
+            .lifecycle
+            .enabled = reply.enabled;
         Ok(())
     }
 
@@ -597,7 +646,13 @@ impl Authored {
                 .script
                 .as_mut()
                 .context("Script disconnected")?
-                .exchange_control(kind, binding, node.0, position, detail)?;
+                .exchange_control(
+                    kind,
+                    binding,
+                    node.0,
+                    [position[0], position[1], 0.0],
+                    detail,
+                )?;
             self.bindings
                 .get_mut(&binding)
                 .context("Unknown component binding")?
@@ -645,6 +700,9 @@ impl Authored {
             Command::PlayOneShot(index) => self.require_gameplay()?.sound(index)?,
             Command::SetLinearVelocity(velocity) => {
                 self.director.set_linear_velocity(node, velocity)?
+            }
+            Command::SetLinearVelocity3D(velocity) => {
+                self.director.set_linear_velocity_3d(node, velocity)?
             }
             Command::MoveNode(index, position) => {
                 self.move_node(self.target(index)?, position)?;
@@ -1094,7 +1152,9 @@ impl Authored {
 
     fn dispatch_contacts(&mut self) -> Result<()> {
         if self.script.is_none()
-            || (self.gameplay.is_none() && self.director.physics_contacts().is_empty())
+            || (self.gameplay.is_none()
+                && self.director.physics_contacts().is_empty()
+                && self.director.physics3d_contacts().is_empty())
         {
             return Ok(());
         }
@@ -1110,7 +1170,8 @@ impl Authored {
                 let contacts = if let Some(game) = &mut self.gameplay {
                     game.contacts(&states, target, self.director.physics_overlaps(target))
                 } else {
-                    self.director
+                    let mut events: Vec<(Kind, EntityId)> = self
+                        .director
                         .physics_contacts()
                         .iter()
                         .filter_map(|contact| {
@@ -1131,7 +1192,28 @@ impl Authored {
                                 other,
                             ))
                         })
-                        .collect()
+                        .collect();
+                    events.extend(self.director.physics3d_contacts().iter().filter_map(
+                        |contact| {
+                            let [a, b] = contact.nodes;
+                            let other = if a == target {
+                                b
+                            } else if b == target {
+                                a
+                            } else {
+                                return None;
+                            };
+                            Some((
+                                if contact.entered {
+                                    Kind::CollisionEnter3D
+                                } else {
+                                    Kind::CollisionExit3D
+                                },
+                                other,
+                            ))
+                        },
+                    ));
+                    events
                 };
                 entry.insert(contacts);
             }
