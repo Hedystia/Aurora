@@ -53,7 +53,7 @@
 
 - Rapier remains the default 3D solver. The optional Jolt implementation is selected at runtime in a build that enables `physics-jolt`. Both expose the same cuboid pose and velocity shape and advance once per existing fixed tick.
 - The 3D preview and windowed player share their existing GPU device, surface management and frame readback. The new opaque pass owns a perspective camera, an instanced unit cuboid and a depth attachment sized to the active target.
-- The spatial snapshot adds an optional 3D section. The 2D state schema and scripting protocol stay compatible with the earlier samples.
+- The spatial snapshot adds an optional 3D section. The 2D state schema stays compatible with the earlier samples, but protocol 16 widens the script envelope from 52 to 60 bytes with a real Z slot instead of packing a coordinate into `detail`. Scripts from older protocols must be rebuilt. Authored 3D bodies are queued by the host and written when the lazily built Rapier world has created the body, so first-tick script callbacks do not race body creation. Spatial contact transitions are derived from Rapier contact pairs and mapped back to scene nodes through collider ownership.
 
 ## Export bundle integrity
 
