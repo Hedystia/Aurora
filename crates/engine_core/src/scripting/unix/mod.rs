@@ -245,7 +245,7 @@ fn decode_command(reply: &Envelope) -> Result<Option<ScriptCommand>> {
                 _ => anyhow::bail!("Invalid script sprite load operation"),
             }
         }
-        Kind::LoadAudio | Kind::LoadPrefab | Kind::Raycast3D => {
+        Kind::LoadAudio | Kind::LoadPrefab | Kind::Raycast3D | Kind::OverlapQuery => {
             let request = reply.detail as u32;
             let operation = (reply.detail >> 32) as u32;
             let chunk = |length: u32| -> Result<([u8; 12], u8)> {
@@ -258,6 +258,7 @@ fn decode_command(reply: &Envelope) -> Result<Option<ScriptCommand>> {
                 (_, 0) if reply.kind == Kind::LoadPrefab => {
                     Ok(Some(ScriptCommand::LoadPrefabStart(request)))
                 }
+                (Kind::OverlapQuery, 0) => Ok(Some(ScriptCommand::OverlapStart(request))),
                 (_, 0) => Ok(Some(ScriptCommand::RaycastStart(request))),
                 (_, 13) if reply.kind == Kind::LoadAudio => {
                     Ok(Some(ScriptCommand::LoadAudioEnd(request)))
@@ -265,6 +266,7 @@ fn decode_command(reply: &Envelope) -> Result<Option<ScriptCommand>> {
                 (_, 13) if reply.kind == Kind::LoadPrefab => {
                     Ok(Some(ScriptCommand::LoadPrefabEnd(request)))
                 }
+                (Kind::OverlapQuery, 13) => Ok(Some(ScriptCommand::OverlapEnd(request))),
                 (_, 13) => Ok(Some(ScriptCommand::RaycastEnd(request))),
                 (Kind::LoadAudio, length @ 1..=12) => {
                     let (bytes, length) = chunk(length)?;
@@ -277,6 +279,10 @@ fn decode_command(reply: &Envelope) -> Result<Option<ScriptCommand>> {
                 (Kind::Raycast3D, length @ 1..=12) => {
                     let (bytes, length) = chunk(length)?;
                     Ok(Some(ScriptCommand::RaycastChunk(request, bytes, length)))
+                }
+                (Kind::OverlapQuery, length @ 1..=12) => {
+                    let (bytes, length) = chunk(length)?;
+                    Ok(Some(ScriptCommand::OverlapChunk(request, bytes, length)))
                 }
                 _ => anyhow::bail!("Invalid script chunk operation"),
             }
