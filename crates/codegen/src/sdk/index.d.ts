@@ -93,6 +93,8 @@ export declare class Director {
     scene: number;
     pause(): void;
     resume(): void;
+    showLoading(): void;
+    hideLoading(): void;
     loadScene(name: string): boolean;
     changeScene(index: number): void;
 }
@@ -116,6 +118,7 @@ export declare class SceneCommands {
     frame(node: number, frame: number): void;
     setSpriteFrame(node: NodeRef, frame: SpriteFrame): void;
     setText(node: number, value: string): void;
+    setConfig(name: string, value: string): void;
     sound(clip: number): void;
     bestScore(score: number): void;
     addComponent(node: number, type: string | ComponentConstructor<Component>): void;
@@ -167,6 +170,22 @@ export declare class AssetManager {
 }
 /** Global asset manager for bundle and non-component resource work. */
 export declare const assetManager: AssetManager;
+/** Host-pushed key/value state. Values arrive once per scene start. */
+export declare class KeyValueStore {
+    private values;
+    private pending;
+    get(name: string): string | null;
+    /** @internal Stores one config value locally. */
+    set(name: string, value: string): void;
+    /** @internal Clears cached values before a new scene's configuration arrives. */
+    reset(): void;
+    /** @internal Accumulates one `name\0value` chunk stream from the host. */
+    chunk(operation: number, entry: number, bytes: number[]): void;
+}
+/** Project-scoped config values supplied by the host. Writes persist through the host. */
+export declare const config: KeyValueStore;
+/** Host-only secret values supplied by the host. Secrets cannot be written from scripts. */
+export declare const secrets: KeyValueStore;
 export declare class NodeRef {
     readonly index: number;
     private readonly commands;
