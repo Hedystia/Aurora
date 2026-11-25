@@ -55,7 +55,7 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         return;
     }
     if !editor.asset_directory.is_dir() {
-        editor.asset_directory = editor.project.root.join("assets");
+        editor.asset_directory = editor.project.root.clone();
     }
     let root = editor.project.root.clone();
     let directory = editor.asset_directory.clone();
@@ -172,10 +172,12 @@ fn files(ui: &mut Ui, editor: &mut Editor) {
     } else {
         entries.sort_by_key(|path| (!path.is_dir(), path.file_name().map(|name| name.to_owned())));
     }
+    let content_width = ui.available_width();
     egui::ScrollArea::vertical()
         .id_salt("asset-files")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_viewport(ui, |ui, _| {
+            ui.set_width(content_width);
             if entries.is_empty() {
                 ui.label(if searching {
                     strings::NO_RESULTS
@@ -314,6 +316,19 @@ fn breadcrumb_segments(root: &Path, directory: &Path) -> Vec<String> {
         .collect()
 }
 
+fn paint_label(ui: &Ui, rect: Rect, name: &str, align: egui::Align2) {
+    ui.painter().with_clip_rect(rect).text(
+        match align {
+            egui::Align2::CENTER_BOTTOM => rect.center_bottom(),
+            _ => rect.left_center(),
+        },
+        align,
+        name,
+        egui::FontId::proportional(12.0),
+        theme::TEXT,
+    );
+}
+
 fn tile(ui: &mut Ui, editor: &mut Editor, path: &Path, root: &Path, searching: bool) {
     let (rect, response) =
         ui.allocate_exact_size(vec2(theme::TILE, theme::TILE), Sense::click_and_drag());
@@ -332,14 +347,14 @@ fn tile(ui: &mut Ui, editor: &mut Editor, path: &Path, root: &Path, searching: b
         },
     );
     let name = display_name(root, path, searching);
-    ui.put(
+    paint_label(
+        ui,
         Rect::from_min_max(
             pos2(rect.left() + 3.0, rect.bottom() - 24.0),
             pos2(rect.right() - 3.0, rect.bottom() - 2.0),
         ),
-        egui::Label::new(egui::RichText::new(name.as_str()).color(theme::TEXT))
-            .truncate()
-            .selectable(false),
+        &name,
+        egui::Align2::CENTER_BOTTOM,
     );
     response.dnd_set_drag_payload(Drag::Asset(path.to_path_buf()));
     if response.clicked() {
@@ -378,12 +393,14 @@ fn file_row(ui: &mut Ui, editor: &mut Editor, path: &Path, root: &Path, searchin
         },
     );
     let name = display_name(root, path, searching);
-    ui.put(
+    paint_label(
+        ui,
         Rect::from_min_max(
             pos2(icon_rect.right() + 6.0, rect.top() + 3.0),
             pos2(rect.right() - 4.0, rect.bottom() - 3.0),
         ),
-        egui::Label::new(name.as_str()).truncate().selectable(false),
+        &name,
+        egui::Align2::LEFT_CENTER,
     );
     response.dnd_set_drag_payload(Drag::Asset(path.to_path_buf()));
     if response.clicked() {
