@@ -1,0 +1,55 @@
+# syntax=docker/dockerfile:1.7
+# Aurora builder image · Windows x86-64 (BLOCKED, toolchain groundwork only)
+#
+# This image can cross-build the player with a validated MinGW toolchain. It
+# cannot yet package a game: script IPC is Unix-only and the editor export
+# manifest records the compiling host target. Do not publish or advertise this
+# image as Windows game-export support. See docs/BUILD_PACKAGES.md.
+
+FROM rust:1.99.1-bookworm
+
+ARG AURORA_VERSION=0.1.0
+
+LABEL org.opencontainers.image.title="Aurora game builder (experimental)"
+LABEL org.opencontainers.image.version="${AURORA_VERSION}"
+LABEL org.aurora.target="windows-x86_64"
+LABEL org.aurora.triple="x86_64-pc-windows-gnu"
+LABEL org.aurora.status="blocked"
+LABEL org.aurora.abiversion="1"
+LABEL org.aurora.engine_version="${AURORA_VERSION}"
+LABEL org.aurora.toolchain.rust="1.99.1"
+LABEL org.aurora.toolchain.mingw="13"
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        clang \
+        curl \
+        file \
+        g++-mingw-w64-x86-64 \
+        libasound2-dev \
+        pkg-config \
+        tar \
+        unzip \
+        xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --uid 10001 --create-home --shell /bin/bash builder
+
+WORKDIR /opt/aurora
+COPY --chown=builder:builder . /opt/aurora
+COPY build/images/aurora-container-build.sh /usr/local/bin/aurora-container-build
+RUN chmod 0755 /usr/local/bin/aurora-container-build
+
+USER builder
+ENV HOME=/home/builder
+
+RUN rustup target add x86_64-pc-windows-gnu
+RUN cargo fetch --locked
+RUN cargo build --locked --release --target x86_64-pc-windows-gnu --bin aurora-player
+
+# Packaging intentionally fails with a precise blocker instead of pretending
+# the Linux-built editor can emit a verified Windows package.
+ENTRYPOINT ["/usr/local/bin/aurora-container-build"]
