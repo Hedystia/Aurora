@@ -84,7 +84,9 @@ pub(super) const GAME_VIEW: &str = "Game";
 pub(super) const FRAME_VIEW: &str = "Reset view";
 pub(super) const GAME_EMPTY: &str = "Press Play to start the game";
 pub(super) const VIEW_HINT: &str = "Right drag to pan · Scroll to zoom";
-pub(super) const ORBIT_HINT: &str = "Middle-drag to orbit";
+pub(super) const ORBIT_HINT: &str = "Middle-drag to orbit · Right-drag to pan · Scroll to dolly";
+pub(super) const VIEW_2D: &str = "2D";
+pub(super) const VIEW_3D: &str = "3D";
 pub(super) const ANIMATION_EMPTY: &str =
     "To start creating an animation, you need to add a property.";
 pub(super) const ADD_ANIMATION: &str = "Add Animation Component";
