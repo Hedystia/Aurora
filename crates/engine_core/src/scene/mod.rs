@@ -412,6 +412,11 @@ impl Scene {
         Ok(self.node(id)?.local)
     }
 
+    /// Reads a node's optional local spatial component.
+    pub fn spatial(&self, id: EntityId) -> Result<Option<spatial::SpatialNode>> {
+        Ok(self.node(id)?.spatial.clone())
+    }
+
     /// Updates the local transform.
     pub fn set_transform(&mut self, id: EntityId, local: Transform2D) -> Result<()> {
         self.world.get::<&mut Node>(self.entity(id)?)?.local = local;
