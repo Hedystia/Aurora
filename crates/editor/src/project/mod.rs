@@ -41,14 +41,23 @@ pub(super) struct Project {
 
 impl Project {
     pub fn open(path: &Path) -> Result<Self> {
-        Self::open_document(path, true)
+        Self::open_document(path, true, None)
     }
 
-    fn open_document(path: &Path, allow_new: bool) -> Result<Self> {
+    /// Opens a scene or prefab while keeping the current project root and FileSystem.
+    pub(super) fn open_in_root(path: &Path, root: &Path) -> Result<Self> {
+        Self::open_document(path, false, Some(root))
+    }
+
+    fn open_document(path: &Path, allow_new: bool, root_override: Option<&Path>) -> Result<Self> {
         let (root, path) = if path.is_dir() {
             let root = path.canonicalize()?;
             let file = startup_scene(&root);
             (root, file)
+        } else if let Some(root) = root_override {
+            let path = path.to_path_buf();
+            ensure!(path.starts_with(root), "Document escapes the project");
+            (root.to_path_buf(), path)
         } else {
             let root = path
                 .parent()
@@ -92,7 +101,7 @@ impl Project {
     }
 
     pub fn open_existing(path: &Path) -> Result<Self> {
-        Self::open_document(path, false)
+        Self::open_document(path, false, None)
     }
 
     pub fn create(path: &Path, kind: ProjectKind) -> Result<Self> {
@@ -658,6 +667,20 @@ fn empty() -> SceneFile {
 mod tests {
     use super::*;
     use engine_core::animation::{Clip, Interpolation, Key, Property, Track, Wrap};
+
+    #[test]
+    fn scenes_opened_inside_the_project_keep_the_project_root() -> Result<()> {
+        let scratch = tempfile::tempdir()?;
+        let root = scratch.path().canonicalize()?;
+        let folder = root.join("levels");
+        fs::create_dir(&folder)?;
+        fs::write(folder.join("Two.scene"), r#"{"version":1,"nodes":[]}"#)?;
+        let project = Project::open_in_root(&folder.join("Two.scene"), &root)?;
+        assert_eq!(project.root, root);
+        assert_eq!(project.path, folder.join("Two.scene"));
+        assert!(Project::open_in_root(&folder.join("Missing.scene"), &root).is_err());
+        Ok(())
+    }
 
     #[test]
     fn session_scene_overrides_default_and_falls_back_to_main() -> Result<()> {
