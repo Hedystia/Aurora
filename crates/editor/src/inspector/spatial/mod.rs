@@ -50,6 +50,15 @@ pub(super) fn show(ui: &mut Ui, node: &mut SpatialNode) -> bool {
                 ui.label("Base color");
                 changed |= ui.color_edit_button_rgb(&mut node.color).changed();
             });
+            changed |= ui
+                .add(egui::Slider::new(&mut node.metallic, 0.0..=1.0).text("Metallic"))
+                .changed();
+            changed |= ui
+                .add(egui::Slider::new(&mut node.roughness, 0.0..=1.0).text("Roughness"))
+                .changed();
+            if let Some(path) = &node.texture {
+                ui.label(format!("Base texture: {}", path.display()));
+            }
         }
         if node.role == Role::Cube {
             egui::ComboBox::from_label("Physics")
