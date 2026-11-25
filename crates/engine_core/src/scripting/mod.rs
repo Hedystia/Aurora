@@ -10,6 +10,7 @@ pub(crate) struct Reply {
 pub(crate) enum Command {
     SetPosition([f32; 2]),
     SetLinearVelocity([f32; 2]),
+    SetLinearVelocity3D([f32; 3]),
     PlayOneShot(usize),
     Pause,
     Resume,
@@ -65,7 +66,7 @@ impl Session {
         _: script_api::Kind,
         _: u32,
         _: u64,
-        _: [f64; 2],
+        _: [f64; 3],
         _: u64,
     ) -> anyhow::Result<Reply> {
         anyhow::bail!("Script IPC is currently available on Unix hosts (Linux and macOS)")
