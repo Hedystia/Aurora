@@ -2,7 +2,8 @@
 
 pub(super) const TITLE: &str = "Aurora Editor";
 pub(super) const SCENE: &str = "Scene";
-pub(super) const SCENE_VIEW: &str = "2D / 3D";
+pub(super) const SCENE_TREE: &str = "Scene Tree";
+pub(super) const VIEWPORT: &str = "Viewport";
 pub(super) const FILE_SYSTEM: &str = "FileSystem";
 pub(super) const OUTPUT: &str = "Output";
 pub(super) const ANIMATION: &str = "Animation";
@@ -117,6 +118,7 @@ pub(super) const LOOP: &str = "Loop";
 pub(super) const PING_PONG: &str = "Ping-pong";
 pub(super) const PLAY: &str = "▶ Play";
 pub(super) const PLAY_SHORTCUT: &str = "Play the current scene (F5)";
+pub(super) const STOP: &str = "Stop";
 pub(super) const STOP_SHORTCUT: &str = "Stop the game (F8)";
 pub(super) const PAUSE: &str = "Pause";
 pub(super) const RESUME: &str = "Resume";
@@ -133,6 +135,7 @@ pub(super) const HELP: &str = "Help";
 pub(super) const OPEN_PROJECT: &str = "Open Project";
 pub(super) const SAVE: &str = "Save Scene";
 pub(super) const RESET_LAYOUT: &str = "Reset Layout";
+pub(super) const GODOT_LAYOUT: &str = "Godot Layout";
 pub(super) const SAVE_LAYOUT: &str = "Save Layout";
 pub(super) const NO_PACKAGES: &str = "No project packages";
 pub(super) const REFRESH_ASSETS: &str = "Refresh Assets";
