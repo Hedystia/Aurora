@@ -232,6 +232,20 @@ fn decode_command(reply: &Envelope) -> Result<Option<ScriptCommand>> {
                 _ => anyhow::bail!("Invalid script config operation"),
             }
         }
+        Kind::LoadSprite => {
+            let request = reply.detail as u32;
+            let operation = (reply.detail >> 32) as u32;
+            match operation {
+                0 => Ok(Some(ScriptCommand::LoadSpriteStart(request))),
+                13 => Ok(Some(ScriptCommand::LoadSpriteEnd(request))),
+                length @ 1..=12 => {
+                    let (bytes, length) = decode_chunk_bytes(length, reply.x, reply.y)?;
+                    Ok(Some(ScriptCommand::LoadSpriteChunk(request, bytes, length)))
+                }
+                _ => anyhow::bail!("Invalid script sprite load operation"),
+            }
+        }
+        Kind::ReleaseAsset => Ok(Some(ScriptCommand::ReleaseAsset(reply.detail))),
         Kind::ShowNode if reply.x == 0.0 || reply.x == 1.0 => Ok(Some(ScriptCommand::ShowNode(
             reply.detail.try_into()?,
             reply.x == 1.0,
@@ -363,6 +377,49 @@ mod tests {
                 pack_six(&chunk[6..]),
             ))?,
             Some(ScriptCommand::ConfigSetChunk(3, _, 6))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn decodes_on_demand_sprite_load_chunks() -> Result<()> {
+        let path = *b"assets/ui/";
+        let envelope = |operation: u64, request: u64, x, y| Envelope {
+            protocol: VERSION,
+            seq: 0,
+            kind: Kind::LoadSprite,
+            node: 0,
+            x,
+            y,
+            z: 0.0,
+            detail: (operation << 32) | request,
+            binding: 0,
+        };
+        assert!(matches!(
+            decode_command(&envelope(0, 7, 0.0, 0.0))?,
+            Some(ScriptCommand::LoadSpriteStart(7))
+        ));
+        assert!(matches!(
+            decode_command(&envelope(6, 7, pack_six(&path[..6]), pack_six(&path[6..]),))?,
+            Some(ScriptCommand::LoadSpriteChunk(7, _, 6))
+        ));
+        assert!(matches!(
+            decode_command(&envelope(13, 7, 0.0, 0.0))?,
+            Some(ScriptCommand::LoadSpriteEnd(7))
+        ));
+        assert!(matches!(
+            decode_command(&Envelope {
+                protocol: VERSION,
+                seq: 0,
+                kind: Kind::ReleaseAsset,
+                node: 0,
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                detail: 0x8000_0001,
+                binding: 0,
+            })?,
+            Some(ScriptCommand::ReleaseAsset(0x8000_0001))
         ));
         Ok(())
     }
