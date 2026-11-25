@@ -1,4 +1,7 @@
-//! Unix socket framing and Linux memfd SPSC rings.
+//! Unix socket framing and portable shared-memory SPSC rings.
+//!
+//! Linux and Android use sealed `memfd` objects; macOS uses an unlinked POSIX
+//! shared-memory object created with `shm_open`.
 
 use std::{
     fs::File,
@@ -9,10 +12,20 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+use std::{ffi::CString, io, os::fd::FromRawFd};
+
 use anyhow::{Result, ensure};
 use memmap2::{MmapMut, MmapOptions};
-use nix::fcntl::{FcntlArg, SealFlag, fcntl};
-use nix::sys::memfd::{MFdFlags, memfd_create};
+use nix::fcntl::{FcntlArg, fcntl};
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+use nix::{fcntl::FdFlag, libc};
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use nix::{
+    fcntl::SealFlag,
+    sys::memfd::{MFdFlags, memfd_create},
+};
 
 use crate::{ENVELOPE_BYTES, Envelope, HEADER_BYTES, PAYLOAD_BYTES};
 
@@ -21,6 +34,9 @@ const CURSORS: usize = 8;
 const RING_BYTES: usize = CURSORS + CAPACITY as usize * PAYLOAD_BYTES;
 const REGION_BYTES: usize = 2 * RING_BYTES;
 const DEADLINE: Duration = Duration::from_millis(250);
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+static NEXT_SHM: AtomicU32 = AtomicU32::new(0);
 
 /// Which channel carries payload bytes.
 #[derive(Clone, Copy)]
@@ -117,18 +133,8 @@ struct Region {
 
 impl Region {
     fn new() -> Result<Self> {
-        let file = File::from(memfd_create(
-            "aurora-script",
-            MFdFlags::MFD_CLOEXEC | MFdFlags::MFD_ALLOW_SEALING,
-        )?);
-        file.set_len(REGION_BYTES as u64)?;
-        fcntl(
-            &file,
-            FcntlArg::F_ADD_SEALS(
-                SealFlag::F_SEAL_GROW | SealFlag::F_SEAL_SHRINK | SealFlag::F_SEAL_SEAL,
-            ),
-        )?;
-        // SAFETY: The new file has the exact sealed size and is private until child launch.
+        let file = create_region_file()?;
+        // SAFETY: The new file has the exact size and is private until child launch.
         let mut mapping = unsafe { MmapOptions::new().len(REGION_BYTES).map_mut(&file)? };
         let base = mapping.as_mut_ptr();
         Ok(Self {
@@ -188,9 +194,78 @@ impl Region {
     }
 }
 
+/// Allocates a private, unlinked shared-memory file with a fixed size.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn create_region_file() -> Result<File> {
+    let file = File::from(memfd_create(
+        "aurora-script",
+        MFdFlags::MFD_CLOEXEC | MFdFlags::MFD_ALLOW_SEALING,
+    )?);
+    file.set_len(REGION_BYTES as u64)?;
+    fcntl(
+        &file,
+        FcntlArg::F_ADD_SEALS(
+            SealFlag::F_SEAL_GROW | SealFlag::F_SEAL_SHRINK | SealFlag::F_SEAL_SEAL,
+        ),
+    )?;
+    Ok(file)
+}
+
+/// Allocates a private, unlinked POSIX shared-memory file for non-Linux Unixes.
+///
+/// Darwin does not implement Linux file sealing, so the child could resize the
+/// region in principle. The descriptor is only handed to the script this
+/// process launches, and the mapping/ring protocol never trusts the child with
+/// cursor values outside its own producer/consumer positions.
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn create_region_file() -> Result<File> {
+    for _ in 0..16 {
+        let name = format!(
+            "/aurora-{}-{}",
+            std::process::id(),
+            NEXT_SHM.fetch_add(1, Ordering::Relaxed)
+        );
+        let name = CString::new(name)?;
+        // SAFETY: `name` is NUL-terminated and the flags/mode are valid.
+        let fd = unsafe {
+            libc::shm_open(
+                name.as_ptr(),
+                libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == ErrorKind::AlreadyExists {
+                continue;
+            }
+            return Err(error.into());
+        }
+        // SAFETY: shm_open returned a fresh descriptor owned by this call.
+        let file = unsafe { File::from_raw_fd(fd) };
+        // SAFETY: `name` is the same NUL-terminated name used above.
+        if unsafe { libc::shm_unlink(name.as_ptr()) } != 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+        file.set_len(REGION_BYTES as u64)?;
+        fcntl(&file, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
+        return Ok(file);
+    }
+    anyhow::bail!("Could not allocate a unique shared-memory region")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_link_exposes_a_region() -> Result<()> {
+        let (link, _child) = Link::pair(Mode::Shared)?;
+        assert!(link.shared_fd().is_some());
+        let (socket_link, _child) = Link::pair(Mode::Socket)?;
+        assert!(socket_link.shared_fd().is_none());
+        Ok(())
+    }
 
     #[test]
     fn ring_saturation_and_cursor_wrap() -> Result<()> {
