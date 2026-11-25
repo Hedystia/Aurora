@@ -64,6 +64,12 @@ struct Options {
     include_scene: Vec<PathBuf>,
 }
 
+#[derive(Clone)]
+enum ConfirmAction {
+    Open(PathBuf),
+    Delete(PathBuf),
+}
+
 struct Editor {
     project: Project,
     layout: DockState<docks::Dock>,
@@ -100,6 +106,7 @@ struct Editor {
     project_settings: bool,
     default_scene: String,
     pending_open: Option<PathBuf>,
+    confirm_action: Option<ConfirmAction>,
     close_dialog: bool,
     logs: Vec<String>,
     types_installed: bool,
@@ -146,6 +153,7 @@ impl Editor {
             project_settings: false,
             default_scene,
             pending_open: None,
+            confirm_action: None,
             close_dialog: false,
             logs: Vec::new(),
             types_installed: false,
@@ -178,6 +186,24 @@ impl Editor {
     pub(crate) fn begin_new_asset(&mut self, kind: assets_browser::AssetKind) {
         self.new_asset = Some(kind);
         self.asset_name.clear();
+    }
+
+    fn delete_asset(&mut self, path: &Path) -> Result<()> {
+        let deleted_dir = path.is_dir();
+        assets_browser::remove(&self.project.root, path)?;
+        if self
+            .selected_asset
+            .as_ref()
+            .is_some_and(|selected| selected.starts_with(path))
+        {
+            self.selected_asset = None;
+        }
+        if deleted_dir && self.asset_directory.starts_with(path) {
+            self.asset_directory = path.parent().unwrap_or(&self.project.root).to_path_buf();
+        }
+        self.asset_delete = None;
+        self.refresh_assets();
+        Ok(())
     }
 
     fn begin_rename(&mut self, index: usize) {
@@ -274,15 +300,25 @@ impl Editor {
 
     fn open_asset(&mut self, path: &Path) -> Result<()> {
         if (project::is_scene(path) || project::is_prefab(path)) || path.is_dir() {
-            ensure!(!self.project.dirty, "{}", strings::SAVE_FIRST);
-            let project = Project::open(path)?;
+            let in_project = path.starts_with(&self.project.root)
+                && (project::is_scene(path) || project::is_prefab(path));
+            let previous_directory = self.asset_directory.clone();
+            let project = if in_project {
+                Project::open_in_root(path, &self.project.root)?
+            } else {
+                Project::open(path)?
+            };
             self.save_layout()?;
             self.stop_play();
             self.timeline = timeline::Timeline::default();
             self.animation_display = None;
             self.viewport = viewport::Viewport::default();
             self.selected_asset = None;
-            self.asset_directory = PathBuf::new();
+            self.asset_directory = if in_project {
+                previous_directory
+            } else {
+                PathBuf::new()
+            };
             self.asset_delete = None;
             self.rename = None;
             self.layout = load_layout(&project);
@@ -701,24 +737,13 @@ impl Editor {
                             .add(egui::Button::new(strings::DELETE).fill(theme::PRIMARY))
                             .clicked()
                         {
-                            let deleted_dir = path.is_dir();
-                            let result = assets_browser::remove(&self.project.root, &path);
-                            if result.is_ok() {
-                                if self
-                                    .selected_asset
-                                    .as_ref()
-                                    .is_some_and(|selected| selected.starts_with(&path))
-                                {
-                                    self.selected_asset = None;
-                                }
-                                if deleted_dir && self.asset_directory.starts_with(&path) {
-                                    self.asset_directory =
-                                        path.parent().unwrap_or(&self.project.root).to_path_buf();
-                                }
+                            if path == self.project.path && self.project.dirty {
                                 self.asset_delete = None;
-                                self.refresh_assets();
+                                self.confirm_action = Some(ConfirmAction::Delete(path));
+                            } else {
+                                let result = self.delete_asset(&path);
+                                self.report(result);
                             }
-                            self.report(result);
                         }
                         if ui.button(strings::CANCEL).clicked() {
                             self.asset_delete = None;
@@ -751,6 +776,53 @@ impl Editor {
                     self.component_picker = false;
                 }
             });
+        }
+        if let Some(action) = self.confirm_action.clone() {
+            let mut open = true;
+            let mut close = false;
+            let mut resolved = false;
+            let mut save_result = None;
+            let mut delete_result = None;
+            egui::Window::new(strings::UNSAVED_CHANGES)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.label(strings::UNSAVED_OPEN);
+                    if ui.button(strings::SAVE).clicked() {
+                        save_result = Some(self.project.save());
+                        resolved = save_result.as_ref().is_some_and(Result::is_ok);
+                    }
+                    if ui.button(strings::DISCARD).clicked() {
+                        resolved = true;
+                    }
+                    if ui.button(strings::CANCEL).clicked() {
+                        close = true;
+                    }
+                });
+            if close {
+                open = false;
+            }
+            if resolved && save_result.as_ref().is_none_or(Result::is_err) {
+                self.project.dirty = false;
+            }
+            if !open {
+                match &action {
+                    ConfirmAction::Open(path) => {
+                        self.pending_open = resolved.then(|| path.clone());
+                    }
+                    ConfirmAction::Delete(path) => {
+                        if resolved {
+                            delete_result = Some(self.delete_asset(path));
+                        }
+                    }
+                }
+                self.confirm_action = None;
+            }
+            if let Some(result) = save_result {
+                self.report(result);
+            }
+            if let Some(result) = delete_result {
+                self.report(result);
+            }
         }
         if self.close_dialog {
             egui::Window::new(strings::SAVE_FIRST).show(ctx, |ui| {
@@ -785,6 +857,7 @@ struct Workbench {
     editor: Option<Box<Editor>>,
     manager: project_manager::Manager,
     upgrade: Option<PendingUpgrade>,
+    pending_open: Option<(PathBuf, Option<project::ProjectKind>)>,
     managing: bool,
     screenshot: Option<PathBuf>,
     requested_size: Option<[usize; 2]>,
@@ -800,6 +873,7 @@ impl Workbench {
             editor: None,
             manager: project_manager::Manager::new(),
             upgrade: None,
+            pending_open: None,
             screenshot: options.screenshot,
             requested_size: None,
             capture_result,
@@ -931,16 +1005,22 @@ impl eframe::App for Workbench {
                 ctx.request_repaint();
             }
         }
+        self.pending_open_dialog(&ctx);
         self.capture(ui, &ctx);
     }
 }
 
 impl Workbench {
     fn open(&mut self, path: PathBuf, create: Option<project::ProjectKind>) {
+        if self
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.project.dirty)
+        {
+            self.pending_open = Some((path, create));
+            return;
+        }
         let result = (|| {
-            if let Some(editor) = &self.editor {
-                ensure!(!editor.project.dirty, "{}", strings::SAVE_FIRST);
-            }
             let project = if let Some(kind) = create {
                 Project::create(&path, kind)?
             } else {
@@ -949,6 +1029,51 @@ impl Workbench {
             self.prepare_project(project, false)
         })();
         if let Err(error) = result {
+            self.manager.error = Some(format!("{error:#}"));
+        }
+    }
+
+    fn pending_open_dialog(&mut self, ctx: &egui::Context) {
+        let Some((path, create)) = self.pending_open.clone() else {
+            return;
+        };
+        let mut open = true;
+        let mut close = false;
+        let mut resolved = false;
+        let mut save_result = None;
+        egui::Window::new(strings::UNSAVED_CHANGES)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(strings::UNSAVED_OPEN);
+                if ui.button(strings::SAVE).clicked()
+                    && let Some(editor) = &mut self.editor
+                {
+                    save_result = Some(editor.project.save());
+                    resolved = save_result.as_ref().is_some_and(Result::is_ok);
+                }
+                if ui.button(strings::DISCARD).clicked() {
+                    resolved = true;
+                }
+                if ui.button(strings::CANCEL).clicked() {
+                    close = true;
+                }
+            });
+        if close {
+            open = false;
+        }
+        if resolved
+            && save_result.as_ref().is_none_or(Result::is_err)
+            && let Some(editor) = &mut self.editor
+        {
+            editor.project.dirty = false;
+        }
+        if !open {
+            self.pending_open = None;
+            if resolved {
+                self.open(path, create);
+            }
+        }
+        if let Some(Err(error)) = save_result {
             self.manager.error = Some(format!("{error:#}"));
         }
     }
@@ -1053,9 +1178,16 @@ impl eframe::App for Editor {
             .show_inside(ui, &mut docks::Viewer(self));
         self.layout = layout;
         self.drag_preview(&ctx);
-        if let Some(path) = self.pending_open.take() {
-            let result = self.open_asset(&path);
-            self.report(result);
+        if self.confirm_action.is_none()
+            && let Some(path) = self.pending_open.clone()
+        {
+            if self.project.dirty {
+                self.confirm_action = Some(ConfirmAction::Open(path));
+            } else {
+                self.pending_open = None;
+                let result = self.open_asset(&path);
+                self.report(result);
+            }
         }
         self.dialogs(&ctx);
     }
