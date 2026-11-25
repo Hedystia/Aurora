@@ -11,6 +11,12 @@ export declare class SpriteFrame {
     constructor(path: string, nodes: number[], slots: number[]);
     frameFor(node: number): number;
 }
+/** A sprite frame imported from disk on demand rather than a scene bank. */
+export declare class LoadedSpriteFrame extends SpriteFrame {
+    readonly handle: number;
+    constructor(path: string, handle: number);
+    frameFor(_node: number): number;
+}
 export type AudioClipCallback = (error: Error | null, clip: AudioClip | null) => void;
 export type SpriteFrameCallback = (error: Error | null, frame: SpriteFrame | null) => void;
 export type PrefabCallback = (error: Error | null, prefab: Prefab | null) => void;
@@ -48,6 +54,10 @@ export declare class Resources {
     getPrefab(path: string): Prefab | null;
     loadAudioClip(path: string, callback: AudioClipCallback): void;
     loadSpriteFrame(path: string, callback: SpriteFrameCallback): void;
+    /** Imports a PNG under the project on demand and delivers a refcounted handle. */
+    loadSpriteFile(path: string, callback: SpriteFrameCallback): void;
+    /** Releases one on-demand sprite handle. Scene bank handles are unaffected. */
+    releaseSpriteFile(frame: LoadedSpriteFrame): void;
     loadPrefab(path: string, callback: PrefabCallback): void;
     /** @internal Queues one callback for the next resource phase. */
     _defer(callback: () => void): void;
