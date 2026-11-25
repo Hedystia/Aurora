@@ -1,6 +1,6 @@
 //! Versioned fixed-width protocol shared by the player and game script.
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub mod transport;
 
 use bincode::{Decode, Encode};
