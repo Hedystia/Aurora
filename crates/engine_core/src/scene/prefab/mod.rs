@@ -30,11 +30,12 @@ pub struct PrefabNode {
 /// Immutable, resolved template for one scene subtree.
 pub struct Prefab {
     nodes: Vec<PrefabNode>,
+    clips: Vec<crate::animation::Clip>,
 }
 
 impl Prefab {
     /// Validates that the template has one root and all parents precede children.
-    pub fn new(nodes: Vec<PrefabNode>) -> Result<Self> {
+    pub fn new(nodes: Vec<PrefabNode>, clips: Vec<crate::animation::Clip>) -> Result<Self> {
         ensure!(
             !nodes.is_empty() && nodes[0].parent.is_none(),
             "Prefab needs a root"
@@ -45,12 +46,20 @@ impl Prefab {
                 "Invalid prefab parent at node {index}"
             );
         }
-        Ok(Self { nodes })
+        for clip in &clips {
+            clip.validate(nodes.len())?;
+        }
+        Ok(Self { nodes, clips })
     }
 
     /// Exposes template nodes in their authored order.
     pub fn nodes(&self) -> &[PrefabNode] {
         &self.nodes
+    }
+
+    /// Exposes clips bound to the template's authored node order.
+    pub fn clips(&self) -> &[crate::animation::Clip] {
+        &self.clips
     }
 
     /// Copies an existing scene subtree into an independent template.
@@ -82,7 +91,7 @@ impl Prefab {
             },
             |_| {},
         )?;
-        Self::new(nodes)
+        Self::new(nodes, Vec::new())
     }
 
     /// Instantiates a fresh subtree, returning handles and ordered lifecycle events.
