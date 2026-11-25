@@ -103,6 +103,10 @@ pub(super) fn menus(ui: &mut Ui, editor: &mut Editor) {
             }
         });
         ui.menu_button(strings::LAYOUT, |ui| {
+            if ui.button(strings::GODOT_LAYOUT).clicked() {
+                editor.layout = docks::initial_layout();
+                ui.close();
+            }
             if ui.button(strings::RESET_LAYOUT).clicked() {
                 editor.layout = docks::initial_layout();
                 ui.close();
@@ -130,32 +134,46 @@ pub(super) fn menus(ui: &mut Ui, editor: &mut Editor) {
 
 pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let running = editor.preview.is_playing();
-            if icons::action(ui, icons::Icon::Stop, strings::STOP_SHORTCUT, None, running).clicked()
-            {
-                editor.stop_play();
-            }
-            let (icon, tip) = if editor.preview.paused {
-                (icons::Icon::Play, strings::RESUME)
-            } else {
-                (icons::Icon::Pause, strings::PAUSE)
-            };
-            if icons::action(ui, icon, tip, None, running).clicked() {
-                editor.preview.pause();
-            }
-            if icons::action(
-                ui,
-                icons::Icon::Play,
-                strings::PLAY_SHORTCUT,
-                Some(theme::PRIMARY),
-                !running,
-            )
+        let running = editor.preview.is_playing();
+        let play = icons::action(
+            ui,
+            icons::Icon::Play,
+            strings::PLAY,
+            Some(theme::PRIMARY),
+            !running,
+        );
+        if play.on_hover_text(strings::PLAY_SHORTCUT).clicked() {
+            editor.play();
+        }
+        let (icon, label) = if editor.preview.paused {
+            (icons::Icon::Play, strings::RESUME)
+        } else {
+            (icons::Icon::Pause, strings::PAUSE)
+        };
+        if icons::action(ui, icon, label, None, running)
+            .on_hover_text(strings::PAUSE)
             .clicked()
-            {
-                editor.play();
-            }
-            ui.separator();
+        {
+            editor.preview.pause();
+        }
+        if icons::action(ui, icons::Icon::Stop, strings::STOP, None, running)
+            .on_hover_text(strings::STOP_SHORTCUT)
+            .clicked()
+        {
+            editor.stop_play();
+        }
+        ui.separator();
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(
+                    editor
+                        .project
+                        .relative(&editor.project.path)
+                        .display()
+                        .to_string(),
+                )
+                .weak(),
+            );
         });
     });
 }
