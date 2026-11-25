@@ -62,8 +62,10 @@ impl Project {
             "Choose a project directory or an Aurora document"
         );
         let document = if prefab {
+            let prefab = PrefabFile::load(&path)?;
             SceneFile {
-                nodes: PrefabFile::load(&path)?.nodes,
+                nodes: prefab.nodes,
+                animations: prefab.animations,
                 ..empty()
             }
         } else if !allow_new || path.exists() {
@@ -148,6 +150,7 @@ impl Project {
             PrefabFile {
                 version: VERSION,
                 nodes: self.document.nodes.clone(),
+                animations: self.document.animations.clone(),
             }
             .save(&self.path)?;
         } else {
