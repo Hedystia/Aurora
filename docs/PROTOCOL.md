@@ -1,6 +1,6 @@
 # Script protocol 14
 
-Linux player and script use one full-duplex Unix stream socket. The script receives its end as file descriptor 0. Standard output and standard error carry diagnostics to the player's standard error. Native scripts also inherit a 592-byte memfd on descriptor 3. Its size is sealed before the process starts.
+The player and script use one full-duplex Unix stream socket. The script receives its end as file descriptor 0. Standard output and standard error carry diagnostics to the player's standard error. Native scripts also inherit a 592-byte shared-memory region on descriptor 3. Linux allocates it with a sealed `memfd`; macOS creates an unlinked POSIX shared-memory object with `shm_open`. The native script maps the descriptor and exchanges fixed-size payload slots while the socket carries the 16-byte headers.
 
 Each transaction is one request and one response with the same protocol, sequence, node, and component binding. The sequence starts at zero and increments after every valid reply. The player accepts immediate commands for the bound node and queued commands for validated authored indices. The player rejects unknown variants, the wrong protocol or sequence, mismatched node handles or bindings, and positions that cannot be stored as finite f32 values.
 
