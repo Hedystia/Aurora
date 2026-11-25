@@ -194,11 +194,13 @@ impl GpuScene {
                 nodes,
                 camera,
             } => {
-                let spatial = MeshScene::authored(&nodes);
+                let spatial = MeshScene::authored(&nodes, assets);
                 let overlay = spatial.is_some();
                 if let Some(scene) = spatial {
                     self.mesh
-                        .get_or_insert_with(|| MeshPass::new(&self.device, self.format))
+                        .get_or_insert_with(|| {
+                            MeshPass::new(&self.device, &self.queue, self.format)
+                        })
                         .encode(
                             &self.device,
                             &self.queue,
@@ -219,7 +221,7 @@ impl GpuScene {
             }
             Frame::Cubes(cubes) => {
                 self.mesh
-                    .get_or_insert_with(|| MeshPass::new(&self.device, self.format))
+                    .get_or_insert_with(|| MeshPass::new(&self.device, &self.queue, self.format))
                     .encode(
                         &self.device,
                         &self.queue,
