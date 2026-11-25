@@ -427,6 +427,10 @@ pub fn protocol_typescript() -> Result<String> {
         script_api::Kind::ScaleNode,
         script_api::Kind::RotateNode,
         script_api::Kind::SetText,
+        script_api::Kind::SetLoading,
+        script_api::Kind::ConfigSet,
+        script_api::Kind::ConfigValue,
+        script_api::Kind::SecretValue,
     ] {
         writeln!(protocol, "export const kind{kind:?} = {};", kind as u32)?;
     }
