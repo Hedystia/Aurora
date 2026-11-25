@@ -50,8 +50,6 @@ impl AssetKind {
 }
 
 pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
-    toolbar(ui, editor);
-    ui.separator();
     if editor.asset_paths.is_empty() {
         ui.label(strings::DROP_ASSETS);
         return;
@@ -59,8 +57,13 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
     if !editor.asset_directory.is_dir() {
         editor.asset_directory = editor.project.root.join("assets");
     }
-    let height = ui.available_height();
     let root = editor.project.root.clone();
+    let directory = editor.asset_directory.clone();
+    breadcrumb(ui, editor, &root, &directory);
+    ui.separator();
+    toolbar(ui, editor);
+    ui.separator();
+    let height = ui.available_height();
     ui.horizontal_top(|ui| {
         let width = ui.available_width();
         if width >= 190.0 {
@@ -234,9 +237,7 @@ fn folder_tree(ui: &mut Ui, editor: &mut Editor, directory: &Path, depth: usize)
 }
 
 fn files(ui: &mut Ui, editor: &mut Editor) {
-    let root = editor.project.root.clone();
     let directory = editor.asset_directory.clone();
-    breadcrumb(ui, editor, &root, &directory);
     let query = editor.asset_search.to_lowercase();
     let mut entries: Vec<PathBuf> = fs::read_dir(&directory)
         .into_iter()
@@ -293,14 +294,29 @@ fn breadcrumb(ui: &mut Ui, editor: &mut Editor, root: &Path, directory: &Path) {
             editor.asset_directory = parent;
             editor.selected_asset = None;
         }
-        let relative = directory.strip_prefix(root).unwrap_or(directory);
-        let caption = if relative.as_os_str().is_empty() {
-            "res://".to_owned()
-        } else {
-            format!("res://{}", relative.display())
-        };
-        ui.add(egui::Label::new(egui::RichText::new(caption).color(theme::TEXT)).truncate());
+        if ui.small_button("res://").clicked() {
+            editor.asset_directory = root.to_path_buf();
+            editor.selected_asset = None;
+        }
+        let mut current = root.to_path_buf();
+        for name in breadcrumb_segments(root, directory) {
+            ui.label("/");
+            current.push(&name);
+            if ui.small_button(name.as_str()).clicked() {
+                editor.asset_directory = current.clone();
+                editor.selected_asset = None;
+            }
+        }
     });
+}
+
+fn breadcrumb_segments(root: &Path, directory: &Path) -> Vec<String> {
+    directory
+        .strip_prefix(root)
+        .unwrap_or(directory)
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect()
 }
 
 fn tile(ui: &mut Ui, editor: &mut Editor, path: &Path) {
@@ -555,6 +571,16 @@ fn node(name: &str, parent: Option<usize>) -> NodeFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn breadcrumb_segments_stay_inside_the_project() {
+        let root = Path::new("/project");
+        assert!(breadcrumb_segments(root, root).is_empty());
+        assert_eq!(
+            breadcrumb_segments(root, &root.join("assets").join("ui")),
+            ["assets", "ui"]
+        );
+    }
 
     #[test]
     fn assets_can_be_created_and_deleted_inside_the_project() -> Result<()> {
