@@ -7,6 +7,7 @@ members = [
   "crates/editor",
   "crates/codegen",
   "crates/script_api",
+  "crates/cli",
 ]
 
 [workspace.package]
