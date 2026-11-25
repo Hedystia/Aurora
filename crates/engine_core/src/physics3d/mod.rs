@@ -36,6 +36,8 @@ pub struct Cuboid {
     pub orientation: Quat,
     /// Initial linear velocity for a dynamic body.
     pub velocity: Vec3,
+    /// Initial angular velocity in radians per second.
+    pub angular_velocity: Vec3,
     /// Whether gravity and contacts move the body.
     pub dynamic: bool,
 }
@@ -49,6 +51,8 @@ pub struct BodyState {
     pub orientation: [f32; 4],
     /// World-space linear velocity.
     pub velocity: [f32; 3],
+    /// World-space angular velocity in radians per second.
+    pub angular_velocity: [f32; 3],
 }
 
 enum Solver {
@@ -103,6 +107,11 @@ impl World3D {
         } else {
             Vec3::ZERO
         };
+        let angular = if shape.dynamic {
+            shape.angular_velocity
+        } else {
+            Vec3::ZERO
+        };
         let handle = match &mut self.0 {
             Solver::Rapier(world, ids) => {
                 let body = if shape.dynamic {
@@ -112,7 +121,8 @@ impl World3D {
                 };
                 let body = body
                     .pose(Pose::from_parts(shape.center, rotation))
-                    .linvel(velocity);
+                    .linvel(velocity)
+                    .angvel(angular);
                 let collider = ColliderBuilder::cuboid(h.x, h.y, h.z)
                     .friction(0.65)
                     .restitution(0.12);
@@ -134,6 +144,7 @@ impl World3D {
                         rotation.x, rotation.y, rotation.z, rotation.w,
                     ))
                     .linear_velocity(JoltVec::new(velocity.x, velocity.y, velocity.z))
+                    .angular_velocity(JoltVec::new(angular.x, angular.y, angular.z))
                     .friction(0.65)
                     .restitution(0.12);
                 let collider = oxijolt::Shape::new_box(JoltVec::new(h.x, h.y, h.z))?;
@@ -172,6 +183,7 @@ impl World3D {
                     center: body.translation().to_array(),
                     orientation: body.rotation().to_array(),
                     velocity: body.linvel().to_array(),
+                    angular_velocity: body.angvel().to_array(),
                 }
             }
             #[cfg(feature = "physics-jolt")]
@@ -180,10 +192,12 @@ impl World3D {
                 let c = body.position();
                 let q = body.rotation();
                 let v = body.linear_velocity();
+                let a = body.angular_velocity();
                 BodyState {
                     center: [c.x, c.y, c.z],
                     orientation: [q.x, q.y, q.z, q.w],
                     velocity: [v.x, v.y, v.z],
+                    angular_velocity: [a.x, a.y, a.z],
                 }
             }
         })
@@ -201,6 +215,7 @@ mod tests {
             extent: Vec3::new(2.0, 0.25, 2.0),
             orientation: Quat::IDENTITY,
             velocity: Vec3::ZERO,
+            angular_velocity: Vec3::ZERO,
             dynamic: false,
         };
         let platform = world.insert(floor)?;
