@@ -295,14 +295,27 @@ pub struct PrefabFile {
     pub version: u32,
     /// Template nodes in parent-first order.
     pub nodes: Vec<NodeFile>,
+    /// Clips bound to this template's nodes, indexed in parent-first order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub animations: Vec<Clip>,
 }
 
 impl SceneFile {
     /// Captures the active tree as inline nodes, resolving sprite handles to document paths.
     ///
-    /// Returns a scene without clips or prefab references. Use the authored document
-    /// directly when saving those assets and their editable bindings.
+    /// Returns a scene without clips or prefab references. Use [`Self::capture_with`]
+    /// to retain authored clips, or edit the authored document directly when saving
+    /// prefab references and their editable bindings.
     pub fn capture(scene: &Scene, path_for: impl Fn(AssetId) -> Option<PathBuf>) -> Result<Self> {
+        Self::capture_with(scene, path_for, Vec::new())
+    }
+
+    /// Captures the active tree together with the supplied authored clips.
+    pub fn capture_with(
+        scene: &Scene,
+        path_for: impl Fn(AssetId) -> Option<PathBuf>,
+        animations: Vec<Clip>,
+    ) -> Result<Self> {
         let mut indices = BTreeMap::new();
         let mut nodes = Vec::new();
         for state in scene.snapshot()? {
@@ -334,7 +347,7 @@ impl SceneFile {
             nodes,
             instances: Vec::new(),
             script_prefabs: Vec::new(),
-            animations: Vec::new(),
+            animations,
             autoplay: None,
             gameplay: None,
             display: None,
@@ -445,6 +458,7 @@ impl SceneFile {
             ids.push(id);
         }
         let mut prefabs = BTreeMap::new();
+        let mut clips = self.animations;
         for instance in &self.instances {
             let path = directory.join(&instance.prefab);
             let prefab = match prefabs.entry(path) {
@@ -459,11 +473,23 @@ impl SceneFile {
                 prefab.nodes().len() <= MAX_NODES - ids.len(),
                 "Scene has too many instantiated nodes"
             );
+            let base = ids.len();
             let (nodes, _) =
                 prefab.instantiate(&mut scene, instance.parent.map(|index| ids[index]))?;
             ids.extend(nodes);
+            for clip in prefab.clips() {
+                let mut clip = clip.clone();
+                for track in &mut clip.tracks {
+                    track.node = track
+                        .node
+                        .checked_add(base)
+                        .context("Prefab animation node index overflow")?;
+                }
+                clip.validate(ids.len())?;
+                clips.push(clip);
+            }
         }
-        for clip in &self.animations {
+        for clip in &clips {
             clip.validate(ids.len())?;
         }
         if let Some(gameplay) = &self.gameplay {
@@ -479,7 +505,7 @@ impl SceneFile {
                 .into_iter()
                 .map(|path| directory.join(path))
                 .collect(),
-            clips: self.animations,
+            clips,
             playback: None,
             entry_markers: Vec::new(),
         };
@@ -492,10 +518,22 @@ impl SceneFile {
 
 impl PrefabFile {
     /// Captures a subtree and resolves its sprite handles to document paths.
+    ///
+    /// Returns a prefab without clips. Use [`Self::capture_with`] to retain them.
     pub fn capture(
         scene: &Scene,
         root: EntityId,
         path_for: impl Fn(AssetId) -> Option<PathBuf>,
+    ) -> Result<Self> {
+        Self::capture_with(scene, root, path_for, Vec::new())
+    }
+
+    /// Captures a subtree together with clips bound to its authored node order.
+    pub fn capture_with(
+        scene: &Scene,
+        root: EntityId,
+        path_for: impl Fn(AssetId) -> Option<PathBuf>,
+        animations: Vec<Clip>,
     ) -> Result<Self> {
         let prefab = Prefab::capture(scene, root)?;
         let nodes = prefab
@@ -521,6 +559,7 @@ impl PrefabFile {
         let document = Self {
             version: VERSION,
             nodes,
+            animations,
         };
         document.validate()?;
         Ok(document)
@@ -560,7 +599,7 @@ impl PrefabFile {
                 sprite: node.resolve_visual(directory, assets)?,
             });
         }
-        Prefab::new(nodes)
+        Prefab::new(nodes, self.animations.clone())
     }
 
     fn validate(&self) -> Result<()> {
@@ -570,6 +609,9 @@ impl PrefabFile {
                 && self.nodes.iter().skip(1).all(|node| node.parent.is_some()),
             "Prefab needs exactly one root"
         );
+        for clip in &self.animations {
+            clip.validate(self.nodes.len())?;
+        }
         Ok(())
     }
 }
@@ -780,6 +822,97 @@ fn write(path: &Path, value: &impl Serialize) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::animation::{Interpolation, Property};
+    use crate::scene::spatial::SpatialNode;
+
+    #[test]
+    fn prefab_animations_round_trip_and_survive_instantiation() -> Result<()> {
+        let scratch = tempfile::tempdir()?;
+        let clip = Clip {
+            name: "Spin".into(),
+            sample_rate: 60,
+            duration: 2,
+            speed: 1.0,
+            wrap: crate::animation::Wrap::Once,
+            tracks: vec![crate::animation::Track {
+                node: 0,
+                property: Property::TranslationX,
+                interpolation: Interpolation::Linear,
+                keys: vec![
+                    crate::animation::Key {
+                        frame: 0,
+                        value: 0.0,
+                        tangents: None,
+                    },
+                    crate::animation::Key {
+                        frame: 2,
+                        value: 2.0,
+                        tangents: None,
+                    },
+                ],
+            }],
+            events: Vec::new(),
+        };
+        let mut scene = Scene::default();
+        let (root, _) = scene.spawn("Pivot", None, Default::default())?;
+        scene.set_spatial(root, Some(SpatialNode::default()))?;
+        let captured_scene = SceneFile::capture_with(&scene, |_| None, vec![clip.clone()])?;
+        assert_eq!(captured_scene.animations.len(), 1);
+        let prefab = PrefabFile::capture_with(&scene, root, |_| None, vec![clip])?;
+        let path = scratch.path().join("pivot.prefab");
+        prefab.save(&path)?;
+        let loaded = PrefabFile::load(&path)?;
+        assert_eq!(loaded.animations.len(), 1);
+        assert_eq!(
+            loaded.animations[0].tracks[0].property,
+            Property::TranslationX
+        );
+
+        let host = NodeFile {
+            name: "Host".into(),
+            parent: None,
+            transform: Transform2D::default(),
+            spatial: None,
+            sprite: None,
+            visual: None,
+            appearance: None,
+            physics2d: None,
+            scripts: Vec::new(),
+        };
+        let document = SceneFile {
+            version: VERSION,
+            scene_kind: SceneKind::ThreeD,
+            nodes: vec![host],
+            instances: vec![InstanceFile {
+                prefab: PathBuf::from("pivot.prefab"),
+                parent: None,
+            }],
+            script_prefabs: Vec::new(),
+            animations: Vec::new(),
+            autoplay: None,
+            gameplay: None,
+            display: None,
+        };
+        let mut assets = Assets::new(None);
+        let mut loaded = document.instantiate(scratch.path(), &mut assets, Scene::default())?;
+        assert_eq!(loaded.clips.len(), 1);
+        assert_eq!(loaded.clips[0].tracks[0].node, 1);
+        loaded.play(0)?;
+        loaded
+            .playback
+            .as_mut()
+            .context("Prefab clip did not start")?
+            .step(&mut loaded.scene)?;
+        assert_eq!(
+            loaded
+                .scene
+                .spatial(loaded.ids[1])?
+                .context("Missing spatial")?
+                .position[0],
+            1.0
+        );
+        Ok(())
+    }
 
     #[test]
     fn scene_kind_defaults_for_existing_documents_and_round_trips() -> Result<()> {
