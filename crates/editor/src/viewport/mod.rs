@@ -25,8 +25,11 @@ pub(super) struct Viewport {
     error: Option<String>,
     game_focus: bool,
     spatial_drag: Option<usize>,
+    spatial_axis: Option<usize>,
     spatial_mode: spatial::Mode,
     spatial_camera: spatial::Camera,
+    /// None follows the scene: mixed and 3D scenes open in the perspective view.
+    view_3d: Option<bool>,
     two_d_drag: Option<TwoDDrag>,
     editing_text: Option<usize>,
     focus_text_edit: bool,
@@ -57,8 +60,10 @@ impl Default for Viewport {
             error: None,
             game_focus: true,
             spatial_drag: None,
+            spatial_axis: None,
             spatial_mode: spatial::Mode::Move,
             spatial_camera: spatial::Camera::default(),
+            view_3d: None,
             two_d_drag: None,
             editing_text: None,
             focus_text_edit: false,
@@ -72,6 +77,9 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         ui.selectable_value(&mut editor.preview.game_view, true, strings::GAME_VIEW);
         if !editor.preview.game_view {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.selectable_value(&mut editor.viewport.view_3d, Some(true), strings::VIEW_3D);
+                ui.selectable_value(&mut editor.viewport.view_3d, Some(false), strings::VIEW_2D);
+                ui.separator();
                 if ui.button(strings::FRAME_VIEW).clicked() {
                     editor.viewport.pan = Vec2::ZERO;
                     editor.viewport.zoom = 1.0;
@@ -258,20 +266,36 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         viewport.revision = editor.project.revision;
         viewport.cursor = cursor;
     }
-    if response.dragged_by(egui::PointerButton::Secondary) {
-        viewport.pan += ui.input(|input| input.pointer.delta());
+    let three_d = viewport
+        .view_3d
+        .unwrap_or_else(|| viewport.nodes.iter().any(|node| node.spatial.is_some()));
+    if three_d {
+        if response.dragged_by(egui::PointerButton::Secondary) {
+            viewport
+                .spatial_camera
+                .pan(ui.input(|input| input.pointer.delta()), 40.0);
+        }
+        if response.hovered() {
+            viewport
+                .spatial_camera
+                .zoom(ui.input(|input| input.smooth_scroll_delta.y));
+        }
+    } else {
+        if response.dragged_by(egui::PointerButton::Secondary) {
+            viewport.pan += ui.input(|input| input.pointer.delta());
+        }
+        if response.hovered() {
+            let scroll = ui.input(|input| input.smooth_scroll_delta.y);
+            viewport.zoom = (viewport.zoom * (scroll * theme::ZOOM_FACTOR).exp())
+                .clamp(theme::MIN_ZOOM, theme::MAX_ZOOM);
+        }
     }
     if response.dragged_by(egui::PointerButton::Middle) {
         viewport
             .spatial_camera
             .orbit(ui.input(|input| input.pointer.delta()));
     }
-    if response.hovered() {
-        let scroll = ui.input(|input| input.smooth_scroll_delta.y);
-        viewport.zoom = (viewport.zoom * (scroll * theme::ZOOM_FACTOR).exp())
-            .clamp(theme::MIN_ZOOM, theme::MAX_ZOOM);
-    }
-    let center = rect.center() + viewport.pan;
+    let center = rect.center() + if three_d { Vec2::ZERO } else { viewport.pan };
     let [w, h] = editor
         .project
         .document
@@ -284,23 +308,50 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
             .min(rect.height() / design_size.y)
             .max(theme::MIN_SCALE);
     let design = Rect::from_center_size(center, design_size * scale);
-    painter.rect_stroke(
-        design,
-        0.0,
-        (theme::OUTLINE, theme::FRAME),
-        egui::StrokeKind::Inside,
-    );
-    draw_rulers(&painter, rect, center, scale);
-    painter.arrow(
-        center,
-        vec2(theme::GIZMO, 0.0),
-        (theme::OUTLINE, theme::AXIS_X),
-    );
-    painter.arrow(
-        center,
-        vec2(0.0, -theme::GIZMO),
-        (theme::OUTLINE, theme::AXIS_Y),
-    );
+    let spatial_rect = if three_d { rect } else { design };
+    let spatial_scale = (spatial_rect.width().min(spatial_rect.height()) / 10.0).clamp(12.0, 64.0);
+    if three_d {
+        spatial::draw_grid(
+            &painter,
+            spatial_rect,
+            viewport.spatial_camera,
+            spatial_scale,
+        );
+        spatial::draw_axis_widget(&painter, rect, viewport.spatial_camera);
+        if let Some(pointer) = response.hover_pos()
+            && let Some(ground) = viewport.spatial_camera.screen_to_ground(
+                pointer,
+                spatial_rect.center(),
+                spatial_scale,
+            )
+        {
+            painter.text(
+                pos2(rect.left() + 10.0, rect.bottom() - 12.0),
+                egui::Align2::LEFT_BOTTOM,
+                format!("X {:.1}  Z {:.1}", ground.x, ground.z),
+                theme::font(),
+                theme::TEXT,
+            );
+        }
+    } else {
+        painter.rect_stroke(
+            design,
+            0.0,
+            (theme::OUTLINE, theme::FRAME),
+            egui::StrokeKind::Inside,
+        );
+        draw_rulers(&painter, rect, center, scale);
+        painter.arrow(
+            center,
+            vec2(theme::GIZMO, 0.0),
+            (theme::OUTLINE, theme::AXIS_X),
+        );
+        painter.arrow(
+            center,
+            vec2(0.0, -theme::GIZMO),
+            (theme::OUTLINE, theme::AXIS_Y),
+        );
+    }
     if let Some((valid, hint)) = drop_hint {
         crate::icons::paint_drop_frame(&painter, design, valid);
         painter.text(
@@ -314,12 +365,13 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
     let project = |p: [f32; 2]| center + vec2(p[0], -p[1]) * scale;
     let mut picked = spatial::draw(
         &painter,
-        design,
+        spatial_rect,
         &response,
         ui.input(|i| i.pointer.delta()),
         &viewport.nodes,
         spatial::Interaction {
             dragging: &mut viewport.spatial_drag,
+            axis: &mut viewport.spatial_axis,
             mode: viewport.spatial_mode,
             camera: viewport.spatial_camera,
         },
@@ -328,15 +380,47 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
     let mut selected_2d_quad = None;
     let mut selected_text_rect = None;
     let mut scale_handles = Vec::new();
+    let spatial_worlds = if three_d {
+        Some(engine_core::scene::spatial::matrices(&viewport.nodes))
+    } else {
+        None
+    };
     let mut ordered: Vec<_> = viewport.nodes.iter().collect();
-    ordered.sort_by_key(|node| node.appearance.map_or(0, |appearance| appearance.layer));
+    if three_d {
+        // egui has no depth buffer, so paint far sprites first and let nearer
+        // ones cover them. The 3D wireframes are already underneath.
+        ordered.sort_by(|left, right| {
+            let depth = |node: &&NodeState| {
+                spatial_worlds
+                    .as_ref()
+                    .and_then(|worlds| worlds.get(&node.id))
+                    .map_or(0.0_f32, |world| world.w_axis.z)
+            };
+            depth(right).total_cmp(&depth(left))
+        });
+    } else {
+        ordered.sort_by_key(|node| node.appearance.map_or(0, |appearance| appearance.layer));
+    }
     for state in ordered {
         let index = state.id.value() as usize;
         if !state.visible {
             continue;
         }
         let appearance = state.appearance.unwrap_or_default();
-        let world = |point| project(state.world.point(point));
+        let world = |point: [f32; 2]| {
+            if let Some(worlds) = &spatial_worlds {
+                spatial::project_sprite_point(
+                    viewport.spatial_camera,
+                    worlds,
+                    state,
+                    point,
+                    spatial_rect.center(),
+                    spatial_scale,
+                )
+            } else {
+                project(state.world.point(point))
+            }
+        };
         let origin = world([0.0; 2]);
         if let Some(sprite) = state.sprite {
             if let std::collections::hash_map::Entry::Vacant(entry) =
