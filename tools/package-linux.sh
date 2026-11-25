@@ -20,7 +20,7 @@ mkdir -p "$kit/share/licenses/aurora"
 install -m 644 LICENSE "$kit/LICENSE"
 install -m 644 LICENSE "$kit/share/licenses/aurora/LICENSE"
 cp -R docs/licenses/. "$kit/share/licenses/aurora/"
-for binary in aurora-player aurora-editor aurora-codegen; do
+for binary in aurora-player aurora-editor aurora-codegen aurora; do
   install -s "${CARGO_TARGET_DIR:-target}/$profile/$binary" "$kit/$binary"
 done
 cp tools/{setup,build-editor-script,compile-native}.sh "$kit/sdk/tools/"
