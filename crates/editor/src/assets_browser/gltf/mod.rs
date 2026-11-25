@@ -466,6 +466,7 @@ pub(super) fn import(source: &Path, destination: &Path) -> Result<()> {
         version: VERSION,
         nodes,
         animations,
+        joints: Vec::new(),
     };
     fs::create_dir_all(destination)?;
     let target = destination.join(format!("{name}.prefab"));
