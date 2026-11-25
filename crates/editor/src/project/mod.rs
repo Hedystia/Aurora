@@ -3,6 +3,7 @@
 use std::{
     collections::BTreeSet,
     fs,
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -13,6 +14,7 @@ use engine_core::{
         NodeFile, PrefabFile, PropertyValue, SceneFile, SceneKind, ScriptFile, SpriteFile, VERSION,
     },
 };
+use serde::{Deserialize, Serialize};
 
 mod jumpy;
 
@@ -45,7 +47,7 @@ impl Project {
     fn open_document(path: &Path, allow_new: bool) -> Result<Self> {
         let (root, path) = if path.is_dir() {
             let root = path.canonicalize()?;
-            let file = main_scene(&root);
+            let file = startup_scene(&root);
             (root, file)
         } else {
             let root = path
@@ -522,6 +524,62 @@ pub(super) fn is_frame(path: &Path) -> bool {
     extension(path) == "png"
 }
 
+/// Per-project editing state. `last_scene` is restored before `default_scene`.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct ProjectSession {
+    pub version: u32,
+    pub default_scene: String,
+    pub last_scene: String,
+}
+
+fn session_path(root: &Path) -> PathBuf {
+    root.join(".aurora/project-session.json")
+}
+
+pub(super) fn load_session(root: &Path) -> ProjectSession {
+    let mut session: ProjectSession = fs::read(session_path(root))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    if session.version == 0 {
+        session.version = 1;
+    }
+    session
+}
+
+pub(super) fn save_session(root: &Path, session: &ProjectSession) -> Result<()> {
+    let directory = root.join(".aurora");
+    fs::create_dir_all(&directory)?;
+    let mut file = tempfile::NamedTempFile::new_in(&directory)?;
+    file.write_all(&serde_json::to_vec_pretty(session)?)?;
+    file.write_all(b"\n")?;
+    file.persist(session_path(root))?;
+    Ok(())
+}
+
+pub(super) fn valid_scene_ref(root: &Path, reference: &str) -> Option<PathBuf> {
+    if reference.is_empty() || Path::new(reference).is_absolute() {
+        return None;
+    }
+    let path = root.join(reference);
+    if !is_scene(&path)
+        || !path.starts_with(root)
+        || reference.split(['/', '\\']).any(|part| part == "..")
+        || !path.is_file()
+    {
+        return None;
+    }
+    Some(path)
+}
+
+fn startup_scene(root: &Path) -> PathBuf {
+    let session = load_session(root);
+    valid_scene_ref(root, &session.last_scene)
+        .or_else(|| valid_scene_ref(root, &session.default_scene))
+        .unwrap_or_else(|| main_scene(root))
+}
+
 pub(super) fn main_scene(directory: &Path) -> PathBuf {
     let preferred = directory.join("main.scene");
     let legacy = directory.join("main.aurora-scene");
@@ -600,6 +658,31 @@ fn empty() -> SceneFile {
 mod tests {
     use super::*;
     use engine_core::animation::{Clip, Interpolation, Key, Property, Track, Wrap};
+
+    #[test]
+    fn session_scene_overrides_default_and_falls_back_to_main() -> Result<()> {
+        let scratch = tempfile::tempdir()?;
+        let root = scratch.path().canonicalize()?;
+        for name in ["main.scene", "level.scene", "other.scene"] {
+            fs::write(root.join(name), r#"{"version":1,"nodes":[]}"#)?;
+        }
+        let mut session = ProjectSession {
+            version: 1,
+            default_scene: "level.scene".into(),
+            last_scene: String::new(),
+        };
+        save_session(&root, &session)?;
+        assert_eq!(Project::open(&root)?.path, root.join("level.scene"));
+
+        session.last_scene = "other.scene".into();
+        save_session(&root, &session)?;
+        assert_eq!(Project::open(&root)?.path, root.join("other.scene"));
+
+        session.last_scene = "../escape.scene".into();
+        save_session(&root, &session)?;
+        assert_eq!(Project::open(&root)?.path, root.join("level.scene"));
+        Ok(())
+    }
 
     #[test]
     fn grouping_preserves_sibling_poses_and_references() -> Result<()> {
