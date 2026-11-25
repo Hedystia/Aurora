@@ -30,6 +30,16 @@ export class SpriteFrame {
 export type AudioClipCallback = (error: Error | null, clip: AudioClip | null) => void;
 export type SpriteFrameCallback = (error: Error | null, frame: SpriteFrame | null) => void;
 export type PrefabCallback = (error: Error | null, prefab: Prefab | null) => void;
+export type BundleProgressCallback = (completed: number, total: number, path: string) => void;
+
+export interface BundleAssets {
+  audio: AudioClip[];
+  sprites: SpriteFrame[];
+  prefabs: Prefab[];
+  errors: Error[];
+}
+
+export type BundleCallback = (error: Error | null, assets: BundleAssets | null) => void;
 
 function logicalPath(path: string): string {
   let relative = path;
@@ -59,6 +69,7 @@ class Catalog {
   frames: string[] = [];
   frameNodes: number[] = [];
   frameSlots: number[] = [];
+  prefabs: string[] = [];
   generation = 0;
 }
 
@@ -66,7 +77,13 @@ class Catalog {
 // Releasing a handle therefore never invalidates another component's view.
 const catalog = new Catalog();
 
-export function registerScriptResources(audio: string[], frames: string[], nodes: number[], slots: number[]): void {
+export function registerScriptResources(
+  audio: string[],
+  frames: string[],
+  nodes: number[],
+  slots: number[],
+  prefabs: string[] = [],
+): void {
   if (frames.length !== nodes.length || frames.length !== slots.length) {
     throw new Error("Invalid Aurora script resource catalog");
   }
@@ -75,6 +92,7 @@ export function registerScriptResources(audio: string[], frames: string[], nodes
   catalog.frames = frames;
   catalog.frameNodes = nodes;
   catalog.frameSlots = slots;
+  catalog.prefabs = prefabs;
 }
 
 export class Resources {
@@ -180,27 +198,28 @@ export class Resources {
   }
 
   loadAudioClip(path: string, callback: AudioClipCallback): void {
-    this.defer(() => {
+    this._defer(() => {
       const asset = this.getAudioClip(path);
       callback(asset === null ? new Error(`Audio clip is missing or ambiguous: ${path}`) : null, asset);
     });
   }
 
   loadSpriteFrame(path: string, callback: SpriteFrameCallback): void {
-    this.defer(() => {
+    this._defer(() => {
       const asset = this.getSpriteFrame(path);
       callback(asset === null ? new Error(`Sprite frame is missing or ambiguous: ${path}`) : null, asset);
     });
   }
 
   loadPrefab(path: string, callback: PrefabCallback): void {
-    this.defer(() => {
+    this._defer(() => {
       const asset = this.getPrefab(path);
       callback(asset === null ? new Error(`Prefab is missing or ambiguous: ${path}`) : null, asset);
     });
   }
 
-  private defer(callback: () => void): void {
+  /** @internal Queues one callback for the next resource phase. */
+  _defer(callback: () => void): void {
     if (this.generation !== catalog.generation) {
       this.pending = [];
       this.generation = catalog.generation;
@@ -263,6 +282,16 @@ export class AssetBundle {
     }
     const relative = AssetBundle.path(path);
     return this.root.length === 0 ? relative : `${this.root}/${relative}`;
+  }
+
+  private paths(values: string[]): string[] {
+    const found = new Set<string>();
+    for (const path of values) {
+      if (this.root.length === 0 || path === this.root || path.startsWith(`${this.root}/`)) {
+        found.add(path);
+      }
+    }
+    return Array.from(found);
   }
 
   getAudioClip(path: string): AudioClip | null {
@@ -330,6 +359,60 @@ export class AssetBundle {
     this.loadPrefab(path, callback);
   }
 
+  /**
+   * Resolves every registered asset under this bundle root, one resource phase
+   * at a time. Progress counts completed assets; the final callback receives
+   * all resolved handles and any per-asset errors.
+   */
+  preloadAll(callback?: BundleCallback, progress?: BundleProgressCallback): void {
+    const audio = this.paths(catalog.audio);
+    const sprites = this.paths(catalog.frames);
+    const prefabs = this.paths(catalog.prefabs);
+    const total = audio.length + sprites.length + prefabs.length;
+    const result: BundleAssets = { audio: [], sprites: [], prefabs: [], errors: [] };
+    let completed = 0;
+    let finished = false;
+    const complete = (path: string, error: Error | null): void => {
+      if (error !== null) result.errors.push(error);
+      completed++;
+      progress?.(completed, total, path);
+      if (finished || completed < total) return;
+      finished = true;
+      if (this.closed || this.generation !== catalog.generation) {
+        callback?.(new Error("Asset bundle is no longer active"), null);
+        return;
+      }
+      callback?.(result.errors[0] ?? null, result);
+    };
+    if (total === 0) {
+      this.resources._defer(() => callback?.(null, result));
+      return;
+    }
+    for (const path of audio) {
+      this.resources.loadAudioClip(path, (error, clip) => {
+        if (clip !== null) result.audio.push(clip);
+        complete(path, error);
+      });
+    }
+    for (const path of sprites) {
+      this.resources.loadSpriteFrame(path, (error, frame) => {
+        if (frame !== null) result.sprites.push(frame);
+        complete(path, error);
+      });
+    }
+    for (const path of prefabs) {
+      this.resources.loadPrefab(path, (error, prefab) => {
+        if (prefab !== null) result.prefabs.push(prefab);
+        complete(path, error);
+      });
+    }
+  }
+
+  /** Alias for preloadAll that also reports the resolved handles. */
+  loadAll(callback?: BundleCallback, progress?: BundleProgressCallback): void {
+    this.preloadAll(callback, progress);
+  }
+
   releaseAudioClip(path: string): void {
     this.resources.releaseAudioClip(this.asset(path));
   }
@@ -349,6 +432,9 @@ export class AssetBundle {
   }
 
   release(): void {
+    if (this.closed) return;
+    for (const path of this.paths(catalog.audio)) this.resources.releaseAudioClip(path);
+    for (const path of this.paths(catalog.frames)) this.resources.releaseSpriteFrame(path);
     this.closed = true;
   }
 }
