@@ -1,0 +1,287 @@
+#! Aurora package CI and release publishing (temporarily disabled)
+# Pull requests, main pushes, and manual dispatches build and test release
+# artifacts without publishing. A v* tag creates the release only after the
+# release-build tests pass, then uploads packages and the Linux builder image.
+name: Packages CI
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release: ${{ steps.version.outputs.release }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve and validate the workspace version
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          metadata="$(cargo metadata --locked --no-deps --format-version 1)"
+          version="$(printf '%s' "$metadata" | python3 -c 'import json,sys; packages=json.load(sys.stdin)["packages"]; assert packages; print(packages[0]["version"])')"
+          printf '%s' "$metadata" | python3 -c 'import json,sys; v=sys.argv[1]; packages=json.load(sys.stdin)["packages"]; assert all(p["version"] == v for p in packages), "workspace packages must share one version"' "$version"
+          if [[ "$REF_TYPE" == tag ]]; then
+            test "$version" = "${TAG#v}"
+            release=true
+          else
+            release=false
+          fi
+          printf 'version=%s\nrelease=%s\n' "$version" "$release" >> "$GITHUB_OUTPUT"
+
+  linux-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake g++ libasound2-dev libxkbcommon-dev libwayland-dev
+      - name: Provision SDK tools
+        run: tools/setup.sh
+      - name: Check formatting and lints
+        run: |
+          cargo fmt --all --check
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Run workspace tests
+        run: cargo test --locked --workspace
+      - name: Build the full Linux kit
+        run: tools/package-linux.sh "$RUNNER_TEMP/aurora-linux-x86_64-kit.tar.gz" release
+      - name: Test the packaged Linux kit and container builder
+        env:
+          AURORA_CONTAINER_ENGINE: auto
+        run: |
+          tar -xzf "$RUNNER_TEMP/aurora-linux-x86_64-kit.tar.gz" -C "$RUNNER_TEMP"
+          test -x "$RUNNER_TEMP/aurora/aurora-player"
+          env -u DISPLAY -u WAYLAND_DISPLAY "$RUNNER_TEMP/aurora/aurora-player" --headless --frames 60 > "$RUNNER_TEMP/linux-kit.json"
+          python3 -c 'import json,sys; scene=json.load(open(sys.argv[1])); assert scene["nodes"]; assert scene["ticks"] == 60' "$RUNNER_TEMP/linux-kit.json"
+          if ! tools/test-builder-images.sh linux > "$RUNNER_TEMP/builder-images.log" 2>&1; then
+            cat "$RUNNER_TEMP/builder-images.log"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/builder-images.log"
+          if grep -q '^SKIP:' "$RUNNER_TEMP/builder-images.log"; then
+            echo "The container builder test was skipped; refusing to publish an unverified image path." >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aurora-linux-x86_64-kit
+          path: ${{ runner.temp }}/aurora-linux-x86_64-kit.tar.gz
+
+  macos-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            arch: aarch64
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            arch: x86_64
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Show the Apple host
+        run: |
+          uname -m
+          sw_vers
+          rustc --version
+      - name: Check formatting and lints
+        run: |
+          cargo fmt --all --check
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Run workspace tests
+        run: cargo test --locked --workspace
+      - name: Package and smoke-test a scriptless app
+        run: tools/test-macos-app.sh "$RUNNER_TEMP/AuroraSmoke.app" release
+      - name: Verify native and development script transports
+        run: |
+          app="$RUNNER_TEMP/AuroraSmoke.app/Contents/MacOS/aurora-player"
+          native="$(tools/build-script.sh native)"
+          dev="$(tools/build-script.sh dev)"
+          "$app" --headless --frames 120 --script "$native" > "$RUNNER_TEMP/script-native.json"
+          "$app" --headless --frames 120 --script-dev "$dev" > "$RUNNER_TEMP/script-dev.json"
+          cmp "$RUNNER_TEMP/script-native.json" "$RUNNER_TEMP/script-dev.json"
+          python3 -c 'import json,sys; scene=json.load(open(sys.argv[1])); assert scene["nodes"][1]["local"]["position"] == [76, 0]' "$RUNNER_TEMP/script-native.json"
+      - name: Build the macOS engine kit
+        run: tools/package-macos.sh "$RUNNER_TEMP/aurora-macos-${{ matrix.arch }}-kit.tar.gz" release
+      - name: Verify the engine kit
+        run: |
+          tar -tzf "$RUNNER_TEMP/aurora-macos-${{ matrix.arch }}-kit.tar.gz" > "$RUNNER_TEMP/kit-files.txt"
+          grep -q "aurora-macos-${{ matrix.arch }}/aurora-player" "$RUNNER_TEMP/kit-files.txt"
+          grep -q "aurora-macos-${{ matrix.arch }}/share/licenses/aurora/LICENSE" "$RUNNER_TEMP/kit-files.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aurora-macos-${{ matrix.arch }}-package
+          path: ${{ runner.temp }}/aurora-macos-${{ matrix.arch }}-kit.tar.gz
+
+  windows-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and smoke-test the Windows release
+        run: |
+          cargo build --locked --workspace --release
+          target/release/aurora.exe targets
+
+  android:
+    needs: [validate]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Explain the blocked Android package
+        run: |
+          echo "Android packages are not published: Aurora has no Activity/SurfaceView/Gradle runtime." >> "$GITHUB_STEP_SUMMARY"
+          echo "The Android builder image remains blocked groundwork and is never uploaded." >> "$GITHUB_STEP_SUMMARY"
+          echo "No APK or builder image was produced."
+
+  create-release:
+    needs: [validate, linux-test, macos-test, windows-test]
+    if: needs.validate.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Create the release for the version tag
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Aurora ${{ github.ref_name }}
+          generate_release_notes: true
+
+  linux-publish:
+    needs: [validate, create-release, linux-test]
+    if: needs.validate.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake g++ libasound2-dev libxkbcommon-dev libwayland-dev
+      - uses: actions/download-artifact@v4
+        with:
+          name: aurora-linux-x86_64-kit
+          path: ${{ runner.temp }}
+      - name: Build and upload engine binaries
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: aurora-player,aurora-editor,aurora-codegen,aurora
+          workspace: true
+          locked: true
+          target: x86_64-unknown-linux-gnu
+          archive: aurora-linux-x86_64
+          include: LICENSE
+          leading-dir: true
+          tar: unix
+          zip: none
+          checksum: sha256
+      - name: Upload the full Linux kit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/aurora-linux-x86_64-kit.tar.gz" --clobber
+
+  macos-publish:
+    needs: [validate, create-release, macos-test]
+    if: needs.validate.outputs.release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            arch: aarch64
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            arch: x86_64
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          name: aurora-macos-${{ matrix.arch }}-package
+          path: ${{ runner.temp }}
+      - name: Build and upload engine binaries
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: aurora-player,aurora-editor,aurora-codegen,aurora
+          workspace: true
+          locked: true
+          target: ${{ matrix.target }}
+          archive: aurora-macos-${{ matrix.arch }}
+          include: LICENSE
+          leading-dir: true
+          tar: unix
+          zip: none
+          checksum: sha256
+      - name: Publish the full kit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/aurora-macos-${{ matrix.arch }}-kit.tar.gz" --clobber
+
+  windows-publish:
+    needs: [validate, create-release, windows-test]
+    if: needs.validate.outputs.release == 'true'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and upload engine binaries
+        id: upload
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: aurora-player,aurora-editor,aurora-codegen,aurora
+          workspace: true
+          locked: true
+          target: x86_64-pc-windows-msvc
+          archive: aurora-windows-x86_64
+          include: LICENSE
+          leading-dir: true
+          tar: none
+          zip: windows
+          checksum: sha256
+      - name: Smoke-test the packaged Windows binary
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP "windows-package"
+          Expand-Archive -Path "${{ steps.upload.outputs.zip }}" -DestinationPath $stage
+          & (Join-Path $stage "aurora-windows-x86_64/aurora.exe") targets
+
+  builder-image:
+    needs: [validate, create-release, linux-test]
+    if: needs.validate.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Publish the Linux builder image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          owner="${OWNER,,}"
+          tag="ghcr.io/$owner/aurora-builder:$VERSION-linux"
+          tools/build-builder-image.sh linux --engine docker --tag "$tag"
+          docker push "$tag"
