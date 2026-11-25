@@ -343,6 +343,7 @@ impl Editor {
         PrefabFile {
             version: VERSION,
             nodes,
+            animations: Vec::new(),
         }
         .save(&path)?;
         self.refresh_assets();
