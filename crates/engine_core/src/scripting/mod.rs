@@ -35,6 +35,10 @@ pub(crate) enum Command {
     DestroyNode(u32),
     AddComponent(u32, u32),
     RemoveComponent(u32, u32),
+    LoadSpriteStart(u32),
+    LoadSpriteChunk(u32, [u8; 12], u8),
+    LoadSpriteEnd(u32),
+    ReleaseAsset(u64),
 }
 
 #[cfg(unix)]
