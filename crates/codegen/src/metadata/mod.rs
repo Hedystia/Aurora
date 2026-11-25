@@ -431,6 +431,12 @@ pub fn protocol_typescript() -> Result<String> {
         script_api::Kind::ConfigSet,
         script_api::Kind::ConfigValue,
         script_api::Kind::SecretValue,
+        script_api::Kind::NodeTransform3D,
+        script_api::Kind::NodeRotation3D,
+        script_api::Kind::NodeScale3D,
+        script_api::Kind::SetLinearVelocity3D,
+        script_api::Kind::CollisionEnter3D,
+        script_api::Kind::CollisionExit3D,
     ] {
         writeln!(protocol, "export const kind{kind:?} = {};", kind as u32)?;
     }
