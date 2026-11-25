@@ -142,6 +142,13 @@ export class Node {
     this.changed = true;
   }
 
+  /** Local Z position of a spatial node, or zero for a 2D node. */
+  get z(): number { return scriptScene.nodeZ(this.sceneIndex); }
+  /** @internal Updates the cached Z position from a host transform stream. */
+  set z(value: number) {
+    const position = scriptScene.nodeSpatial(this.sceneIndex, "position");
+    scriptScene.setSpatial(this.sceneIndex, "position", [position[0], position[1], value]);
+  }
   get scaleX(): number { return scriptScene.nodeScaleX(this.sceneIndex); }
   set scaleX(value: number) { this.setScale(value, this.scaleY); }
   get scaleY(): number { return scriptScene.nodeScaleY(this.sceneIndex); }
@@ -186,7 +193,30 @@ export class RigidBody2D {
   }
 }
 
+/** Script handle for an authored spatial cuboid body. */
+export class RigidBody3D {
+  changed = false;
+  vx = 0;
+  vy = 0;
+  vz = 0;
+
+  setLinearVelocity(x: number, y: number, z: number): void {
+    this.vx = x;
+    this.vy = y;
+    this.vz = z;
+    this.changed = true;
+  }
+}
+
 export class Collider2D {
+  readonly node: NodeHandle;
+  constructor(node: NodeHandle) {
+    this.node = node;
+  }
+}
+
+/** Peer handle delivered with a spatial contact. */
+export class Collider3D {
   readonly node: NodeHandle;
   constructor(node: NodeHandle) {
     this.node = node;
@@ -540,6 +570,8 @@ export class NodeRef {
   get name(): string { return scriptScene.name(this.index); }
   get x(): number { return scriptScene.nodeX(this.index); }
   get y(): number { return scriptScene.nodeY(this.index); }
+  /** Local Z position of a spatial node, or zero for a 2D node. */
+  get z(): number { return scriptScene.nodeZ(this.index); }
   get scaleX(): number { return scriptScene.nodeScaleX(this.index); }
   set scaleX(value: number) { this.setScale(value, this.scaleY); }
   get scaleY(): number { return scriptScene.nodeScaleY(this.index); }
@@ -670,8 +702,24 @@ export class NodePool {
 
 export class Integer {}
 export class Text {}
-export class Vector2 {}
-export class Vector3 {}
+export class Vector2 {
+  x = 0;
+  y = 0;
+  constructor(x = 0, y = 0) {
+    this.x = x;
+    this.y = y;
+  }
+}
+export class Vector3 {
+  x = 0;
+  y = 0;
+  z = 0;
+  constructor(x = 0, y = 0, z = 0) {
+    this.x = x;
+    this.y = y;
+    this.z = z;
+  }
+}
 export class Size {}
 export class Rect {}
 export class Color {}
@@ -681,6 +729,7 @@ export class Component {
   readonly node = new Node();
   readonly audio = new AudioSource();
   readonly body = new RigidBody2D();
+  readonly body3d = new RigidBody3D();
   readonly director = new Director();
   readonly scene = new SceneCommands();
   readonly resources = new Resources(this.scene);
@@ -842,6 +891,8 @@ export class Component {
   onTouchCancel(_event: ScriptEvent): void {}
   onBeginContact(_other: Collider2D): void {}
   onEndContact(_other: Collider2D): void {}
+  onBeginContact3D(_other: Collider3D): void {}
+  onEndContact3D(_other: Collider3D): void {}
   onAnimationEvent(_code: number): void {}
   onBestScore(_score: number): void {}
 }
@@ -953,6 +1004,9 @@ class ScriptScene {
     this.scaleX.clear();
     this.scaleY.clear();
     this.angles.clear();
+    this.spatialPosition.clear();
+    this.spatialRotation.clear();
+    this.spatialScale.clear();
   }
 
   childPath(index: number, path: string, commands: SceneCommands): NodeRef | null {
@@ -1149,6 +1203,15 @@ class ScriptScene {
   private readonly scaleX = new Map<number, number>();
   private readonly scaleY = new Map<number, number>();
   private readonly angles = new Map<number, number>();
+  private readonly spatialPosition = new Map<number, [number, number, number]>();
+  private readonly spatialRotation = new Map<number, [number, number, number]>();
+  private readonly spatialScale = new Map<number, [number, number, number]>();
+
+  setSpatial(reference: number, field: "position" | "rotation" | "scale", value: [number, number, number]): void {
+    if (field === "position") this.spatialPosition.set(reference, value);
+    else if (field === "rotation") this.spatialRotation.set(reference, value);
+    else this.spatialScale.set(reference, value);
+  }
 
   setNodeTransform(reference: number, x: number, y: number): void {
     this.positionX.set(reference, x);
@@ -1166,6 +1229,15 @@ class ScriptScene {
   nodeScaleX(reference: number): number { return this.scaleX.get(reference) ?? 1; }
   nodeScaleY(reference: number): number { return this.scaleY.get(reference) ?? 1; }
   nodeAngle(reference: number): number { return this.angles.get(reference) ?? 0; }
+  nodeZ(reference: number): number { return this.spatialPosition.get(reference)?.[2] ?? 0; }
+  nodeSpatial(reference: number, field: "position" | "rotation" | "scale"): [number, number, number] {
+    const store = field === "position"
+      ? this.spatialPosition
+      : field === "rotation"
+        ? this.spatialRotation
+        : this.spatialScale;
+    return store.get(reference) ?? [0, 0, 0];
+  }
   nodeText(reference: number): string {
     const text = this.textContents.get(reference);
     if (text === undefined) throw new Error("Node does not have a Text visual");
@@ -1386,6 +1458,15 @@ function componentName(type: string | ComponentConstructor<Component>): string {
 /** @internal Caches one authored node transform before callbacks run. */
 export function setScriptNodeTransform(reference: number, x: number, y: number): void {
   scriptScene.setNodeTransform(reference, x, y);
+}
+
+/** @internal Caches one authored spatial transform stream before callbacks run. */
+export function setScriptNodeTransform3D(
+  reference: number,
+  field: "position" | "rotation" | "scale",
+  value: [number, number, number],
+): void {
+  scriptScene.setSpatial(reference, field, value);
 }
 
 /** @internal Caches one authored node scale and rotation. */
