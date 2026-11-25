@@ -1,6 +1,6 @@
-# Script protocol 15
+# Script protocol 16
 
-The player and script use one full-duplex Unix stream socket. The script receives its end as file descriptor 0. Standard output and standard error carry diagnostics to the player's standard error. Native scripts also inherit a 592-byte shared-memory region on descriptor 3. Linux allocates it with a sealed `memfd`; macOS creates an unlinked POSIX shared-memory object with `shm_open`. The native script maps the descriptor and exchanges fixed-size payload slots while the socket carries the 16-byte headers.
+The player and script use one full-duplex Unix stream socket. The script receives its end as file descriptor 0. Standard output and standard error carry diagnostics to the player's standard error. Native scripts also inherit a 720-byte shared-memory region on descriptor 3. Linux allocates it with a sealed `memfd`; macOS creates an unlinked POSIX shared-memory object with `shm_open`. The native script maps the descriptor and exchanges fixed-size payload slots while the socket carries the 16-byte headers.
 
 Each transaction is one request and one response with the same protocol, sequence, node, and component binding. The sequence starts at zero and increments after every valid reply. The player accepts immediate commands for the bound node and queued commands for validated authored indices. The player rejects unknown variants, the wrong protocol or sequence, mismatched node handles or bindings, and positions that cannot be stored as finite f32 values.
 
@@ -16,8 +16,9 @@ bincode 2 uses fixed-width little-endian encoding. `aurora-codegen` emits the pr
 | 16 | u64 | Opaque node handle |
 | 24 | f64 | Local X or linear velocity X |
 | 32 | f64 | Local Y or linear velocity Y |
-| 40 | u64 | Kind-specific detail |
-| 48 | u32 | Component binding index. In replies, bit 31 reports the enabled state. |
+| 40 | f64 | Local Z position, rotation or velocity component. Zero when unused. |
+| 48 | u64 | Kind-specific detail |
+| 56 | u32 | Component binding index. In replies, bit 31 reports the enabled state. |
 
 Pointer kinds use the position slots differently: `X` and `Y` carry normalized
 coordinates measured from the top left, not a node transform. `PointerTouch`
@@ -92,6 +93,12 @@ one-based for each touch contact.
 | 60 | ConfigSet | Queued config write. Detail packs an operation in the high 32 bits and an entry index in the low 32 bits. |
 | 61 | ConfigValue | Host delivery of one config entry. Detail packs the operation and entry index. |
 | 62 | SecretValue | Host delivery of one secret entry. Detail packs the operation and entry index. |
+| 63 | NodeTransform3D | Detail is the node reference. X, Y and Z carry the local position. |
+| 64 | NodeRotation3D | Detail is the node reference. X, Y and Z carry local Euler rotation in degrees. |
+| 65 | NodeScale3D | Detail is the node reference. X, Y and Z carry the local scale. |
+| 66 | SetLinearVelocity3D | X, Y and Z carry the bound spatial body's velocity in meters per second. |
+| 67 | CollisionEnter3D | Other spatial body handle in detail. |
+| 68 | CollisionExit3D | Other spatial body handle in detail. |
 
 For `SetText`, operation 0 starts a replacement, operations 1 through 12 carry
 that many UTF-8 bytes, and operation 13 ends the replacement. For a chunk,
@@ -105,15 +112,15 @@ before updating an authored Text visual.
 
 The player resolves authored binding indices in the same order as the script entry. It reports Load when a node first becomes active, Enable when a loaded binding becomes active and enabled, and Start once per loaded binding. Active components receive input, FixedUpdate, animation markers and physics contacts according to the host, Update, Schedule, ProcessResources, and LateUpdate. The tick callbacks receive 1/60 second. The player synchronizes activation between callback phases and polls an independently disabled component for changes on its active node.
 
-Scene replacement and graceful shutdown send Disable and Destroy in reverse binding order. Every scene begins with SceneStart, which clears script-side dynamic nodes, removed-binding markers and node event listeners before score restoration and Load callbacks. Native bundles start a scene-local script process on scene replacement. Explicit CLI script launchers can reuse their authored instances across scenes. On graceful shutdown the player bounds the total exchange time before terminating the child. Rebuild scripts from older protocol versions before using them with this player; protocol 14 scripts do not understand the loading overlay or configuration delivery, protocol 13 scripts do not understand text replacement, protocol 12 scripts also lack scale and rotation edits, protocol 11 scripts also lack the transform stream and tween tick, protocol 10 scripts also lack the wheel kinds, and protocol 9 scripts also lack the pointer kinds and SceneStart.
+Scene replacement and graceful shutdown send Disable and Destroy in reverse binding order. Every scene begins with SceneStart, which clears script-side dynamic nodes, removed-binding markers and node event listeners before score restoration and Load callbacks. Native bundles start a scene-local script process on scene replacement. Explicit CLI script launchers can reuse their authored instances across scenes. On graceful shutdown the player bounds the total exchange time before terminating the child. Rebuild scripts from older protocol versions before using them with this player; protocol 15 scripts use the older 52-byte envelope and cannot exchange spatial transforms or 3D velocities, protocol 14 scripts do not understand the loading overlay or configuration delivery, protocol 13 scripts do not understand text replacement, protocol 12 scripts also lack scale and rotation edits, protocol 11 scripts also lack the transform stream and tween tick, protocol 10 scripts also lack the wheel kinds, and protocol 9 scripts also lack the pointer kinds and SceneStart.
 
 Initial scene node indices occupy the lower half of the script command reference range. Script-created roots use monotonically increasing references in `0x80000000..0xC0000000`. The player allocates prefab descendant references from `0xC0000000` onwards. The player validates reference existence, prefab indices, and parent links before applying commands. The prefab index names an entry in the scene's ordered `script_prefabs` list. Runtime prefab control messages synchronize node references and new component bindings after a callback command batch. The node header identifies the actual player entity. Each control request requires an Ack. Node-control requests use binding zero, while component-control requests name the dynamic binding. Lifecycle teardown precedes the physical removal of a subtree.
 
 ## Shared memory
 
-The native socket record is the 16-byte envelope header. The corresponding 36-byte payload is published into shared memory before the header is sent. The receiver removes one payload after reading each complete header. Ring 0 (offset 0) carries player requests. Ring 1 (offset 296) carries script replies.
+The native socket record is the 16-byte envelope header. The corresponding 44-byte payload is published into shared memory before the header is sent. The receiver removes one payload after reading each complete header. Ring 0 (offset 0) carries player requests. Ring 1 (offset 360) carries script replies.
 
-Each ring has a native-endian atomic u32 write cursor at offset 0 and read cursor at offset 4. Eight 36-byte slots follow at offset 8. Counters wrap modulo 2³² and select slots modulo 8. The producer acquires the read cursor before reusing a slot and releases the write cursor after copying. The consumer acquires the write cursor before copying and releases the read cursor after copying. One process owns each cursor for its session. A full ring or a notification without a valid payload ends the session without overwriting data.
+Each ring has a native-endian atomic u32 write cursor at offset 0 and read cursor at offset 4. Eight 44-byte slots follow at offset 8. Counters wrap modulo 2³² and select slots modulo 8. The producer acquires the read cursor before reusing a slot and releases the write cursor after copying. The consumer acquires the write cursor before copying and releases the read cursor after copying. One process owns each cursor for its session. A full ring or a notification without a valid payload ends the session without overwriting data.
 
 Development scripts preserve the same envelope and transaction ordering, sending all 52 bytes on the socket via Bun or Node. This lets the development runtime use ordinary file-descriptor I/O. A bad reply, disconnect, or 250 ms reply deadline ends the session. The windowed player logs the error and continues without the child. Headless and screenshot runs return the error for automated verification.
 
