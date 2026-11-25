@@ -1,6 +1,6 @@
 //! Kira mixer buses and predecoded clip references.
 
-use std::io::Cursor;
+use std::{collections::BTreeMap, io::Cursor};
 
 use anyhow::{Context, Result};
 use kira::{
@@ -19,17 +19,36 @@ impl AudioClip {
     pub fn decode(bytes: Vec<u8>) -> Result<Self> {
         Ok(Self(StaticSoundData::from_cursor(Cursor::new(bytes))?))
     }
+
+    /// Plays this clip through the SFX bus.
+    pub fn play(&self, audio: &mut Audio) -> Result<StaticSoundHandle> {
+        Ok(audio.effects.play(self.0.clone())?)
+    }
 }
 
 /// An ordered collection of clips that scripts can reference by index.
 pub struct AudioSource {
     clips: Vec<AudioClip>,
+    dynamic: BTreeMap<u64, AudioClip>,
 }
 
 impl AudioSource {
     /// Creates a source with the specified clip ordering.
     pub fn new(clips: Vec<AudioClip>) -> Self {
-        Self { clips }
+        Self {
+            clips,
+            dynamic: BTreeMap::new(),
+        }
+    }
+
+    /// Stores a disk-backed clip under a script handle.
+    pub fn insert_dynamic(&mut self, handle: u64, clip: AudioClip) {
+        self.dynamic.insert(handle, clip);
+    }
+
+    /// Drops a disk-backed clip. Already playing one-shots keep their clone.
+    pub fn remove_dynamic(&mut self, handle: u64) {
+        self.dynamic.remove(&handle);
     }
 
     /// Plays one clip through the SFX bus.
@@ -38,6 +57,15 @@ impl AudioSource {
             .clips
             .get(index)
             .with_context(|| format!("Invalid audio clip index {index}"))?;
+        Ok(audio.effects.play(clip.0.clone())?)
+    }
+
+    /// Plays a disk-backed clip through the same SFX bus.
+    pub fn play_dynamic(&self, audio: &mut Audio, handle: u64) -> Result<StaticSoundHandle> {
+        let clip = self
+            .dynamic
+            .get(&handle)
+            .with_context(|| format!("Unknown audio handle {handle}"))?;
         Ok(audio.effects.play(clip.0.clone())?)
     }
 }
