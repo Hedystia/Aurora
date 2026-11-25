@@ -57,7 +57,7 @@ start(): void {
 
 ## Tweens
 
-`tween(node)` accepts a `NodeRef` or a bound component `Node` and returns a chainable tween. `to` and `by` take any combination of `x`, `y`, `position: { x, y }`, `scaleX`, `scaleY`, `scale: { x, y }`, and `angle`, so one step can move, scale, and rotate together. Chains support `delay`, `call`, `repeat`, `repeatForever`, `start`, and `stop`, with `linear`, `quad*`, and `cubic*` easing. Angles are in degrees and match `NodeRef.angle`. Tweens advance once per fixed simulation tick, after `update` and before scheduled callbacks. Arbitrary property tweens such as opacity or color are not implemented yet.
+`tween(node)` accepts a `NodeRef` or a bound component `Node` and returns a chainable tween. `to` and `by` take any combination of `x`, `y`, `position: { x, y }`, `scaleX`, `scaleY`, `scale: { x, y }`, and `angle`, so one step can move, scale, and rotate together. Chains support `delay`, `call`, `repeat`, `repeatForever`, `start`, and `stop`, with `linear`, `quad*`, and `cubic*` easing. Angles are in degrees and match `NodeRef.angle`. Tweens advance once per fixed simulation tick, after `update` and before scheduled callbacks. Use `tweenValue(getter, setter)` for any numeric property: it supports the same `to`, `by`, `delay`, `call`, `repeat`, `repeatForever`, easing and fixed-tick advancement without requiring a scene node. Color and other multi-component values can be driven by one tween per channel.
 
 ```ts
 tween(this.node)
@@ -69,6 +69,10 @@ tween(this.node)
 `NodeRef` and a bound `Node` expose cached local `x`, `y`, `scaleX`, `scaleY`, and `angle`, with `setPosition`, `setScale`, and `setAngle` writing through the scene command queue. The player streams authored transforms at scene start and picks up prefab-created nodes on a later tick. Script writes keep the cache current; movement produced by physics, animation, or the player without a script command can leave the cached start value stale.
 
 `NodeRef.setText(value)` and `Node.setText(value)` replace the content of an authored Text visual at runtime. Rich Text replacement keeps the first run's style and replaces all remaining runs with the new content. The UTF-8 content limit is 1512 bytes per edit.
+
+## Gesture recognizers
+
+`new GestureDetector(node, options?)` listens to a node's touch stream and emits `tap`, `doubleTap`, `longPress`, `pan` and `swipe` through `detector.on(type, callback)`. Options set `tapDistance` (12 node-local pixels by default), `longPressSeconds` (0.5) and `swipeDistance` (24). `GestureEvent` exposes the node-local point plus `deltaX`, `deltaY` and, for swipes, a `direction` of `left`, `right`, `up` or `down`. Gesture timers advance on the fixed tick, so callers do not need their own timer, and `destroy()` removes the node listeners. A scene start clears all live detectors. Gesture callbacks are ordinary script callbacks; they cannot block the player's reply.
 
 ## Spatial physics
 
@@ -119,4 +123,4 @@ Every scene starts with a reset of script-side dynamic nodes, removed-binding ma
 
 `@property` covers numbers, booleans, strings, node references, prefab references, audio clip and sprite frame references, component references, and arrays of numbers, booleans, strings, node references, prefabs, audio clips, and sprite frames. Declare a component reference with the component class, as in `@property(Health) target: Health | null`. The Inspector lists components in the same document, and the generated entry assigns the live instance, so prefab-internal references resolve within each clone. Audio clip and sprite frame properties select from the scene's sound and frame banks; the generated entry resolves the registered handle before Start. An asset property whose path is not registered stays at the field default.
 
-Remaining Cocos scripting differences include gesture recognizers, disk-backed on-demand asset import with reference-counted player memory release, arbitrary property tweens, additional 3D collider shapes, and `addComponent` returning the new instance synchronously. Aurora resolves the new component through `getComponent` after the callback. The export smoke test in `tools/test-export.sh` covers the native script bundle, package manifest, launcher, and a headless run.
+Remaining Cocos scripting differences include disk-backed on-demand asset import with reference-counted player memory release, host-mediated network loading with a completion event, additional 3D collider shapes, and `addComponent` returning the new instance synchronously. Aurora resolves the new component through `getComponent` after the callback. The export smoke test in `tools/test-export.sh` covers the native script bundle, package manifest, launcher, and a headless run.
