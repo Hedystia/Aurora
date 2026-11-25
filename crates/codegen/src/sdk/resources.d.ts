@@ -1,4 +1,4 @@
-import type { Prefab, SceneCommands } from "./index.js";
+import type { LoadedPrefab, Prefab, SceneCommands } from "./index.js";
 export declare class AudioClip {
     readonly path: string;
     readonly index: number;
@@ -10,6 +10,11 @@ export declare class SpriteFrame {
     private readonly slots;
     constructor(path: string, nodes: number[], slots: number[]);
     frameFor(node: number): number;
+}
+/** An audio clip imported from disk on demand rather than a scene bank. */
+export declare class LoadedAudioClip extends AudioClip {
+    readonly handle: number;
+    constructor(path: string, handle: number);
 }
 /** A sprite frame imported from disk on demand rather than a scene bank. */
 export declare class LoadedSpriteFrame extends SpriteFrame {
@@ -56,8 +61,18 @@ export declare class Resources {
     loadSpriteFrame(path: string, callback: SpriteFrameCallback): void;
     /** Imports a PNG under the project on demand and delivers a refcounted handle. */
     loadSpriteFile(path: string, callback: SpriteFrameCallback): void;
+    /** Imports a WAV or MP3 under the project on demand. */
+    loadAudioFile(path: string, callback: AudioClipCallback): void;
+    /** Imports a prefab under the project on demand. */
+    loadPrefabFile(path: string, callback: PrefabCallback): void;
+    /** Releases one on-demand asset handle directly. */
+    releaseAssetHandle(handle: number): void;
     /** Releases one on-demand sprite handle. Scene bank handles are unaffected. */
     releaseSpriteFile(frame: LoadedSpriteFrame): void;
+    /** Releases one on-demand audio handle. */
+    releaseAudioFile(clip: LoadedAudioClip): void;
+    /** Releases one on-demand prefab handle. Already-instantiated nodes are unaffected. */
+    releasePrefabFile(prefab: LoadedPrefab): void;
     loadPrefab(path: string, callback: PrefabCallback): void;
     /** @internal Queues one callback for the next resource phase. */
     _defer(callback: () => void): void;
