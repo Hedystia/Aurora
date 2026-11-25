@@ -482,6 +482,7 @@ pub(super) fn create_with_scene_kind(
             PrefabFile {
                 version: VERSION,
                 nodes: vec![node(name, None)],
+                animations: Vec::new(),
             }
             .save(&target)?;
         }
