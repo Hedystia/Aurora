@@ -20,7 +20,7 @@ Pins are declared in the workspace [Cargo.toml](../Cargo.toml), [scripts/package
 | clap | 4.5.60 | Patch update from 4.5.41 |
 | pollster | 0.4.0 | Runs wgpu initialization on the native event-loop thread |
 | TypeScript, esbuild, Vitest | 5.9.3, 0.25.12, 3.2.7 | Retain TypeScript line and take esbuild/Vitest patches |
-| scriptc | 0.4.16 | Pinned standalone GNU/Linux release |
+| scriptc | 0.4.16 | Pinned standalone Linux and macOS releases |
 | Portable Bun | 1.2.22 | Pin a published Linux release with checksums for x86-64 baseline and ARM64 |
 
 ## M1 runtime dependencies
@@ -99,3 +99,27 @@ The runtime activates the workspace pin for `ab_glyph 0.2.32` and the locked `ep
 ## Export package manifest
 
 The editor emits `export.json` version 1 for single- and multi-scene exports. It records the engine version, exporting host target, each package file's SHA-256, and a deterministic digest of the ordered file records. The player verifies packages with this manifest and continues to load legacy bundles without it. Local exports also include the matching host player and a launcher.
+
+## 2026-11-25 · Local container build CLI
+
+| Component | Pin | Reason |
+| --- | --- | --- |
+| aurora-cli | workspace version | New `aurora` binary for local Docker/Podman game builds; uses existing `clap`, `anyhow`, `serde`, `serde_json`, `sha2`, `tempfile`, and `engine_core` pins. |
+| Linux builder base image | `rust:1.99.1-bookworm` | Matches the Rust toolchain pin; base image digest pinning is required before publishing. |
+| Builder toolchain reports | scriptc 0.4.16, Bun 1.2.22 | Reuse the workspace pins and expose them as `org.aurora.toolchain.*` image labels recorded in `build.json`. |
+
+Builder image references are `ghcr.io/hedystia/aurora-builder:<engine-version>-<target>`. No builder image is published yet, and the disabled GitHub Actions workflows remain disabled. The Linux engine package now includes the `aurora` command alongside the player, editor, and codegen.
+
+## 2026-11-25 · macOS host application bundles
+
+`aurora build --target macos` packages a project into a `.app` on an Apple-branded host, with no container engine. The bundle contains `Contents/MacOS/aurora-player`, `Contents/Resources/game`, `Info.plist`, and `PkgInfo`; `build.json` records `builder_kind: "host"` and omits image fields. Optional `--sign` and `--notarize` use the host's `codesign`, `notarytool`, and `stapler`. The player discovers the adjacent bundle when launched without an explicit mode. Apple's SLA permits macOS virtualization only on Apple hardware, so no `dockurr/macos`-style builder image is added. `tools/test-macos-app.sh` and `tools/package-macos.sh` cover host smoke tests and per-architecture engine kits; the disabled package CI runs them on aarch64 and x86_64.
+
+## 2026-11-25 · Unix shared-memory script transport
+
+Script IPC now compiles on Unix hosts, not only Linux. The player keeps the same frame-locked protocol and fd-3 descriptor passing: Linux allocates a sealed `memfd`, while macOS creates an unlinked POSIX shared-memory object with `shm_open`, sets its size, maps it, and marks the descriptor close-on-exec. The child-side C ring is unchanged. Session supervision uses the portable Unix process-group and descriptor APIs, and `tools/setup.sh` resolves Bun plus the matching scriptc release for Linux and macOS on x64 and arm64. `aurora build --target macos` therefore packages native scripts instead of refusing them. Windows remains unsupported because it has no Unix descriptor passing.
+
+Verification: `script_api` tests pass on Linux, `script_api`, `engine_core`, and `aurora-cli` pass `cargo check --target aarch64-apple-darwin`, and the macOS native/development transport comparison is defined in the disabled package CI. It has not run on an Apple host here.
+
+## 2026-11-25 · Package CI and release publishing
+
+Adds a disabled `.github/workflows/packages.yml.disabled` and removes the separate macOS workflow. Pull requests, `main` pushes, and manual dispatches build and test release artifacts: Linux formatting/clippy/tests, full kit, and Docker/Podman builder; macOS formatting/clippy/tests, app, native/development transport, and kit on aarch64 and x86-64; Windows release build and executable smoke test. A `v*` tag creates the release, uploads engine archives with `taiki-e/upload-rust-binary-action`, host kits, smoke-tests the packaged Windows archive, records Android as blocked, and pushes the Linux builder image to GHCR. Existing workflows remain disabled.
