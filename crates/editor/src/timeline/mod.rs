@@ -3,7 +3,7 @@
 use egui::{DragValue, Ui};
 use engine_core::{
     animation::{Clip, Interpolation, Key, Property, Track, Wrap},
-    scene::Transform2D,
+    scene::{Transform2D, spatial::SpatialNode},
 };
 
 use crate::{Editor, strings, theme};
@@ -233,13 +233,33 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
             egui::ComboBox::from_id_salt("property")
                 .selected_text(property_label(editor.key_property))
                 .show_ui(ui, |ui| {
-                    for property in [
-                        Property::X,
-                        Property::Y,
-                        Property::Rotation,
-                        Property::ScaleX,
-                        Property::ScaleY,
-                    ] {
+                    let available: &[Property] = if document.nodes[node].spatial.is_some() {
+                        &[
+                            Property::X,
+                            Property::Y,
+                            Property::Rotation,
+                            Property::ScaleX,
+                            Property::ScaleY,
+                            Property::TranslationX,
+                            Property::TranslationY,
+                            Property::TranslationZ,
+                            Property::RotationX,
+                            Property::RotationY,
+                            Property::RotationZ,
+                            Property::SpatialScaleX,
+                            Property::SpatialScaleY,
+                            Property::SpatialScaleZ,
+                        ]
+                    } else {
+                        &[
+                            Property::X,
+                            Property::Y,
+                            Property::Rotation,
+                            Property::ScaleX,
+                            Property::ScaleY,
+                        ]
+                    };
+                    for &property in available {
                         ui.selectable_value(
                             &mut editor.key_property,
                             property,
@@ -248,7 +268,11 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
                     }
                 });
             if ui.small_button(strings::ADD_KEY).clicked() {
-                let value = channel(document.nodes[node].transform, editor.key_property);
+                let value = channel(
+                    document.nodes[node].transform,
+                    document.nodes[node].spatial.as_ref(),
+                    editor.key_property,
+                );
                 record(clip, node, editor.key_property, at.round() as u32, value);
                 changed = true;
             }
@@ -470,13 +494,23 @@ fn ruler(ui: &mut Ui, clip: &Clip, frame: f64) -> Option<f64> {
     None
 }
 
-fn channel(pose: Transform2D, property: Property) -> f32 {
+fn channel(pose: Transform2D, spatial: Option<&SpatialNode>, property: Property) -> f32 {
+    use Property as P;
     match property {
-        Property::X => pose.position[0],
-        Property::Y => pose.position[1],
-        Property::Rotation => pose.rotation,
-        Property::ScaleX => pose.scale[0],
-        Property::ScaleY => pose.scale[1],
+        P::X => pose.position[0],
+        P::Y => pose.position[1],
+        P::Rotation => pose.rotation,
+        P::ScaleX => pose.scale[0],
+        P::ScaleY => pose.scale[1],
+        P::TranslationX => spatial.map_or(0.0, |node| node.position[0]),
+        P::TranslationY => spatial.map_or(0.0, |node| node.position[1]),
+        P::TranslationZ => spatial.map_or(0.0, |node| node.position[2]),
+        P::RotationX => spatial.map_or(0.0, |node| node.rotation[0]),
+        P::RotationY => spatial.map_or(0.0, |node| node.rotation[1]),
+        P::RotationZ => spatial.map_or(0.0, |node| node.rotation[2]),
+        P::SpatialScaleX => spatial.map_or(1.0, |node| node.scale[0]),
+        P::SpatialScaleY => spatial.map_or(1.0, |node| node.scale[1]),
+        P::SpatialScaleZ => spatial.map_or(1.0, |node| node.scale[2]),
     }
 }
 
@@ -509,12 +543,22 @@ fn record(clip: &mut Clip, node: usize, property: Property, frame: u32, value: f
 }
 
 fn property_label(property: Property) -> &'static str {
+    use Property as P;
     match property {
-        Property::X => strings::X,
-        Property::Y => strings::Y,
-        Property::Rotation => strings::ROTATION,
-        Property::ScaleX => strings::SCALE_X,
-        Property::ScaleY => strings::SCALE_Y,
+        P::X => strings::X,
+        P::Y => strings::Y,
+        P::Rotation => strings::ROTATION,
+        P::ScaleX => strings::SCALE_X,
+        P::ScaleY => strings::SCALE_Y,
+        P::TranslationX => strings::POSITION_X_3D,
+        P::TranslationY => strings::POSITION_Y_3D,
+        P::TranslationZ => strings::POSITION_Z_3D,
+        P::RotationX => strings::ROTATION_X,
+        P::RotationY => strings::ROTATION_Y,
+        P::RotationZ => strings::ROTATION_Z,
+        P::SpatialScaleX => strings::SCALE_X_3D,
+        P::SpatialScaleY => strings::SCALE_Y_3D,
+        P::SpatialScaleZ => strings::SCALE_Z_3D,
     }
 }
 
