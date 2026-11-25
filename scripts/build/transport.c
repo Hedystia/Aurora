@@ -1,4 +1,4 @@
-/* Native script endpoint for Aurora protocol 15. */
+/* Native script endpoint for Aurora protocol 16. */
 #include <errno.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -6,7 +6,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-enum { HEADER = 16, PAYLOAD = 36, CAPACITY = 8, FRAME = HEADER + PAYLOAD };
+enum { HEADER = 16, PAYLOAD = 44, CAPACITY = 8, FRAME = HEADER + PAYLOAD };
 
 struct ring {
     _Atomic uint32_t write_cursor;
@@ -14,7 +14,7 @@ struct ring {
     uint8_t slots[CAPACITY][PAYLOAD];
 };
 
-_Static_assert(sizeof(struct ring) == 296, "Aurora ring layout");
+_Static_assert(sizeof(struct ring) == 360, "Aurora ring layout");
 _Static_assert(ATOMIC_INT_LOCK_FREE == 2, "Aurora cursors must be lock-free");
 static struct ring *rings;
 
