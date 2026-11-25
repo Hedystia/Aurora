@@ -29,6 +29,7 @@ import {
   tweenValue,
   GestureDetector,
   advanceGestures,
+  resolveSpriteLoad,
 } from "../aurora/index.ts";
 
 function bind(
@@ -540,6 +541,36 @@ describe("tweens", () => {
     expect(target.scaleY).toBe(4);
     expect(target.angle).toBeCloseTo(30);
     expect(owner.scene.edits.map((edit) => edit.kind)).toEqual([11, 12]);
+  });
+});
+
+describe("on-demand sprite import", () => {
+  test("queues chunked path edits and resolves the returned handle", () => {
+    const owner = new Component();
+    bind([owner], [0], ["Owner"]);
+    let received: string | null = null;
+    owner.resources.loadSpriteFile("assets/ui/button-long-name.png", (error, frame) => {
+      expect(error).toBeNull();
+      received = frame === null ? null : String(frame.frameFor(0));
+    });
+
+    expect(owner.scene.edits.map((edit) => edit.kind)).toEqual([
+      19, 20, 20, 20, 21,
+    ]);
+    resolveSpriteLoad(owner.scene.edits[0].target, 0x80000001, false);
+    expect(received).toBe(String(0x80000001));
+  });
+
+  test("a failed import reaches the callback as an error", () => {
+    const owner = new Component();
+    bind([owner], [0], ["Owner"]);
+    let message = "";
+    owner.resources.loadSpriteFile("assets/missing.png", (error, frame) => {
+      expect(frame).toBeNull();
+      message = error?.message ?? "";
+    });
+    resolveSpriteLoad(owner.scene.edits[0].target, 0, true);
+    expect(message).toContain("assets/missing.png");
   });
 });
 
