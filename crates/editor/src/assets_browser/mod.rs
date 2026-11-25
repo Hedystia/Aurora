@@ -187,8 +187,7 @@ fn creation(ui: &mut Ui, editor: &mut Editor) {
         AssetKind::Prefab,
     ] {
         if ui.button(kind.label()).clicked() {
-            editor.new_asset = Some(kind);
-            editor.asset_name.clear();
+            editor.begin_new_asset(kind);
             ui.close();
         }
     }
