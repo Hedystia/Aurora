@@ -95,7 +95,7 @@ aurora-player --bundle ./MyGameLinux
 
 The destination must be a new directory. Repeat `--include-scene` for additional scenes inside the project. The project scene starts first. Scene filenames determine the names used by `this.director.loadScene("Level2")`. The player starts each scene's native script child with its own bindings and resources. Single-scene exports and existing bundle layouts still load.
 
-Aurora stages project-local TypeScript, lowers its decorators, and compiles with `scriptc --tier static-only`. Play a bundle with a matching Linux Aurora player. Third-party package resolution and other platform targets remain separate distribution work.
+Aurora stages project-local TypeScript, lowers its decorators, and compiles with `scriptc --tier static-only`. Play a bundle with a matching Aurora player for the host platform. Third-party package resolution and other platform targets remain separate distribution work.
 
 Call `node.addComponent("Mover")` or pass the component class to request a component by its registered name. Editor and export entries register each compiled component class with its factory, so `node.addComponent(Mover)` resolves the same factory. The new component becomes available through `getComponent` after the current callback completes. `node.removeComponent(component)` removes authored attachments, dynamically added components, and prefab-created components after their disable and destroy callbacks. A removed authored attachment disappears from `getComponent` and `getComponents` immediately, even though the native script keeps its launch list. Editor and export builds register uniquely named components found in project assets.
 
