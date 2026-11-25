@@ -19,6 +19,8 @@ import {
   registerComponentFactory,
   registerScriptResources,
   assetManager,
+  config,
+  secrets,
   setScriptCallbackOwner,
   setScriptNodeScaleRotation,
   setScriptNodeTransform,
@@ -280,6 +282,50 @@ describe("component removal", () => {
 
     expect(owner.scene.edits).toHaveLength(1);
     expect(owner.scene.edits[0].kind).toBe(9);
+  });
+});
+
+describe("global config and secrets", () => {
+  test("config writes queue bounded start, chunk and end edits", () => {
+    const owner = new Component();
+    bind([owner], [0], ["Owner"]);
+    setScriptCallbackOwner(null);
+
+    owner.scene.setConfig("token", "A😊é");
+    const bytes = new TextEncoder().encode("token\0A😊é");
+    const packed = (source: Uint8Array): number => {
+      let result = 0;
+      for (let index = 0; index < 6; index++) {
+        result += (source[index] ?? 0) * 2 ** (index * 8);
+      }
+      return result;
+    };
+    expect(owner.scene.edits.map((edit) => edit.kind)).toEqual([16, 17, 17, 18]);
+    expect(owner.scene.edits[1].x).toBe(packed(bytes.subarray(0, 6)));
+    expect(owner.scene.edits[1].y).toBe(packed(bytes.subarray(6, 12)) + 12 * 2 ** 48);
+    expect(config.get("token")).toBe("A😊é");
+    expect(() => owner.scene.setConfig("token", "x".repeat(1513))).toThrow();
+  });
+
+  test("host chunk streams populate separate config and secret stores", () => {
+    config.reset();
+    secrets.reset();
+    const bytes = new TextEncoder().encode("api_url\0https://example.test");
+    config.chunk(0, 0, []);
+    for (let offset = 0; offset < bytes.length; offset += 12) {
+      config.chunk(Math.min(12, bytes.length - offset), 0, Array.from(bytes.subarray(offset, offset + 12)));
+    }
+    config.chunk(13, 0, []);
+    expect(config.get("api_url")).toBe("https://example.test");
+    expect(secrets.get("api_url")).toBeNull();
+
+    const secret = new TextEncoder().encode("password\0s3cret");
+    secrets.chunk(0, 1, []);
+    for (let offset = 0; offset < secret.length; offset += 12) {
+      secrets.chunk(Math.min(12, secret.length - offset), 1, Array.from(secret.subarray(offset, offset + 12)));
+    }
+    secrets.chunk(13, 1, []);
+    expect(secrets.get("password")).toBe("s3cret");
   });
 });
 
