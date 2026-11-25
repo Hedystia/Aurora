@@ -55,6 +55,10 @@ pub struct Scenario<'a> {
     pub scene_programs: &'a [SceneProgram],
     /// Optional best-score file for an authored game.
     pub profile: Option<&'a Path>,
+    /// Optional project config file exposed to scripts.
+    pub config: Option<&'a Path>,
+    /// Optional host-only secrets file exposed to scripts as read-only values.
+    pub secrets: Option<&'a Path>,
     /// Input paired with the zero-based tick at which it is delivered.
     pub input: &'a [(u64, InputEvent)],
 }
