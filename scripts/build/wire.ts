@@ -261,7 +261,10 @@ export async function run(
         else component.onEndContact(other);
       }
       else if (kind === kindCollisionEnter3D || kind === kindCollisionExit3D) {
-        const other = new Collider3D(new NodeHandle(view.getUint32(48, true), view.getUint32(52, true)));
+        const other = new Collider3D(
+          new NodeHandle(view.getUint32(48, true), view.getUint32(52, true)),
+          view.getFloat64(40, true) !== 0,
+        );
         if (kind === kindCollisionEnter3D) component.onBeginContact3D(other);
         else component.onEndContact3D(other);
       } else throw new Error("Invalid Aurora script event");
