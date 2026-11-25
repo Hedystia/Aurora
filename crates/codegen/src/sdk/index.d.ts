@@ -96,7 +96,9 @@ export declare class Collider2D {
 /** Peer handle delivered with a spatial contact. */
 export declare class Collider3D {
     readonly node: NodeHandle;
-    constructor(node: NodeHandle);
+    /** True when either collider in the pair is a trigger. */
+    readonly trigger: boolean;
+    constructor(node: NodeHandle, trigger?: boolean);
 }
 export declare class AudioSource {
     pending: number;
