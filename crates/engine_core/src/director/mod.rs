@@ -206,6 +206,32 @@ impl Director {
             .set_angular_velocity(node, velocity)
     }
 
+    pub(crate) fn physics3d_overlaps(
+        &self,
+        half_extents: [f32; 3],
+        position: [f32; 3],
+    ) -> Result<Vec<EntityId>> {
+        self.loaded.spatial_physics.overlaps_shape(
+            crate::physics3d::authored::QueryShape3D::Box(half_extents),
+            position,
+        )
+    }
+
+    pub(crate) fn physics3d_shape_cast(
+        &self,
+        half_extents: [f32; 3],
+        position: [f32; 3],
+        direction: [f32; 3],
+        distance: f32,
+    ) -> Result<Option<crate::physics3d::authored::RayHit3D>> {
+        self.loaded.spatial_physics.shape_cast(
+            crate::physics3d::authored::QueryShape3D::Box(half_extents),
+            position,
+            direction,
+            distance,
+        )
+    }
+
     pub(crate) fn physics3d_contacts(&self) -> &[crate::physics3d::authored::Contact] {
         self.loaded.spatial_physics.contacts()
     }
