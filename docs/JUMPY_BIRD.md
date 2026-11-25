@@ -1,6 +1,6 @@
 # Jumpy Bird
 
-Jumpy Bird is an original 2D sample set against an aurora. Open `scripts/game-template/jumpy` as an Aurora project and press Play. Space, Up, and touch start a run, flap, and retry. In Game view, click to send a touch or focus the view for Space.
+Jumpy Bird is an original 2D sample set against an aurora. To assemble it from a blank project through the editor UI, follow [Build Jumpy Bird in the editor](JUMPY_TUTORIAL.md). Open `scripts/game-template/jumpy` as an Aurora project and press Play. Space, Up, and touch start a run, flap, and retry. In Game view, click to send a touch or focus the view for Space.
 
 The TypeScript component owns gravity, flaps, scrolling, pillar placement and recycling, scoring, sound cues, and the ready and retry states. Three ground segments scroll from their left anchors. Four instances of the pillar prefab supply the reusable node slots. The scene also contains a ping-pong wing clip, contact areas, and font-rasterized score digits backed by sprite frames. The score persists in the editor's project cache. A standalone run can opt into persistence with `--profile PATH`.
 
