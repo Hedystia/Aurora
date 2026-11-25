@@ -50,6 +50,7 @@ start(): void {
 }
 ```
 - `getComponent("ComponentName")` and `getComponent(ComponentClass)` find a component on a node, and `getComponents` returns all matches. Relative lookup uses `getChildByPath("Rig/Hand")`. `@executionOrder(-10)` sets priority for authored attachments, with ties retaining authoring order.
+- `this.director.showLoading()` and `this.director.hideLoading()` toggle a host-rendered dim overlay over the game frame. While the overlay is active, gameplay input is swallowed but simulation and script callbacks continue; hide it from a timer or callback rather than waiting for input. The overlay covers the design rectangle, not window letterbox bars, and carries no text — use authored Text nodes for status messages.
 - `this.scene.loadPrefab("prefabs/Projectile.prefab")` returns a registered prefab or `null`. `this.scene.instantiate(prefab, parent?)` and `this.scene.createNode(parent?)` return a `NodeRef` that can be moved, reparented, or destroyed. In editor-generated and exported scripts, prefab clones construct their compiled attachments with independent state and prefab-local Inspector references. Dynamic bindings follow prefab attachment order. Destruction tears down the clone's component bindings.
 
 
@@ -87,6 +88,12 @@ A directory-scoped view is available with `const bundle = this.resources.bundle(
 Audio uses the scene's sound bank. `scene.setSpriteFrame(node, frame)` selects a frame from the bank authored for that node. The script receives handles to these resources, and the player owns loading and decoding asset data. The resource naming and callback pattern draws on [Cocos 4's bundle loader](https://github.com/cocos/cocos4/blob/v4.0.0/cocos/asset/asset-manager/bundle.ts).
 
 The current bundles are views over scene-registered audio and sprite-frame banks plus the project prefab catalog. A disk-backed importer for arbitrary audio, image, or prefab files is not implemented; export packaging still resolves the authored scene catalog and every project prefab.
+
+## Global config and secrets
+
+The host supplies two key/value stores at session start. `config.get(name)` reads project-scoped values and `this.scene.setConfig(name, value)` persists a new value through the host; values are UTF-8 strings up to 1512 bytes. Writes are bounded, validated, locked, and atomically stored in the config file passed to the player with `--config`. Editor Play uses `<project>/.aurora/game-config.json`.
+
+`secrets.get(name)` reads host-only values from the file passed with `--secrets`. The editor derives a per-user path outside the project tree, and the host persists that file with owner-only permissions. Secrets are read-only to scripts and are never written into generated script sources, exports, logs, or headless snapshots. Any script running in the same session can read the supplied secrets, so use them only for trusted first-party code. Exported games have no bundled secrets; the host must supply `--secrets` at launch. Both stores are delivered once per scene start through bounded chunked protocol messages.
 
 ## Native scene export
 
