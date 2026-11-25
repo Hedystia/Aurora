@@ -440,6 +440,13 @@ pub fn protocol_typescript() -> Result<String> {
         script_api::Kind::LoadSprite,
         script_api::Kind::AssetLoaded,
         script_api::Kind::ReleaseAsset,
+        script_api::Kind::LoadAudio,
+        script_api::Kind::LoadPrefab,
+        script_api::Kind::SetAngularVelocity3D,
+        script_api::Kind::Raycast3D,
+        script_api::Kind::RaycastResult,
+        script_api::Kind::NodeWorldTransform3D,
+        script_api::Kind::NodeWorldRotation3D,
     ] {
         writeln!(protocol, "export const kind{kind:?} = {};", kind as u32)?;
     }
