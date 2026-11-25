@@ -82,6 +82,12 @@ struct Options {
     /// Persist an authored game's best score to this file.
     #[arg(long)]
     profile: Option<PathBuf>,
+    /// Project config file exposed to scripts as readable and writable values.
+    #[arg(long)]
+    config: Option<PathBuf>,
+    /// Host-only secrets file exposed to scripts as read-only values.
+    #[arg(long)]
+    secrets: Option<PathBuf>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -178,6 +184,8 @@ fn main() -> anyhow::Result<()> {
         script_nodes: &options.script_node,
         scene_programs: &scene_programs,
         profile: options.profile.as_deref(),
+        config: options.config.as_deref(),
+        secrets: options.secrets.as_deref(),
         input: &input,
     };
     if let Some(dir) = options.preview_dir {
