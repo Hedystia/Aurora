@@ -27,6 +27,20 @@ export class SpriteFrame {
   }
 }
 
+/** A sprite frame imported from disk on demand rather than a scene bank. */
+export class LoadedSpriteFrame extends SpriteFrame {
+  readonly handle: number;
+
+  constructor(path: string, handle: number) {
+    super(path, [], []);
+    this.handle = handle;
+  }
+
+  frameFor(_node: number): number {
+    return this.handle;
+  }
+}
+
 export type AudioClipCallback = (error: Error | null, clip: AudioClip | null) => void;
 export type SpriteFrameCallback = (error: Error | null, frame: SpriteFrame | null) => void;
 export type PrefabCallback = (error: Error | null, prefab: Prefab | null) => void;
@@ -209,6 +223,16 @@ export class Resources {
       const asset = this.getSpriteFrame(path);
       callback(asset === null ? new Error(`Sprite frame is missing or ambiguous: ${path}`) : null, asset);
     });
+  }
+
+  /** Imports a PNG under the project on demand and delivers a refcounted handle. */
+  loadSpriteFile(path: string, callback: SpriteFrameCallback): void {
+    this.scene.loadSprite(path, callback);
+  }
+
+  /** Releases one on-demand sprite handle. Scene bank handles are unaffected. */
+  releaseSpriteFile(frame: LoadedSpriteFrame): void {
+    this.scene.releaseSprite(frame);
   }
 
   loadPrefab(path: string, callback: PrefabCallback): void {
