@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use egui::{Align, Layout, Rect, Sense, Ui, pos2, vec2};
+use egui::{Rect, Sense, Ui, pos2, vec2};
 use engine_core::save::{NodeFile, PrefabFile, SceneFile, SceneKind, VERSION};
 
 use crate::{
@@ -63,47 +63,7 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
     ui.separator();
     toolbar(ui, editor);
     ui.separator();
-    let height = ui.available_height();
-    ui.horizontal_top(|ui| {
-        let width = ui.available_width();
-        if width >= 190.0 {
-            let max_tree_width = (width - 100.0).max(72.0);
-            let tree_width = editor.asset_tree_width.clamp(72.0, max_tree_width);
-            ui.allocate_ui_with_layout(
-                vec2(tree_width, height),
-                Layout::top_down(Align::Min),
-                |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("asset-tree")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| folder_tree(ui, editor, &root, 0));
-                },
-            );
-            let (divider, response) = ui.allocate_exact_size(vec2(7.0, height), Sense::drag());
-            if response.hovered() || response.dragged() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-            }
-            let color = if response.dragged() || response.hovered() {
-                theme::ACCENT
-            } else {
-                theme::BORDER
-            };
-            ui.painter().line_segment(
-                [divider.center_top(), divider.center_bottom()],
-                egui::Stroke::new(2.0, color),
-            );
-            if response.dragged() {
-                editor.asset_tree_width = (editor.asset_tree_width + response.drag_motion().x)
-                    .clamp(72.0, max_tree_width);
-            }
-            response.on_hover_text(strings::RESIZE_ASSET_TREE);
-        }
-        ui.allocate_ui_with_layout(
-            vec2(ui.available_width(), height),
-            Layout::top_down(Align::Min),
-            |ui| files(ui, editor),
-        );
-    });
+    files(ui, editor);
 }
 
 fn toolbar(ui: &mut Ui, editor: &mut Editor) {
@@ -196,50 +156,51 @@ fn creation(ui: &mut Ui, editor: &mut Editor) {
     }
 }
 
-fn folder_tree(ui: &mut Ui, editor: &mut Editor, directory: &Path, depth: usize) {
-    let mut children: Vec<PathBuf> = editor
-        .asset_paths
-        .iter()
-        .filter(|path| path.is_dir() && path.parent() == Some(directory))
-        .cloned()
-        .collect();
-    children.sort();
-    for child in children {
-        let name = child.file_name().unwrap_or_default().to_string_lossy();
-        let selected = editor.asset_directory == child;
-        let id = ui.make_persistent_id(&child);
-        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, depth == 0)
-            .show_header(ui, |ui| {
-                crate::icons::inline(ui, crate::icons::Icon::Folder, theme::WARNING);
-                let response = ui.selectable_label(selected, name.as_ref());
-                if response.clicked() {
-                    editor.asset_directory = child.clone();
-                    editor.selected_asset = None;
-                }
-                if response.double_clicked() {
-                    editor.asset_directory = child.clone();
-                }
-                response.context_menu(|ui| {
-                    if ui.button(strings::EXPLORER).clicked() {
-                        let result = crate::show_in_files(&child);
-                        editor.report(result);
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button(strings::DELETE).clicked() {
-                        editor.asset_delete = Some(child.clone());
-                        ui.close();
+fn files(ui: &mut Ui, editor: &mut Editor) {
+    let root = editor.project.root.clone();
+    let directory = editor.asset_directory.clone();
+    let query = editor.asset_search.trim().to_lowercase();
+    let searching = !query.is_empty();
+    let mut entries = if searching {
+        search_entries(&root, &query)
+    } else {
+        read_folder(&directory)
+    };
+    if searching {
+        entries.sort();
+        ui.label(strings::SEARCH_RESULTS);
+    } else {
+        entries.sort_by_key(|path| (!path.is_dir(), path.file_name().map(|name| name.to_owned())));
+    }
+    egui::ScrollArea::vertical()
+        .id_salt("asset-files")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            if entries.is_empty() {
+                ui.label(if searching {
+                    strings::NO_RESULTS
+                } else {
+                    strings::DROP_ASSETS
+                });
+                return;
+            }
+            if editor.asset_grid {
+                ui.horizontal_wrapped(|ui| {
+                    for path in &entries {
+                        tile(ui, editor, path, &root, searching);
                     }
                 });
-            })
-            .body(|ui| folder_tree(ui, editor, &child, depth + 1));
-    }
+            } else {
+                for path in &entries {
+                    file_row(ui, editor, path, &root, searching);
+                }
+            }
+        });
 }
 
-fn files(ui: &mut Ui, editor: &mut Editor) {
-    let directory = editor.asset_directory.clone();
-    let query = editor.asset_search.to_lowercase();
-    let mut entries: Vec<PathBuf> = fs::read_dir(&directory)
+/// Lists one folder, hiding generated dot-directories and unsupported files.
+fn read_folder(directory: &Path) -> Vec<PathBuf> {
+    fs::read_dir(directory)
         .into_iter()
         .flatten()
         .flatten()
@@ -249,30 +210,64 @@ fn files(ui: &mut Ui, editor: &mut Editor) {
             if name.starts_with('.') || (!path.is_dir() && !supported(&path)) {
                 return None;
             }
-            name.contains(&query).then_some(path)
+            Some(path)
         })
-        .collect();
-    entries.sort_by_key(|path| (!path.is_dir(), path.file_name().map(|name| name.to_owned())));
-    egui::ScrollArea::vertical()
-        .id_salt("asset-files")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            if entries.is_empty() {
-                ui.label(strings::DROP_ASSETS);
-                return;
+        .collect()
+}
+
+/// Searches the whole project from the search box, like Godot's file-system dock.
+fn search_entries(root: &Path, query: &str) -> Vec<PathBuf> {
+    const LIMIT: usize = 2000;
+    let mut results = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(directory) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|kind| kind.is_symlink()) {
+                continue;
             }
-            if editor.asset_grid {
-                ui.horizontal_wrapped(|ui| {
-                    for path in &entries {
-                        tile(ui, editor, path);
-                    }
-                });
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            if name.starts_with('.') {
+                continue;
+            }
+            if path.is_dir() {
+                if name.contains(query) {
+                    results.push(path.clone());
+                }
+                stack.push(path);
             } else {
-                for path in &entries {
-                    file_row(ui, editor, path);
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .to_lowercase();
+                if supported(&path) && (name.contains(query) || relative.contains(query)) {
+                    results.push(path);
                 }
             }
-        });
+            if results.len() >= LIMIT {
+                return results;
+            }
+        }
+    }
+    results
+}
+
+fn display_name(root: &Path, path: &Path, searching: bool) -> String {
+    if searching {
+        path.strip_prefix(root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        path.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    }
 }
 
 fn breadcrumb(ui: &mut Ui, editor: &mut Editor, root: &Path, directory: &Path) {
@@ -319,7 +314,7 @@ fn breadcrumb_segments(root: &Path, directory: &Path) -> Vec<String> {
         .collect()
 }
 
-fn tile(ui: &mut Ui, editor: &mut Editor, path: &Path) {
+fn tile(ui: &mut Ui, editor: &mut Editor, path: &Path, root: &Path, searching: bool) {
     let (rect, response) =
         ui.allocate_exact_size(vec2(theme::TILE, theme::TILE), Sense::click_and_drag());
     let selected = editor.selected_asset.as_deref() == Some(path);
@@ -336,13 +331,13 @@ fn tile(ui: &mut Ui, editor: &mut Editor, path: &Path) {
             theme::ACCENT
         },
     );
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let name = display_name(root, path, searching);
     ui.put(
         Rect::from_min_max(
             pos2(rect.left() + 3.0, rect.bottom() - 24.0),
             pos2(rect.right() - 3.0, rect.bottom() - 2.0),
         ),
-        egui::Label::new(egui::RichText::new(name.as_ref()).color(theme::TEXT))
+        egui::Label::new(egui::RichText::new(name.as_str()).color(theme::TEXT))
             .truncate()
             .selectable(false),
     );
@@ -361,7 +356,7 @@ fn tile(ui: &mut Ui, editor: &mut Editor, path: &Path) {
     asset_menu(response, editor, path);
 }
 
-fn file_row(ui: &mut Ui, editor: &mut Editor, path: &Path) {
+fn file_row(ui: &mut Ui, editor: &mut Editor, path: &Path, root: &Path, searching: bool) {
     let (rect, response) = ui.allocate_exact_size(
         vec2(ui.available_width(), theme::ROW_HEIGHT),
         Sense::click_and_drag(),
@@ -382,13 +377,13 @@ fn file_row(ui: &mut Ui, editor: &mut Editor, path: &Path) {
             theme::ACCENT
         },
     );
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let name = display_name(root, path, searching);
     ui.put(
         Rect::from_min_max(
             pos2(icon_rect.right() + 6.0, rect.top() + 3.0),
             pos2(rect.right() - 4.0, rect.bottom() - 3.0),
         ),
-        egui::Label::new(name.as_ref()).truncate().selectable(false),
+        egui::Label::new(name.as_str()).truncate().selectable(false),
     );
     response.dnd_set_drag_payload(Drag::Asset(path.to_path_buf()));
     if response.clicked() {
@@ -571,6 +566,27 @@ fn node(name: &str, parent: Option<usize>) -> NodeFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_finds_assets_in_nested_folders_and_skips_hidden_ones() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let nested = root.path().join("assets/ui");
+        fs::create_dir_all(&nested)?;
+        fs::create_dir_all(root.path().join(".git"))?;
+        fs::write(nested.join("Panel.ts"), "")?;
+        fs::write(root.path().join("assets/Hero.ts"), "")?;
+        fs::write(root.path().join(".git/Secret.ts"), "")?;
+        assert_eq!(
+            search_entries(root.path(), "panel"),
+            [nested.join("Panel.ts")]
+        );
+        assert_eq!(
+            search_entries(root.path(), "ui"),
+            [nested.clone(), nested.join("Panel.ts")]
+        );
+        assert!(search_entries(root.path(), "secret").is_empty());
+        Ok(())
+    }
 
     #[test]
     fn breadcrumb_segments_stay_inside_the_project() {
