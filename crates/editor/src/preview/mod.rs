@@ -1391,6 +1391,7 @@ export class Driver extends Component {
         }
         let prefab = engine_core::save::PrefabFile {
             version: engine_core::save::VERSION,
+            joints: Vec::new(),
             nodes: vec![NodeFile {
                 name: "Root".into(),
                 parent: None,
