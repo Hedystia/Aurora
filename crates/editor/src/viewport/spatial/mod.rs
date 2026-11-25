@@ -298,6 +298,10 @@ pub(super) fn draw(
                 painter.circle_stroke(center - Vec2::Y * half, radius * 0.5, stroke);
                 painter.circle_stroke(center + Vec2::Y * half, radius * 0.5, stroke);
             }
+            engine_core::scene::spatial::Collider::Mesh
+            | engine_core::scene::spatial::Collider::ConvexHull => {
+                painter.circle_stroke(center, radius, stroke);
+            }
             engine_core::scene::spatial::Collider::Cuboid => {}
         }
     }
