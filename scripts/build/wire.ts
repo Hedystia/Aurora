@@ -1,5 +1,5 @@
-import { frameBytes, protocol, kindStart, kindUpdate, kindFixedUpdate, kindAck, kindSetPosition, kindCollisionEnter, kindCollisionExit, kindKeyDown, kindKeyUp, kindTouchStart, kindSetLinearVelocity, kindPlayOneShot, kindAnimationEvent, kindPause, kindResume, kindChangeScene, kindFlushCommands, kindMoveNode, kindShowNode, kindSelectFrame, kindQueueSound, kindRecordScore, kindRestoreScore, kindLoad, kindLateUpdate, kindEnable, kindDisable, kindDestroy, kindSchedule, kindPollEnabled, kindProcessResources, kindPointerTouch, kindPointerMove, kindPointerEnd, kindPointerCancel, kindPointerNodeMove, kindPointerNodeEnd, kindPointerNodeCancel, kindSceneStart, kindMouseWheel, kindPointerNodeWheel, kindNodeTransform, kindNodeScaleRotation, kindTween, kindScaleNode, kindRotateNode, kindSetText, bindingEnabled } from "../../.aurora/scripts/metadata/protocol.mts";
-import { Component, Collider2D, InputEventType, NodeHandle, advanceTweens, setScriptCallbackOwner, setScriptNodeTransform, setScriptNodeScaleRotation, dispatchPointerEvent, dispatchWheelEvent, resetScriptScene } from "../aurora/index.ts";
+import { frameBytes, protocol, kindStart, kindUpdate, kindFixedUpdate, kindAck, kindSetPosition, kindCollisionEnter, kindCollisionExit, kindKeyDown, kindKeyUp, kindTouchStart, kindSetLinearVelocity, kindPlayOneShot, kindAnimationEvent, kindPause, kindResume, kindChangeScene, kindFlushCommands, kindMoveNode, kindShowNode, kindSelectFrame, kindQueueSound, kindRecordScore, kindRestoreScore, kindLoad, kindLateUpdate, kindEnable, kindDisable, kindDestroy, kindSchedule, kindPollEnabled, kindProcessResources, kindPointerTouch, kindPointerMove, kindPointerEnd, kindPointerCancel, kindPointerNodeMove, kindPointerNodeEnd, kindPointerNodeCancel, kindSceneStart, kindMouseWheel, kindPointerNodeWheel, kindNodeTransform, kindNodeScaleRotation, kindTween, kindScaleNode, kindRotateNode, kindSetText, kindSetLoading, kindConfigSet, kindConfigValue, kindSecretValue, bindingEnabled } from "../../.aurora/scripts/metadata/protocol.mts";
+import { Component, Collider2D, InputEventType, NodeHandle, advanceTweens, setScriptCallbackOwner, setScriptNodeTransform, setScriptNodeScaleRotation, dispatchPointerEvent, dispatchWheelEvent, resetScriptScene, config, secrets } from "../aurora/index.ts";
 import { kindQueueCreateNode, kindQueueInstantiatePrefab, kindQueueReparentNode, kindQueueDestroyNode, kindQueueAddComponent, kindQueueRemoveComponent, kindRegisterComponent } from "../../.aurora/scripts/metadata/protocol.mts";
 
 import { kindRegisterPrefabNode, kindRegisterPrefabComponent, kindReleasePrefabNode, kindReleasePrefabComponent, kindUpdatePrefabParent } from "../../.aurora/scripts/metadata/protocol.mts";
@@ -22,6 +22,23 @@ interface Immediate {
 }
 
 let pendingImmediate: Immediate | null = null;
+
+/** Decodes the validated 12-byte payload carried in the two f64 slots. */
+function chunkBytes(view: DataView): number[] {
+  const x = view.getFloat64(24, true);
+  const y = view.getFloat64(32, true);
+  const length = Math.floor(y / 2 ** 48);
+  if (!Number.isInteger(length) || length < 1 || length > 12) {
+    throw new Error("Invalid config chunk length");
+  }
+  const bytes: number[] = [];
+  for (let index = 0; index < 6 + length; index++) {
+    const packed = index < 6 ? x : y - length * 2 ** 48;
+    const shift = index < 6 ? index : index - 6;
+    bytes.push(Math.floor(packed / 2 ** (shift * 8)) % 256);
+  }
+  return bytes;
+}
 
 export function run(
   components: Component[],
@@ -60,7 +77,20 @@ export function run(
       if (reply(bytes) !== 1) throw new Error("Aurora transform reply failed");
       continue;
     }
+    if (kind === kindConfigValue || kind === kindSecretValue) {
+      const operation = view.getUint32(44, true);
+      const entry = view.getUint32(40, true);
+      const store = kind === kindConfigValue ? config : secrets;
+      const chunk = operation >= 1 && operation <= 12 ? chunkBytes(view) : [];
+      store.chunk(operation, entry, chunk);
+      view.setUint32(12, kindAck, true);
+      view.setUint32(48, binding + bindingEnabled, true);
+      if (reply(bytes) !== 1) throw new Error("Aurora config reply failed");
+      continue;
+    }
     if (kind === kindSceneStart) {
+      config.reset();
+      secrets.reset();
       resetScriptScene();
       view.setUint32(12, kindAck, true);
       view.setUint32(48, binding + bindingEnabled, true);
@@ -199,6 +229,9 @@ export function run(
     else if (director.action === 1) immediate = { kind: kindPause, detail: 0, x: 0, y: 0 };
     else if (director.action === 2) immediate = { kind: kindResume, detail: 0, x: 0, y: 0 };
     else if (director.action === 3) immediate = { kind: kindChangeScene, detail: director.scene, x: 0, y: 0 };
+    else if (director.action === 4 || director.action === 5) {
+      immediate = { kind: kindSetLoading, detail: director.action === 4 ? 1 : 0, x: 0, y: 0 };
+    }
     if (kind !== kindFlushCommands) pendingImmediate = null;
     if (scene.cursor < scene.edits.length) {
       // Queued edits drain first. An immediate command from the same callback
@@ -220,6 +253,7 @@ export function run(
       else if (edit.kind === 11) queued = kindScaleNode;
       else if (edit.kind === 12) queued = kindRotateNode;
       else if (edit.kind >= 13 && edit.kind <= 15) queued = kindSetText;
+      else if (edit.kind >= 16 && edit.kind <= 18) queued = kindConfigSet;
       view.setUint32(12, queued, true);
       let detail = 0n;
       let x = 0;
@@ -230,6 +264,16 @@ export function run(
         const length = Math.floor(edit.y / 2 ** 48);
         if (!Number.isInteger(length) || length < 1 || length > 12) {
           throw new Error("Invalid text chunk length");
+        }
+        detail = (BigInt(length) << 32n) | BigInt(edit.target);
+        x = edit.x;
+        y = edit.y - length * 2 ** 48;
+      } else if (edit.kind === 16) detail = 0n;
+      else if (edit.kind === 18) detail = 13n << 32n;
+      else if (edit.kind === 17) {
+        const length = Math.floor(edit.y / 2 ** 48);
+        if (!Number.isInteger(length) || length < 1 || length > 12) {
+          throw new Error("Invalid config chunk length");
         }
         detail = (BigInt(length) << 32n) | BigInt(edit.target);
         x = edit.x;
