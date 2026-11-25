@@ -6,7 +6,7 @@ pub mod transport;
 use bincode::{Decode, Encode};
 
 /// Current script protocol version.
-pub const VERSION: u32 = 17;
+pub const VERSION: u32 = 18;
 /// Fixed byte count of an encoded envelope.
 pub const ENVELOPE_BYTES: usize = 60;
 /// Size of the protocol, sequence and kind prefix.
@@ -163,6 +163,20 @@ pub enum Kind {
     AssetLoaded,
     /// Releases one script-owned asset handle.
     ReleaseAsset,
+    /// Requests on-demand WAV/MP3 import. Detail packs the operation and request index; chunks carry the path.
+    LoadAudio,
+    /// Requests on-demand prefab import. Detail packs the operation and request index; chunks carry the path.
+    LoadPrefab,
+    /// Sets the bound spatial body's angular velocity in degrees per second.
+    SetAngularVelocity3D,
+    /// Requests a world-space raycast. Detail packs the operation and request index; chunks carry origin, direction and distance.
+    Raycast3D,
+    /// Delivers one raycast hit. Detail is the request index, X the distance, Y one on a miss, Z and chunks the normal.
+    RaycastResult,
+    /// World position of a spatial scene node. Detail holds the reference; X, Y and Z are the position.
+    NodeWorldTransform3D,
+    /// World Euler rotation of a spatial scene node. X, Y and Z carry degrees.
+    NodeWorldRotation3D,
 }
 
 /// Wire message encoded with bincode 2 fixed-width, little-endian configuration.
@@ -275,6 +289,13 @@ mod tests {
         assert_eq!(Kind::LoadSprite as u32, 69);
         assert_eq!(Kind::AssetLoaded as u32, 70);
         assert_eq!(Kind::ReleaseAsset as u32, 71);
-        assert_eq!(VERSION, 17);
+        assert_eq!(Kind::LoadAudio as u32, 72);
+        assert_eq!(Kind::LoadPrefab as u32, 73);
+        assert_eq!(Kind::SetAngularVelocity3D as u32, 74);
+        assert_eq!(Kind::Raycast3D as u32, 75);
+        assert_eq!(Kind::RaycastResult as u32, 76);
+        assert_eq!(Kind::NodeWorldTransform3D as u32, 77);
+        assert_eq!(Kind::NodeWorldRotation3D as u32, 78);
+        assert_eq!(VERSION, 18);
     }
 }
