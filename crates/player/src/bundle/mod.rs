@@ -71,6 +71,27 @@ fn read_manifest(root: &Path, path: &Path) -> Result<Vec<u8>> {
     Ok(manifest)
 }
 
+/// Finds a bundle beside the executable in a desktop app layout.
+///
+/// For `Game.app/Contents/MacOS/aurora-player`, the package lives at
+/// `Game.app/Contents/Resources/game`. Explicit command-line modes never use
+/// this fallback.
+pub(super) fn adjacent() -> Option<PathBuf> {
+    adjacent_to(&std::env::current_exe().ok()?)
+}
+
+fn adjacent_to(executable: &Path) -> Option<PathBuf> {
+    let game = executable
+        .parent()?
+        .parent()?
+        .join("Resources")
+        .join("game");
+    [bundle::EXPORT_MANIFEST, bundle::MANIFEST, "bindings.json"]
+        .iter()
+        .any(|name| game.join(name).is_file())
+        .then_some(game)
+}
+
 fn bundled_file(root: &Path, path: &Path) -> Result<PathBuf> {
     let resolved = path
         .canonicalize()
@@ -81,4 +102,33 @@ fn bundled_file(root: &Path, path: &Path) -> Result<PathBuf> {
         path.display()
     );
     Ok(resolved)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovers_a_bundle_beside_a_desktop_executable() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let macos = root.path().join("Game.app/Contents/MacOS");
+        let game = root.path().join("Game.app/Contents/Resources/game");
+        std::fs::create_dir_all(&macos)?;
+        std::fs::create_dir_all(&game)?;
+        std::fs::write(game.join(bundle::EXPORT_MANIFEST), b"{}")?;
+        let executable = macos.join("aurora-player");
+        std::fs::write(&executable, b"player")?;
+        assert_eq!(adjacent_to(&executable), Some(game));
+        Ok(())
+    }
+
+    #[test]
+    fn ignores_layouts_without_a_bundle() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let executable = root.path().join("bin/aurora-player");
+        std::fs::create_dir_all(executable.parent().context("parent")?)?;
+        std::fs::write(&executable, b"player")?;
+        assert_eq!(adjacent_to(&executable), None);
+        Ok(())
+    }
 }
