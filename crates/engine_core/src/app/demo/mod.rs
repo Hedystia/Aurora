@@ -250,7 +250,11 @@ impl Demo {
                     | Command::RemoveComponent(..)
                     | Command::SetTextStart(_)
                     | Command::SetTextChunk(..)
-                    | Command::SetTextEnd(_),
+                    | Command::SetTextEnd(_)
+                    | Command::ShowLoading(_)
+                    | Command::ConfigSetStart(_)
+                    | Command::ConfigSetChunk(..)
+                    | Command::ConfigSetEnd(_),
                 ) => {
                     anyhow::bail!("Director commands require an authored scene");
                 }
