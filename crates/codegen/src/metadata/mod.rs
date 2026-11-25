@@ -437,6 +437,9 @@ pub fn protocol_typescript() -> Result<String> {
         script_api::Kind::SetLinearVelocity3D,
         script_api::Kind::CollisionEnter3D,
         script_api::Kind::CollisionExit3D,
+        script_api::Kind::LoadSprite,
+        script_api::Kind::AssetLoaded,
+        script_api::Kind::ReleaseAsset,
     ] {
         writeln!(protocol, "export const kind{kind:?} = {};", kind as u32)?;
     }
