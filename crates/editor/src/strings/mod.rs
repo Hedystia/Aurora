@@ -181,6 +181,26 @@ pub(super) const ADD_FRAME: &str = "Drop PNG to Add Frame";
 pub(super) const ONE_SHOT_BANK: &str = "Scene Audio Clips";
 pub(super) const ADD_SOUND: &str = "Drop WAV or MP3 to Add Clip";
 
+pub(super) const PHYSICS_3D_JOINTS: &str = "Physics 3D / Joints";
+pub(super) const BODY_A: &str = "Body A";
+pub(super) const BODY_B: &str = "Body B";
+pub(super) const JOINT_KIND: &str = "Type";
+pub(super) const JOINT_ANCHOR_A: &str = "Anchor A (m)";
+pub(super) const JOINT_ANCHOR_B: &str = "Anchor B (m)";
+pub(super) const JOINT_AXIS: &str = "Axis";
+pub(super) const JOINT_FIXED: &str = "Fixed";
+pub(super) const JOINT_BALL: &str = "Ball";
+pub(super) const JOINT_HINGE: &str = "Hinge";
+pub(super) const JOINT_SLIDER: &str = "Slider";
+pub(super) const ADD_JOINT: &str = "Add Joint";
+pub(super) const NO_JOINT_BODIES: &str = "Add two spatial nodes with a physics body first.";
+pub(super) const INVALID_JOINT: &str =
+    "Needs two distinct bodies, finite anchors and a nonzero axis.";
+pub(super) const MISSING_BODY: &str = "Missing body";
+pub(super) const AXIS_X: &str = "X ";
+pub(super) const AXIS_Y: &str = "Y ";
+pub(super) const AXIS_Z: &str = "Z ";
+
 pub(super) const DRAW_ORDER: &str = "Draw Order ";
 
 pub(super) const PROJECTS: &str = "Projects";
