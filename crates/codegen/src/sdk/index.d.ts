@@ -55,6 +55,10 @@ export declare class Node {
     getChildByName(name: string): NodeRef | null;
     getChildByPath(path: string): NodeRef | null;
     setPosition(x: number, y: number): void;
+    /** Local Z position of a spatial node, or zero for a 2D node. */
+    get z(): number;
+    /** @internal Updates the cached Z position from a host transform stream. */
+    set z(value: number);
     get scaleX(): number;
     set scaleX(value: number);
     get scaleY(): number;
@@ -77,7 +81,20 @@ export declare class RigidBody2D {
     vy: number;
     setLinearVelocity(x: number, y: number): void;
 }
+/** Script handle for an authored spatial cuboid body. */
+export declare class RigidBody3D {
+    changed: boolean;
+    vx: number;
+    vy: number;
+    vz: number;
+    setLinearVelocity(x: number, y: number, z: number): void;
+}
 export declare class Collider2D {
+    readonly node: NodeHandle;
+    constructor(node: NodeHandle);
+}
+/** Peer handle delivered with a spatial contact. */
+export declare class Collider3D {
     readonly node: NodeHandle;
     constructor(node: NodeHandle);
 }
@@ -118,6 +135,7 @@ export declare class SceneCommands {
     frame(node: number, frame: number): void;
     setSpriteFrame(node: NodeRef, frame: SpriteFrame): void;
     setText(node: number, value: string): void;
+    /** Persists one project config value as `name\0value` UTF-8 bytes. */
     setConfig(name: string, value: string): void;
     sound(clip: number): void;
     bestScore(score: number): void;
@@ -171,9 +189,10 @@ export declare class AssetManager {
 /** Global asset manager for bundle and non-component resource work. */
 export declare const assetManager: AssetManager;
 /** Host-pushed key/value state. Values arrive once per scene start. */
-export declare class KeyValueStore {
-    private values;
-    private pending;
+declare class KeyValueStore {
+    private readonly values;
+    private readonly pending;
+    /** Returns the stored value or null when the host did not supply the key. */
     get(name: string): string | null;
     /** @internal Stores one config value locally. */
     set(name: string, value: string): void;
@@ -193,6 +212,8 @@ export declare class NodeRef {
     get name(): string;
     get x(): number;
     get y(): number;
+    /** Local Z position of a spatial node, or zero for a 2D node. */
+    get z(): number;
     get scaleX(): number;
     set scaleX(value: number);
     get scaleY(): number;
@@ -259,8 +280,15 @@ export declare class Integer {
 export declare class Text {
 }
 export declare class Vector2 {
+    x: number;
+    y: number;
+    constructor(x?: number, y?: number);
 }
 export declare class Vector3 {
+    x: number;
+    y: number;
+    z: number;
+    constructor(x?: number, y?: number, z?: number);
 }
 export declare class Size {
 }
@@ -276,6 +304,7 @@ export declare class Component {
     readonly node: Node;
     readonly audio: AudioSource;
     readonly body: RigidBody2D;
+    readonly body3d: RigidBody3D;
     readonly director: Director;
     readonly scene: SceneCommands;
     readonly resources: Resources;
@@ -339,6 +368,8 @@ export declare class Component {
     onTouchCancel(_event: ScriptEvent): void;
     onBeginContact(_other: Collider2D): void;
     onEndContact(_other: Collider2D): void;
+    onBeginContact3D(_other: Collider3D): void;
+    onEndContact3D(_other: Collider3D): void;
     onAnimationEvent(_code: number): void;
     onBestScore(_score: number): void;
 }
@@ -364,6 +395,8 @@ export declare function registerComponentFactory(name: string, factory: PrefabFa
 export declare function registerComponentClass(type: unknown, name: string): void;
 /** @internal Caches one authored node transform before callbacks run. */
 export declare function setScriptNodeTransform(reference: number, x: number, y: number): void;
+/** @internal Caches one authored spatial transform stream before callbacks run. */
+export declare function setScriptNodeTransform3D(reference: number, field: "position" | "rotation" | "scale", value: [number, number, number]): void;
 /** @internal Caches one authored node scale and rotation. */
 export declare function setScriptNodeScaleRotation(reference: number, x: number, y: number, angle: number): void;
 /** @internal Resets scene-local handles before a scene's bindings load. */
