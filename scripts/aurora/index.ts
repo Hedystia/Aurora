@@ -1747,7 +1747,322 @@ export class Tween {
   }
 }
 
-const activeTweens: Tween[] = [];
+interface Advanceable {
+  _advance(dt: number): boolean;
+}
+
+const activeTweens: Advanceable[] = [];
+
+interface ValueStep {
+  kind: "to" | "by" | "delay" | "call";
+  duration: number;
+  value: number;
+  ease: (value: number) => number;
+  callback: (() => void) | null;
+  start: number;
+  begun: boolean;
+}
+
+/** A chainable tween for any numeric script property. */
+export class ValueTween {
+  private readonly steps: ValueStep[] = [];
+  private index = 0;
+  private elapsed = 0;
+  private repeats = 0;
+  private forever = false;
+  private running = false;
+
+  constructor(
+    private readonly get: () => number,
+    private readonly set: (value: number) => void,
+  ) {}
+
+  to(value: number, duration: number, options?: { easing?: EasingName }): this {
+    this.steps.push({
+      kind: "to",
+      duration: Math.max(0, duration),
+      value,
+      ease: easing(options?.easing ?? "linear"),
+      callback: null,
+      start: 0,
+      begun: false,
+    });
+    return this;
+  }
+
+  by(delta: number, duration: number, options?: { easing?: EasingName }): this {
+    this.steps.push({
+      kind: "by",
+      duration: Math.max(0, duration),
+      value: delta,
+      ease: easing(options?.easing ?? "linear"),
+      callback: null,
+      start: 0,
+      begun: false,
+    });
+    return this;
+  }
+
+  delay(seconds: number): this {
+    this.steps.push({
+      kind: "delay",
+      duration: Math.max(0, seconds),
+      value: 0,
+      ease: (value) => value,
+      callback: null,
+      start: 0,
+      begun: false,
+    });
+    return this;
+  }
+
+  call(callback: () => void): this {
+    this.steps.push({
+      kind: "call",
+      duration: 0,
+      value: 0,
+      ease: (value) => value,
+      callback,
+      start: 0,
+      begun: false,
+    });
+    return this;
+  }
+
+  repeat(times = 1): this {
+    this.repeats = Math.max(0, Math.floor(times));
+    return this;
+  }
+
+  repeatForever(): this {
+    this.forever = true;
+    return this;
+  }
+
+  start(): this {
+    if (!this.running && this.steps.length > 0) {
+      this.index = 0;
+      this.elapsed = 0;
+      this.running = true;
+      activeTweens.push(this);
+    }
+    return this;
+  }
+
+  stop(): this {
+    this.running = false;
+    return this;
+  }
+
+  /** @internal Advances this value tween once per simulation tick. */
+  _advance(dt: number): boolean {
+    if (!this.running) return false;
+    let budget = Math.max(0, dt);
+    let guard = 0;
+    while (this.running && guard++ < 10000) {
+      if (this.index >= this.steps.length) {
+        if (this.forever) {
+          this.resetSteps();
+          this.index = 0;
+        } else if (this.repeats > 0) {
+          this.repeats--;
+          this.resetSteps();
+          this.index = 0;
+        } else {
+          this.running = false;
+          break;
+        }
+      }
+      const step = this.steps[this.index];
+      if (step.kind === "call") {
+        step.callback?.();
+        this.index++;
+        continue;
+      }
+      if (step.duration <= 0) {
+        if (step.kind !== "delay") this.apply(step, 1);
+        this.index++;
+        continue;
+      }
+      if (budget <= 0) break;
+      const use = Math.min(budget, step.duration - this.elapsed);
+      this.elapsed += use;
+      budget -= use;
+      if (step.kind !== "delay") this.apply(step, this.elapsed / step.duration);
+      if (this.elapsed >= step.duration) {
+        this.index++;
+        this.elapsed = 0;
+      }
+    }
+    return this.running;
+  }
+
+  private resetSteps(): void {
+    for (const step of this.steps) {
+      step.begun = false;
+    }
+  }
+
+  private apply(step: ValueStep, value: number): void {
+    if (!step.begun) {
+      step.begun = true;
+      step.start = this.get();
+    }
+    const t = step.ease(Math.min(1, Math.max(0, value)));
+    this.set(
+      step.kind === "by" ? step.start + step.value * t : step.start + (step.value - step.start) * t,
+    );
+  }
+}
+
+/** Creates a tween for any numeric property with a getter and setter. */
+export function tweenValue(
+  get: () => number,
+  set: (value: number) => void,
+): ValueTween {
+  return new ValueTween(get, set);
+}
+
+/** High-level pointer gesture delivered by a GestureDetector. */
+export class GestureEvent {
+  constructor(
+    readonly type: string,
+    readonly x: number,
+    readonly y: number,
+    readonly deltaX = 0,
+    readonly deltaY = 0,
+    readonly direction = "",
+  ) {}
+}
+
+interface GestureOptions {
+  /** Node-local pixel movement that starts a pan or cancels a tap. */
+  tapDistance?: number;
+  /** Held seconds before a long press fires. */
+  longPressSeconds?: number;
+  /** Minimum node-local travel for a swipe on release. */
+  swipeDistance?: number;
+}
+
+/** Recognises tap, double tap, long press, pan and swipe on one node. */
+export class GestureDetector {
+  private readonly listeners = new Map<string, Array<(event: GestureEvent) => void>>();
+  private pointer = -1;
+  private startX = 0;
+  private startY = 0;
+  private lastX = 0;
+  private lastY = 0;
+  private held = 0;
+  private moved = false;
+  private longPressed = false;
+  private lastTap = -Infinity;
+  private clock = 0;
+  private readonly tapDistance: number;
+  private readonly longPressSeconds: number;
+  private readonly swipeDistance: number;
+
+  constructor(
+    private readonly node: NodeRef,
+    options: GestureOptions = {},
+  ) {
+    this.tapDistance = options.tapDistance ?? 12;
+    this.longPressSeconds = options.longPressSeconds ?? 0.5;
+    this.swipeDistance = options.swipeDistance ?? 24;
+    node.on(InputEventType.TOUCH_START, this.onStart);
+    node.on(InputEventType.TOUCH_MOVE, this.onMove);
+    node.on(InputEventType.TOUCH_END, this.onEnd);
+    node.on(InputEventType.TOUCH_CANCEL, this.onCancel);
+    activeGestures.push(this);
+  }
+
+  on(type: string, callback: (event: GestureEvent) => void): void {
+    const list = this.listeners.get(type) ?? [];
+    list.push(callback);
+    this.listeners.set(type, list);
+  }
+
+  private emit(event: GestureEvent): void {
+    for (const callback of this.listeners.get(event.type) ?? []) callback(event);
+  }
+
+  private readonly onStart = (event: ScriptEvent): void => {
+    if (this.pointer >= 0) return;
+    this.pointer = event.pointerId;
+    this.startX = this.lastX = event.nodeX;
+    this.startY = this.lastY = event.nodeY;
+    this.held = 0;
+    this.moved = false;
+    this.longPressed = false;
+  };
+
+  private readonly onMove = (event: ScriptEvent): void => {
+    if (event.pointerId !== this.pointer) return;
+    this.lastX = event.nodeX;
+    this.lastY = event.nodeY;
+    if (Math.hypot(event.nodeX - this.startX, event.nodeY - this.startY) > this.tapDistance) {
+      this.moved = true;
+    }
+    if (this.moved) {
+      this.emit(new GestureEvent("pan", event.nodeX, event.nodeY, event.nodeX - this.startX, event.nodeY - this.startY));
+    }
+  };
+
+  private readonly onEnd = (event: ScriptEvent): void => {
+    if (event.pointerId !== this.pointer) return;
+    if (!this.moved && !this.longPressed) {
+      const double = this.clock - this.lastTap < 0.3;
+      this.emit(new GestureEvent(double ? "doubleTap" : "tap", this.lastX, this.lastY));
+      this.lastTap = this.clock;
+    } else if (this.moved) {
+      const dx = this.lastX - this.startX;
+      const dy = this.lastY - this.startY;
+      if (Math.hypot(dx, dy) >= this.swipeDistance) {
+        const direction = Math.abs(dx) > Math.abs(dy)
+          ? dx > 0 ? "right" : "left"
+          : dy > 0 ? "down" : "up";
+        this.emit(new GestureEvent("swipe", this.lastX, this.lastY, dx, dy, direction));
+      }
+    }
+    this.pointer = -1;
+  };
+
+  private readonly onCancel = (event: ScriptEvent): void => {
+    if (event.pointerId === this.pointer) this.pointer = -1;
+  };
+
+  /** @internal Advances gesture timers once per simulation tick. */
+  _advance(dt: number): void {
+    this.clock += dt;
+    if (this.pointer < 0 || this.moved || this.longPressed) return;
+    this.held += dt;
+    if (this.held >= this.longPressSeconds) {
+      this.longPressed = true;
+      this.emit(new GestureEvent("longPress", this.lastX, this.lastY));
+    }
+  }
+
+  destroy(): void {
+    this.node.off(InputEventType.TOUCH_START, this.onStart);
+    this.node.off(InputEventType.TOUCH_MOVE, this.onMove);
+    this.node.off(InputEventType.TOUCH_END, this.onEnd);
+    this.node.off(InputEventType.TOUCH_CANCEL, this.onCancel);
+    const index = activeGestures.indexOf(this);
+    if (index >= 0) activeGestures.splice(index, 1);
+  }
+}
+
+const activeGestures: GestureDetector[] = [];
+
+/** @internal Advances every active gesture detector once per simulation tick. */
+export function advanceGestures(dt: number): void {
+  for (const detector of activeGestures.slice()) detector._advance(dt);
+}
+
+/** @internal Drops gesture listeners before a new scene loads. */
+export function resetGestures(): void {
+  for (const detector of activeGestures.slice()) detector.destroy();
+  activeGestures.length = 0;
+}
 
 /** Creates a node tween for a script or component node. */
 export function tween(target: NodeRef | Node): Tween {
