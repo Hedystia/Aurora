@@ -2,13 +2,14 @@
 use anyhow::{Context, Result, bail, ensure};
 use base64::Engine as _;
 use engine_core::{
+    animation::{Clip, Interpolation as ChannelInterpolation, Key, Property, Track, Wrap},
     save::{MAX_NODES, PrefabFile, VERSION},
-    scene::spatial::{Geometry, Role, SpatialNode},
+    scene::spatial::{Geometry, Role, SpatialNode, bake_skin},
 };
-use glam::{EulerRot, Quat};
+use glam::{EulerRot, Mat4, Quat};
 use gltf::{buffer::Source, mesh::Mode};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::Read,
     path::{Path, PathBuf},
@@ -16,6 +17,9 @@ use std::{
 };
 
 const MAX_BYTES: usize = 32 * 1024 * 1024;
+const SAMPLE_RATE: u32 = 60;
+const MAX_ANIMATION_FRAMES: u32 = 36_000;
+const MAX_ANIMATION_KEYS: usize = 8_192;
 
 fn bounded(path: &Path) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
@@ -24,6 +28,251 @@ fn bounded(path: &Path) -> Result<Vec<u8>> {
         .read_to_end(&mut bytes)?;
     ensure!(bytes.len() <= MAX_BYTES, "glTF input exceeds 32 MiB");
     Ok(bytes)
+}
+
+/// Rest-pose world matrices for every glTF node, keyed by its document index.
+fn node_worlds(document: &gltf::Document) -> BTreeMap<usize, Mat4> {
+    fn world(
+        index: usize,
+        parents: &BTreeMap<usize, usize>,
+        locals: &BTreeMap<usize, Mat4>,
+        cache: &mut BTreeMap<usize, Mat4>,
+    ) -> Mat4 {
+        if let Some(matrix) = cache.get(&index) {
+            return *matrix;
+        }
+        let local = locals.get(&index).copied().unwrap_or(Mat4::IDENTITY);
+        let matrix = parents.get(&index).map_or(local, |parent| {
+            world(*parent, parents, locals, cache) * local
+        });
+        cache.insert(index, matrix);
+        matrix
+    }
+
+    let mut parents = BTreeMap::new();
+    let mut locals = BTreeMap::new();
+    for node in document.nodes() {
+        locals.insert(
+            node.index(),
+            Mat4::from_cols_array_2d(&node.transform().matrix()),
+        );
+        for child in node.children() {
+            parents.insert(child.index(), node.index());
+        }
+    }
+    let mut cache = BTreeMap::new();
+    for index in locals.keys().copied().collect::<Vec<_>>() {
+        world(index, &parents, &locals, &mut cache);
+    }
+    cache
+}
+
+/// Inverse bind matrices and rest joint transforms in glTF joint-array order.
+///
+/// Joint matrices are expressed relative to the skinned node, whose own local
+/// transform is ignored by glTF. The pair is consumed by [`bake_skin`].
+fn skin_matrices(
+    skin: gltf::Skin<'_>,
+    buffers: &[Vec<u8>],
+    worlds: &BTreeMap<usize, Mat4>,
+    base: Mat4,
+) -> Result<(Vec<Mat4>, Vec<Mat4>)> {
+    let joints: Vec<_> = skin.joints().collect();
+    ensure!(
+        !joints.is_empty() && joints.len() <= usize::from(u16::MAX) + 1,
+        "Unsupported glTF skin joint count"
+    );
+    let inverse_bind: Vec<_> = match skin
+        .reader(|buffer| buffers.get(buffer.index()).map(Vec::as_slice))
+        .read_inverse_bind_matrices()
+    {
+        Some(values) => values
+            .map(|matrix| Mat4::from_cols_array_2d(&matrix))
+            .collect(),
+        None => vec![Mat4::IDENTITY; joints.len()],
+    };
+    ensure!(
+        inverse_bind.len() >= joints.len(),
+        "glTF inverse bind matrix count does not match its joints"
+    );
+    let base_inverse = base.inverse();
+    let joint_world = joints
+        .iter()
+        .map(|joint| {
+            base_inverse
+                * worlds
+                    .get(&joint.index())
+                    .copied()
+                    .unwrap_or(Mat4::IDENTITY)
+        })
+        .collect();
+    Ok((inverse_bind, joint_world))
+}
+
+struct ImportedChannel {
+    node: usize,
+    properties: [Property; 3],
+    interpolation: ChannelInterpolation,
+    frames: Vec<u32>,
+    values: Vec<[f32; 3]>,
+}
+
+/// Converts glTF animation samplers into scene clips sampled at 60 Hz.
+///
+/// Quaternion keys are decomposed to XYZ Euler degrees and blended per axis,
+/// which approximates rather than reproduces spherical interpolation.
+/// Cubic-spline samplers and morph-target weights are rejected explicitly.
+fn import_animations(
+    document: &gltf::Document,
+    buffers: &[Vec<u8>],
+    nodes: &BTreeMap<usize, usize>,
+    node_count: usize,
+) -> Result<Vec<Clip>> {
+    use gltf::animation::util::ReadOutputs;
+    use gltf::animation::{Interpolation as SourceInterpolation, Property as SourceProperty};
+
+    let mut clips = Vec::new();
+    for animation in document.animations() {
+        let mut channels = Vec::new();
+        for channel in animation.channels() {
+            let Some(&node) = nodes.get(&channel.target().node().index()) else {
+                continue;
+            };
+            let interpolation = match channel.sampler().interpolation() {
+                SourceInterpolation::Step => ChannelInterpolation::Step,
+                SourceInterpolation::Linear => ChannelInterpolation::Linear,
+                SourceInterpolation::CubicSpline => {
+                    bail!("glTF cubic spline animation interpolation is not supported")
+                }
+            };
+            let reader = channel.reader(|buffer| buffers.get(buffer.index()).map(Vec::as_slice));
+            let inputs: Vec<_> = reader
+                .read_inputs()
+                .context("Invalid glTF animation input accessor")?
+                .collect();
+            ensure!(
+                !inputs.is_empty() && inputs.len() <= MAX_ANIMATION_KEYS,
+                "Invalid glTF animation key count"
+            );
+            ensure!(
+                inputs.windows(2).all(|times| times[0] <= times[1]),
+                "glTF animation inputs are out of order"
+            );
+            let (properties, values): ([Property; 3], Vec<[f32; 3]>) =
+                match (channel.target().property(), reader.read_outputs()) {
+                    (SourceProperty::Translation, Some(ReadOutputs::Translations(values))) => (
+                        [
+                            Property::TranslationX,
+                            Property::TranslationY,
+                            Property::TranslationZ,
+                        ],
+                        values.collect(),
+                    ),
+                    (SourceProperty::Scale, Some(ReadOutputs::Scales(values))) => (
+                        [
+                            Property::SpatialScaleX,
+                            Property::SpatialScaleY,
+                            Property::SpatialScaleZ,
+                        ],
+                        values.collect(),
+                    ),
+                    (SourceProperty::Rotation, Some(ReadOutputs::Rotations(rotations))) => (
+                        [
+                            Property::RotationX,
+                            Property::RotationY,
+                            Property::RotationZ,
+                        ],
+                        rotations
+                            .into_f32()
+                            .map(|quaternion| {
+                                let (x, y, z) =
+                                    Quat::from_array(quaternion).to_euler(EulerRot::XYZ);
+                                [x.to_degrees(), y.to_degrees(), z.to_degrees()]
+                            })
+                            .collect(),
+                    ),
+                    (SourceProperty::MorphTargetWeights, _) => {
+                        bail!("glTF morph-target animation is not supported")
+                    }
+                    _ => bail!("glTF animation output does not match its target property"),
+                };
+            ensure!(
+                values.len() == inputs.len(),
+                "glTF animation sampler length mismatch"
+            );
+            if properties[0] == Property::SpatialScaleX {
+                ensure!(
+                    values
+                        .iter()
+                        .all(|value| value.iter().all(|scale| *scale > 0.0)),
+                    "glTF animation has a non-positive scale key"
+                );
+            }
+            let mut frames = Vec::with_capacity(inputs.len());
+            let mut previous: Option<u32> = None;
+            for time in inputs {
+                let seconds = f64::from(time);
+                ensure!(
+                    seconds.is_finite() && seconds >= 0.0,
+                    "Invalid glTF animation time"
+                );
+                let frame = (seconds * f64::from(SAMPLE_RATE)).round();
+                let frame = (frame as u64).min(u64::from(MAX_ANIMATION_FRAMES)) as u32;
+                let frame = previous.map_or(frame, |last| frame.max(last.saturating_add(1)));
+                ensure!(frame <= MAX_ANIMATION_FRAMES, "glTF animation is too long");
+                frames.push(frame);
+                previous = Some(frame);
+            }
+            channels.push(ImportedChannel {
+                node,
+                properties,
+                interpolation,
+                frames,
+                values,
+            });
+        }
+        if channels.is_empty() {
+            continue;
+        }
+        let duration = channels
+            .iter()
+            .flat_map(|channel| channel.frames.iter().copied())
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        let mut tracks = Vec::new();
+        for channel in channels {
+            for axis in 0..3 {
+                tracks.push(Track {
+                    node: channel.node,
+                    property: channel.properties[axis],
+                    interpolation: channel.interpolation,
+                    keys: channel
+                        .frames
+                        .iter()
+                        .zip(&channel.values)
+                        .map(|(&frame, value)| Key {
+                            frame,
+                            value: value[axis],
+                            tangents: None,
+                        })
+                        .collect(),
+                });
+            }
+        }
+        let clip = Clip {
+            name: animation.name().unwrap_or("Animation").to_owned(),
+            sample_rate: SAMPLE_RATE,
+            duration,
+            speed: 1.0,
+            wrap: Wrap::Once,
+            tracks,
+            events: Vec::new(),
+        };
+        clip.validate(node_count)?;
+        clips.push(clip);
+    }
+    Ok(clips)
 }
 
 pub(super) fn import(source: &Path, destination: &Path) -> Result<()> {
@@ -84,6 +333,8 @@ pub(super) fn import(source: &Path, destination: &Path) -> Result<()> {
         .collect();
     let mut nodes = vec![super::node(&name, None)];
     nodes[0].spatial = Some(SpatialNode::default());
+    let worlds = node_worlds(&gltf.document);
+    let mut node_map = BTreeMap::new();
     let mut pending: Vec<_> = scene.nodes().map(|n| (n, 0)).collect();
     pending.reverse();
     let mut visited = BTreeSet::new();
@@ -94,6 +345,7 @@ pub(super) fn import(source: &Path, destination: &Path) -> Result<()> {
             "Repeated glTF node or scene too large"
         );
         let index = nodes.len();
+        node_map.insert(node.index(), index);
         let (position, rotation, scale) = node.transform().decomposed();
         let (x, y, z) = Quat::from_array(rotation).to_euler(EulerRot::XYZ);
         let mut authored = super::node(node.name().unwrap_or("Node 3D"), Some(parent));
@@ -105,6 +357,13 @@ pub(super) fn import(source: &Path, destination: &Path) -> Result<()> {
         });
         nodes.push(authored);
         if let Some(mesh) = node.mesh() {
+            let skin = node
+                .skin()
+                .map(|skin| {
+                    let base = worlds.get(&node.index()).copied().unwrap_or(Mat4::IDENTITY);
+                    skin_matrices(skin, &buffers, &worlds, base)
+                })
+                .transpose()?;
             for primitive in mesh.primitives() {
                 ensure!(
                     primitive.mode() == Mode::Triangles,
@@ -119,6 +378,25 @@ pub(super) fn import(source: &Path, destination: &Path) -> Result<()> {
                     "glTF primitive exceeds vertex limit"
                 );
                 let positions: Vec<_> = positions.collect();
+                let positions = if let Some((inverse_bind, joint_world)) = &skin {
+                    let joints: Vec<_> = reader
+                        .read_joints(0)
+                        .context("Skinned glTF primitive is missing JOINTS_0")?
+                        .into_u16()
+                        .collect();
+                    let weights: Vec<_> = reader
+                        .read_weights(0)
+                        .context("Skinned glTF primitive is missing WEIGHTS_0")?
+                        .into_f32()
+                        .collect();
+                    ensure!(
+                        joints.len() == positions.len() && weights.len() == positions.len(),
+                        "glTF skin weights do not match its vertices"
+                    );
+                    bake_skin(&positions, &joints, &weights, inverse_bind, joint_world)?
+                } else {
+                    positions
+                };
                 let uvs = reader
                     .read_tex_coords(0)
                     .map(|coords| coords.into_f32().collect::<Vec<_>>());
@@ -183,9 +461,11 @@ pub(super) fn import(source: &Path, destination: &Path) -> Result<()> {
     if total_indices == 0 {
         bail!("glTF scene has no triangle meshes");
     }
+    let animations = import_animations(&gltf.document, &buffers, &node_map, nodes.len())?;
     let prefab = PrefabFile {
         version: VERSION,
         nodes,
+        animations,
     };
     fs::create_dir_all(destination)?;
     let target = destination.join(format!("{name}.prefab"));
@@ -330,6 +610,144 @@ mod tests {
                 .uvs
                 .as_deref(),
             Some([[0., 0.], [1., 0.], [0., 1.]].as_slice())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn animation_import_converts_sampler_keys_to_60hz_tracks() -> Result<()> {
+        let source = tempfile::tempdir()?;
+        let destination = tempfile::tempdir()?;
+        let mut bytes = Vec::new();
+        for point in [[0_f32, 0., 0.], [1., 0., 0.], [0., 1., 0.]] {
+            for value in point {
+                bytes.extend(value.to_le_bytes());
+            }
+        }
+        for time in [0_f32, 1.0] {
+            bytes.extend(time.to_le_bytes());
+        }
+        for translation in [[0_f32, 0., 0.], [0., 2., 0.]] {
+            for value in translation {
+                bytes.extend(value.to_le_bytes());
+            }
+        }
+        fs::write(source.path().join("animated.bin"), &bytes)?;
+        let path = source.path().join("animated.gltf");
+        fs::write(
+            &path,
+            br#"{
+                "asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+                "nodes":[{"name":"Mover","mesh":0}],
+                "meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],
+                "animations":[{"name":"Move","channels":[
+                    {"sampler":0,"target":{"node":0,"path":"translation"}}
+                ],"samplers":[{"input":1,"output":2,"interpolation":"LINEAR"}]}],
+                "buffers":[{"uri":"animated.bin","byteLength":68}],
+                "bufferViews":[
+                    {"buffer":0,"byteOffset":0,"byteLength":36},
+                    {"buffer":0,"byteOffset":36,"byteLength":8},
+                    {"buffer":0,"byteOffset":44,"byteLength":24}
+                ],
+                "accessors":[
+                    {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},
+                    {"bufferView":1,"componentType":5126,"count":2,"type":"SCALAR","min":[0],"max":[1]},
+                    {"bufferView":2,"componentType":5126,"count":2,"type":"VEC3"}
+                ]
+            }"#,
+        )?;
+
+        import(&path, destination.path())?;
+        let prefab = PrefabFile::load(&destination.path().join("animated.prefab"))?;
+        assert_eq!(prefab.animations.len(), 1);
+        let clip = &prefab.animations[0];
+        assert_eq!(clip.name, "Move");
+        assert_eq!(clip.duration, 60);
+        assert_eq!(clip.tracks.len(), 3);
+        let track = clip
+            .tracks
+            .iter()
+            .find(|track| track.property == Property::TranslationY)
+            .context("Missing translation Y channel")?;
+        assert_eq!(track.node, 1);
+        assert_eq!(
+            track
+                .keys
+                .iter()
+                .map(|key| (key.frame, key.value))
+                .collect::<Vec<_>>(),
+            [(0, 0.0), (60, 2.0)]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn skinned_import_bakes_the_rest_pose_into_mesh_positions() -> Result<()> {
+        let source = tempfile::tempdir()?;
+        let destination = tempfile::tempdir()?;
+        let mut bytes = Vec::new();
+        for point in [[0_f32, 0., 0.], [1., 0., 0.], [0., 1., 0.]] {
+            for value in point {
+                bytes.extend(value.to_le_bytes());
+            }
+        }
+        for _ in 0..3 {
+            for value in [0_u16, 0, 0, 0] {
+                bytes.extend(value.to_le_bytes());
+            }
+        }
+        for _ in 0..3 {
+            for value in [1_f32, 0., 0., 0.] {
+                bytes.extend(value.to_le_bytes());
+            }
+        }
+        for value in [
+            1_f32, 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.,
+        ] {
+            bytes.extend(value.to_le_bytes());
+        }
+        fs::write(source.path().join("skinned.bin"), &bytes)?;
+        let path = source.path().join("skinned.gltf");
+        fs::write(
+            &path,
+            br#"{
+                "asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,1]}],
+                "nodes":[
+                    {"name":"Joint","translation":[1,0,0]},
+                    {"name":"Mesh","mesh":0,"skin":0}
+                ],
+                "skins":[{"joints":[0],"inverseBindMatrices":3}],
+                "meshes":[{"primitives":[{"attributes":{
+                    "POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2
+                }}]}],
+                "buffers":[{"uri":"skinned.bin","byteLength":172}],
+                "bufferViews":[
+                    {"buffer":0,"byteOffset":0,"byteLength":36},
+                    {"buffer":0,"byteOffset":36,"byteLength":24},
+                    {"buffer":0,"byteOffset":60,"byteLength":48},
+                    {"buffer":0,"byteOffset":108,"byteLength":64}
+                ],
+                "accessors":[
+                    {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},
+                    {"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},
+                    {"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},
+                    {"bufferView":3,"componentType":5126,"count":1,"type":"MAT4"}
+                ]
+            }"#,
+        )?;
+
+        import(&path, destination.path())?;
+        let prefab = PrefabFile::load(&destination.path().join("skinned.prefab"))?;
+        let mesh = prefab.nodes[3]
+            .spatial
+            .as_ref()
+            .context("Imported mesh is missing")?;
+        assert_eq!(
+            mesh.geometry
+                .as_ref()
+                .context("Imported geometry is missing")?
+                .positions,
+            [[1., 0., 0.], [2., 0., 0.], [1., 1., 0.]]
         );
         Ok(())
     }
