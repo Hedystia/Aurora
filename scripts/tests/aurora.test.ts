@@ -26,6 +26,9 @@ import {
   setScriptNodeTransform,
   property,
   tween,
+  tweenValue,
+  GestureDetector,
+  advanceGestures,
 } from "../aurora/index.ts";
 
 function bind(
@@ -537,5 +540,45 @@ describe("tweens", () => {
     expect(target.scaleY).toBe(4);
     expect(target.angle).toBeCloseTo(30);
     expect(owner.scene.edits.map((edit) => edit.kind)).toEqual([11, 12]);
+  });
+});
+
+describe("value tweens and gestures", () => {
+  test("tweenValue interpolates an arbitrary numeric property", () => {
+    let value = 0;
+    tweenValue(() => value, (next) => { value = next; })
+      .to(10, 1)
+      .call(() => { value += 1; })
+      .start();
+    advanceTweens(0.5);
+    expect(value).toBeCloseTo(5);
+    advanceTweens(0.5);
+    expect(value).toBeCloseTo(11);
+  });
+
+  test("a gesture detector reports taps, long presses and swipes", () => {
+    const owner = new Component();
+    bind([owner], [0], ["Owner"]);
+    const target = new NodeRef(0, owner.scene);
+    const detector = new GestureDetector(target, { tapDistance: 4, longPressSeconds: 0.5, swipeDistance: 8 });
+    const seen: string[] = [];
+    detector.on("tap", () => { seen.push("tap"); });
+    detector.on("longPress", () => { seen.push("longPress"); });
+    detector.on("swipe", (event) => { seen.push("swipe:" + event.direction); });
+
+    dispatchPointerEvent(owner, 0, "touch-start", 0.5, 0.5, 1, 0, 0);
+    dispatchPointerEvent(owner, 0, "touch-end", 0.5, 0.5, 1, 0, 0);
+    expect(seen).toEqual(["tap"]);
+
+    dispatchPointerEvent(owner, 0, "touch-start", 0.5, 0.5, 1, 0, 0);
+    advanceGestures(0.5);
+    dispatchPointerEvent(owner, 0, "touch-end", 0.5, 0.5, 1, 0, 0);
+    expect(seen).toEqual(["tap", "longPress"]);
+
+    dispatchPointerEvent(owner, 0, "touch-start", 0.5, 0.5, 1, 0, 0);
+    dispatchPointerEvent(owner, 0, "touch-move", 0.5, 0.5, 1, 20, 0);
+    dispatchPointerEvent(owner, 0, "touch-end", 0.5, 0.5, 1, 20, 0);
+    expect(seen).toEqual(["tap", "longPress", "swipe:right"]);
+    detector.destroy();
   });
 });
