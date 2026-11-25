@@ -651,9 +651,21 @@ impl Authored {
         &mut self,
         binding: u32,
         node: EntityId,
+        kind: Kind,
+        detail: u64,
+        coordinates: Option<[f64; 2]>,
+    ) -> Result<()> {
+        self.dispatch_raw_z(binding, node, kind, detail, coordinates, None)
+    }
+
+    fn dispatch_raw_z(
+        &mut self,
+        binding: u32,
+        node: EntityId,
         mut kind: Kind,
         mut detail: u64,
         mut coordinates: Option<[f64; 2]>,
+        z: Option<f64>,
     ) -> Result<()> {
         for _ in 0..=128 {
             let transform = self.director.scene().transform(node)?;
@@ -666,7 +678,7 @@ impl Authored {
                     kind,
                     binding,
                     node.0,
-                    [position[0], position[1], 0.0],
+                    [position[0], position[1], z.unwrap_or(0.0)],
                     detail,
                 )?;
             self.bindings
@@ -1281,8 +1293,11 @@ impl Authored {
             if let Entry::Vacant(entry) = events.entry(target) {
                 let contacts = if let Some(game) = &mut self.gameplay {
                     game.contacts(&states, target, self.director.physics_overlaps(target))
+                        .into_iter()
+                        .map(|(kind, other)| (kind, other, false))
+                        .collect()
                 } else {
-                    let mut events: Vec<(Kind, EntityId)> = self
+                    let mut events: Vec<(Kind, EntityId, bool)> = self
                         .director
                         .physics_contacts()
                         .iter()
@@ -1302,6 +1317,7 @@ impl Authored {
                                     Kind::CollisionExit
                                 },
                                 other,
+                                false,
                             ))
                         })
                         .collect();
@@ -1322,6 +1338,7 @@ impl Authored {
                                     Kind::CollisionExit3D
                                 },
                                 other,
+                                contact.trigger,
                             ))
                         },
                     ));
@@ -1331,14 +1348,22 @@ impl Authored {
             }
         }
         for (binding, target) in targets {
-            for &(kind, other) in &events[&target] {
+            for &(kind, other, trigger) in &events[&target] {
                 self.sync_lifecycle()?;
                 if let Some(entry) = self.bindings.get(&binding)
                     && entry
                         .lifecycle
                         .runs(self.director.scene().active_in_hierarchy(target)?)
                 {
-                    self.dispatch_to(binding, target, kind, other.value())?;
+                    self.dispatch_raw_z(
+                        binding,
+                        target,
+                        kind,
+                        other.value(),
+                        None,
+                        Some(if trigger { 1.0 } else { 0.0 }),
+                    )?;
+                    self.settle_mutations()?;
                 }
             }
         }
