@@ -501,6 +501,7 @@ pub(super) fn create_with_scene_kind(
                 autoplay: None,
                 gameplay: None,
                 display: None,
+                joints: Vec::new(),
             }
             .save(&target)?;
         }
@@ -509,6 +510,7 @@ pub(super) fn create_with_scene_kind(
                 version: VERSION,
                 nodes: vec![node(name, None)],
                 animations: Vec::new(),
+                joints: Vec::new(),
             }
             .save(&target)?;
         }
