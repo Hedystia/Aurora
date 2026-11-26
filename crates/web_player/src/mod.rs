@@ -1,3 +1,5 @@
+#![cfg(target_arch = "wasm32")]
+
 //! Browser player groundwork: a wasm-bindgen shell that owns a WebGPU canvas
 //! surface and drives fixed simulation ticks from `requestAnimationFrame`.
 //!
@@ -114,7 +116,7 @@ impl ScriptlessRuntime {
 
     /// A subtle pulse and pointer tint make forwarding visible without faking a scene.
     fn tint(&self) -> [f32; 4] {
-        let pulse = f32::from(self.ticks % 60) / 60.0;
+        let pulse = (self.ticks % 60) as f32 / 60.0;
         let pointer = self.last_position.map_or(0.0, |[x, _]| x);
         [0.04 + 0.03 * pulse, 0.09 + 0.05 * pointer, 0.16, 1.0]
     }
