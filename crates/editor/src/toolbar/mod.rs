@@ -5,7 +5,9 @@ use egui::Ui;
 use crate::{
     Editor,
     docks::{self, Dock},
-    icons, strings, theme,
+    icons,
+    preview::PlayScope,
+    strings, theme,
 };
 
 pub(super) fn menus(ui: &mut Ui, editor: &mut Editor) {
@@ -170,6 +172,14 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         if play.on_hover_text(strings::PLAY_SHORTCUT).clicked() {
             editor.play();
         }
+        ui.separator();
+        ui.selectable_value(
+            &mut editor.play_scope,
+            PlayScope::Scene,
+            strings::PLAY_SCENE,
+        );
+        ui.selectable_value(&mut editor.play_scope, PlayScope::Game, strings::PLAY_GAME);
+        ui.separator();
         let (icon, label) = if editor.preview.paused {
             (icons::Icon::Play, strings::RESUME)
         } else {
