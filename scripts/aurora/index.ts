@@ -285,11 +285,26 @@ export function registerScriptScenes(names: string[]): void {
 export class Director {
   action = 0;
   scene = 0;
+  camera = 0xffffffff;
 
   pause(): void { this.action = 1; }
   resume(): void { this.action = 2; }
   showLoading(): void { this.action = 4; }
   hideLoading(): void { this.action = 5; }
+  /** Renders the scene through a camera node, like a scripted loading screen view. */
+  setCamera(node: number | NodeRef): void {
+    const reference = typeof node === "number" ? node : node.index;
+    if (!Number.isInteger(reference) || reference < 0 || reference > 0xfffffffe) {
+      throw new Error("Invalid camera node");
+    }
+    this.camera = reference;
+    this.action = 6;
+  }
+  /** Returns to the camera selected in the scene. */
+  useSceneCamera(): void {
+    this.camera = 0xffffffff;
+    this.action = 6;
+  }
   loadScene(name: string): boolean {
     for (let index = 0; index < scriptSceneNames.length; index++) {
       if (scriptSceneNames[index] === name) {
