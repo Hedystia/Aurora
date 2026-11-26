@@ -1,0 +1,28 @@
+#!/bin/sh
+# Minimal Gradle launcher for Aurora's Android shell.
+#
+# The binary gradle-wrapper.jar cannot be generated on the Linux host that
+# authored this groundwork. If it is present (after `gradle wrapper`), use it;
+# otherwise fall back to a Gradle installation on PATH.
+set -eu
+
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+wrapper_jar="$here/gradle/wrapper/gradle-wrapper.jar"
+
+if [ -f "$wrapper_jar" ]; then
+    if [ -z "${JAVA_HOME:-}" ] || [ ! -x "$JAVA_HOME/bin/java" ]; then
+        echo "gradlew: JAVA_HOME must point to a JDK to run the Gradle wrapper" >&2
+        exit 2
+    fi
+    exec "$JAVA_HOME/bin/java" -classpath "$wrapper_jar" \
+        -Dorg.gradle.appname=gradlew \
+        org.gradle.wrapper.GradleWrapperMain "$@"
+fi
+
+if command -v gradle >/dev/null 2>&1; then
+    exec gradle -p "$here" "$@"
+fi
+
+echo "gradlew: no gradle-wrapper.jar and no 'gradle' on PATH." >&2
+echo "gradlew: run 'gradle wrapper' once, then rerun ./gradlew assembleDebug." >&2
+exit 2
