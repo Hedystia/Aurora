@@ -176,6 +176,7 @@ fn decode_command(reply: &Envelope) -> Result<Option<ScriptCommand>> {
         Kind::Pause => Ok(Some(ScriptCommand::Pause)),
         Kind::Resume => Ok(Some(ScriptCommand::Resume)),
         Kind::ChangeScene => Ok(Some(ScriptCommand::ChangeScene(reply.detail.try_into()?))),
+        Kind::SetCamera3D => Ok(Some(ScriptCommand::SetCamera3D(reply.detail.try_into()?))),
         Kind::MoveNode => {
             let position = [reply.x as f32, reply.y as f32];
             ensure!(
@@ -470,6 +471,30 @@ mod tests {
                 binding: 0,
             })?,
             Some(ScriptCommand::ReleaseAsset(0x8000_0001))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn decodes_camera_selection_and_reset() -> Result<()> {
+        let command = |detail| Envelope {
+            protocol: VERSION,
+            seq: 0,
+            kind: Kind::SetCamera3D,
+            node: 0,
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            detail,
+            binding: 0,
+        };
+        assert!(matches!(
+            decode_command(&command(4))?,
+            Some(ScriptCommand::SetCamera3D(4))
+        ));
+        assert!(matches!(
+            decode_command(&command(u64::from(u32::MAX)))?,
+            Some(ScriptCommand::SetCamera3D(index)) if index == u32::MAX as usize
         ));
         Ok(())
     }
