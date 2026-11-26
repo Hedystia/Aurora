@@ -798,7 +798,7 @@ esac
         let mut request = request(project, work.path().join("app"))?;
         request.target = Target::parse("android")?;
         let error = failure(build(&engine, &request))?;
-        assert!(error.contains("no Android application runtime"), "{error}");
+        assert!(error.contains("no SDK/NDK, emulator or device"), "{error}");
         assert!(stub.log().is_empty());
         Ok(())
     }
