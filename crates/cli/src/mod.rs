@@ -7,10 +7,11 @@
 mod engine;
 mod pipeline;
 mod target;
+mod template;
 
 use std::{env, path::PathBuf, process::ExitCode};
 
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use clap::{Parser, Subcommand};
 use engine::{ContainerEngine, EngineChoice};
 use pipeline::BuildRequest;
@@ -52,6 +53,9 @@ struct BuildArgs {
     /// Container engine to use. Auto prefers Docker, then Podman.
     #[arg(long, value_enum, default_value = "auto")]
     engine: EngineChoice,
+    /// Verified target template archive or URL used for the exported player.
+    #[arg(long, value_name = "PATH|URL")]
+    template: Option<String>,
     /// Override the builder image reference, for example a digest pin.
     #[arg(long)]
     image: Option<String>,
@@ -92,11 +96,16 @@ fn run() -> Result<()> {
 
 fn build(args: BuildArgs) -> Result<()> {
     let target = Target::parse(&args.target)?;
+    ensure!(
+        args.template.is_none() || target.id != "macos",
+        "--template applies to container targets; macOS builds use the host player"
+    );
     let request = BuildRequest {
         project: args.project,
         target,
         output: args.output,
         includes: args.include_scene,
+        template: args.template.clone(),
         image: args.image,
         keep_image: args.keep_image,
         dry_run: args.dry_run,
@@ -124,6 +133,9 @@ fn build(args: BuildArgs) -> Result<()> {
     }
     if let Some(bundle) = &outcome.source_bundle_sha256 {
         println!("Package digest: {bundle}");
+    }
+    if let Some(template) = &args.template {
+        println!("Template: {template}");
     }
     println!("Output: {}", outcome.output.display());
     if args.keep_image {
