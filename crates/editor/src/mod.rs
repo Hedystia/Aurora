@@ -86,6 +86,7 @@ struct Editor {
     project: Project,
     layout: DockState<docks::Dock>,
     preview: preview::Preview,
+    play_scope: preview::PlayScope,
     viewport: viewport::Viewport,
     history: history::History,
     timeline: timeline::Timeline,
@@ -138,6 +139,7 @@ impl Editor {
             layout: load_layout(&project),
             project,
             preview: preview::Preview::default(),
+            play_scope: preview::PlayScope::default(),
             viewport: viewport::Viewport::default(),
             history: history::History::default(),
             timeline: timeline::Timeline::default(),
@@ -187,7 +189,7 @@ impl Editor {
     }
 
     fn play(&mut self) {
-        self.preview.start(&self.project);
+        self.preview.start(&self.project, self.play_scope);
     }
 
     fn stop_play(&mut self) {
@@ -727,9 +729,65 @@ impl Editor {
                 .open(&mut open)
                 .show(ctx, |ui| {
                     ui.label(strings::DEFAULT_SCENE);
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.default_scene).hint_text("main.scene"),
-                    );
+                    let references = project::scene_references(&root);
+                    let current = self.default_scene.clone();
+                    let mut picked = None;
+                    let response = egui::ComboBox::from_id_salt("default-scene")
+                        .selected_text(if current.is_empty() {
+                            strings::DEFAULT_SCENE_AUTO.to_owned()
+                        } else {
+                            current.clone()
+                        })
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(current.is_empty(), strings::DEFAULT_SCENE_AUTO)
+                                .clicked()
+                            {
+                                picked = Some(String::new());
+                            }
+                            for reference in &references {
+                                if ui
+                                    .selectable_label(current == *reference, reference)
+                                    .clicked()
+                                {
+                                    picked = Some(reference.clone());
+                                }
+                            }
+                        })
+                        .response;
+                    let scene_drop = |payload: &Drag| {
+                        matches!(
+                            payload,
+                            Drag::Asset(path)
+                                if project::is_scene(path) && path.starts_with(&root)
+                        )
+                    };
+                    if let Some(payload) = response.dnd_hover_payload::<Drag>() {
+                        icons::paint_drop_frame(
+                            ui.painter(),
+                            response.rect,
+                            scene_drop(payload.as_ref()),
+                        );
+                    }
+                    if let Some(payload) = response.dnd_release_payload::<Drag>()
+                        && scene_drop(payload.as_ref())
+                        && let Drag::Asset(path) = payload.as_ref()
+                    {
+                        picked = path
+                            .strip_prefix(&root)
+                            .ok()
+                            .map(|relative| relative.to_string_lossy().into_owned());
+                    }
+                    if let Some(next) = picked {
+                        self.default_scene = next;
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(strings::DEFAULT_SCENE_TIP)
+                                .weak()
+                                .small(),
+                        );
+                    });
                     if ui.button(strings::SAVE).clicked() {
                         let reference = self.default_scene.trim();
                         if reference.is_empty()
