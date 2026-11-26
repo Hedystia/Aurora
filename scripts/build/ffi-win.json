@@ -1,0 +1,8 @@
+{
+  "ffi_format": 6,
+  "functions": [
+    { "name": "nativeReceive", "symbol": "aurora_receive", "params": ["mutable-bytes"], "returns": "i32" },
+    { "name": "nativeReply", "symbol": "aurora_reply", "params": ["mutable-bytes"], "returns": "i32" }
+  ],
+  "libraries": ["./libaurora-transport.a"]
+}
