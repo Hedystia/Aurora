@@ -1,6 +1,6 @@
 //! Startup project browser and persistent recent-project catalog.
 
-mod browser;
+pub(crate) mod browser;
 pub(crate) mod settings;
 
 use std::{
