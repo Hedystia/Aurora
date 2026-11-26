@@ -79,6 +79,7 @@ impl Runtime {
                 profile: scenario.profile.map(Path::to_path_buf),
                 silent,
                 loading: None,
+                camera: None,
                 pending_config: BTreeMap::new(),
                 script: None,
                 pending_scene: None,
@@ -185,6 +186,7 @@ impl Runtime {
                 assets: &demo.assets,
                 nodes: demo.scene.snapshot()?,
                 camera: CAMERA,
+                view3d: crate::save::CameraSelection::Auto,
             },
             Self::Authored(game) => {
                 let mut nodes = crate::save::visual::draw_nodes(
@@ -214,6 +216,7 @@ impl Runtime {
                     assets: game.director.assets(),
                     nodes,
                     camera: game.director.display().camera(),
+                    view3d: game.camera_selection(),
                 }
             }
             Self::Spatial(game) => Frame::Cubes(&game.cubes),
@@ -295,6 +298,8 @@ pub(super) struct Authored {
     profile: Option<PathBuf>,
     /// White-pixel sprite drawn over the game frame while input is blocked.
     loading: Option<Sprite>,
+    /// Camera selected by a script for the current scene.
+    camera: Option<crate::ecs::EntityId>,
     pending_config: BTreeMap<u32, Vec<u8>>,
     silent: bool,
     script: Option<Session>,
@@ -327,6 +332,13 @@ pub(super) struct Authored {
 }
 
 impl Authored {
+    fn camera_selection(&self) -> crate::save::CameraSelection {
+        match self.camera {
+            Some(id) => crate::save::CameraSelection::Node(id.value() as usize),
+            None => self.director.camera(),
+        }
+    }
+
     fn start(&mut self) -> Result<()> {
         if self.script.is_none() {
             return Ok(());
@@ -816,6 +828,13 @@ impl Authored {
                 );
                 self.pending_scene = Some(index);
             }
+            Command::SetCamera3D(reference) => {
+                self.camera = if reference == u32::MAX as usize {
+                    None
+                } else {
+                    Some(self.target(reference)?)
+                };
+            }
             Command::PlayOneShot(id) => {
                 let clip = self.dynamic_audio.get(&id).cloned();
                 self.require_gameplay()?.sound(id, clip.as_ref())?
@@ -1286,6 +1305,7 @@ impl Authored {
             }
             self.end_scene()?;
             self.director.commit_scene_change(index, next, entered)?;
+            self.camera = None;
             if let Some((script, nodes)) = replacement {
                 self.script = script;
                 self.script_nodes = nodes;
