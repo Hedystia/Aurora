@@ -42,6 +42,7 @@ pub(super) const NEW_SCENE: &str = "New Scene";
 pub(super) const NEW_PREFAB: &str = "New Prefab";
 pub(super) const ADD_FILE: &str = "New Asset";
 pub(super) const DELETE: &str = "Delete";
+pub(super) const ASSETS_SELECTED: &str = "assets selected";
 pub(super) const DELETE_CONFIRM: &str = "Delete Asset";
 pub(super) const DELETE_WARNING: &str = "This permanently removes the file from the project.";
 pub(super) const DELETE_FOLDER_WARNING: &str =
