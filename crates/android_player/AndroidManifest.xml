@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Aurora Android shell (unverified: assembled on a host with no SDK or device).
+  NativeActivity needs no Java/Kotlin code; the winit glue loads libmain.so
+  and calls the exported `android_main` symbol.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.aurora.player"
+    android:versionCode="1"
+    android:versionName="0.1.0">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
+
+    <!-- The scriptless shell needs no permissions: no network, no file
+         access outside the app sandbox, and audio output needs no grant. -->
+    <uses-feature android:glEsVersion="0x00030002" android:required="true" />
+
+    <application
+        android:label="Aurora"
+        android:hasCode="false"
+        android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+        <activity
+            android:name="android.app.NativeActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|inputMethod">
+            <meta-data android:name="android.app.lib_name" android:value="main" />
+            <meta-data android:name="android.app.func_name" android:value="android_main" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
