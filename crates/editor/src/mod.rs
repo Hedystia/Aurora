@@ -42,6 +42,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 use node_tree::Drag;
 use project::Project;
+use project_manager::browser::Browser;
 
 type Capture = std::rc::Rc<std::cell::Cell<Option<image::ImageResult<()>>>>;
 
@@ -123,6 +124,7 @@ struct Editor {
     display_dialog: bool,
     project_settings: bool,
     default_scene: String,
+    scene_browser: Option<Browser>,
     pending_open: Option<PathBuf>,
     confirm_action: Option<ConfirmAction>,
     close_dialog: bool,
@@ -174,6 +176,7 @@ impl Editor {
             display_dialog: false,
             project_settings: false,
             default_scene,
+            scene_browser: None,
             pending_open: None,
             confirm_action: None,
             close_dialog: false,
@@ -427,6 +430,7 @@ impl Editor {
             self.rename = None;
             self.layout = load_layout(&project);
             self.default_scene = project::load_session(&project.root).default_scene;
+            self.scene_browser = None;
             self.project = project;
             (self.watcher, self.watch_events) = make_watcher();
             self.watched.clear();
@@ -732,55 +736,66 @@ impl Editor {
                     let references = project::scene_references(&root);
                     let current = self.default_scene.clone();
                     let mut picked = None;
-                    let response = egui::ComboBox::from_id_salt("default-scene")
-                        .selected_text(if current.is_empty() {
-                            strings::DEFAULT_SCENE_AUTO.to_owned()
-                        } else {
-                            current.clone()
-                        })
-                        .show_ui(ui, |ui| {
-                            if ui
-                                .selectable_label(current.is_empty(), strings::DEFAULT_SCENE_AUTO)
-                                .clicked()
-                            {
-                                picked = Some(String::new());
-                            }
-                            for reference in &references {
+                    ui.horizontal(|ui| {
+                        let response = egui::ComboBox::from_id_salt("default-scene")
+                            .selected_text(if current.is_empty() {
+                                strings::DEFAULT_SCENE_AUTO.to_owned()
+                            } else {
+                                current.clone()
+                            })
+                            .show_ui(ui, |ui| {
                                 if ui
-                                    .selectable_label(current == *reference, reference)
+                                    .selectable_label(
+                                        current.is_empty(),
+                                        strings::DEFAULT_SCENE_AUTO,
+                                    )
                                     .clicked()
                                 {
-                                    picked = Some(reference.clone());
+                                    picked = Some(String::new());
                                 }
-                            }
-                        })
-                        .response;
-                    let scene_drop = |payload: &Drag| {
-                        matches!(
-                            payload,
-                            Drag::Asset(path)
-                                if project::is_scene(path) && path.starts_with(&root)
-                        )
-                    };
-                    if let Some(payload) = response.dnd_hover_payload::<Drag>() {
-                        icons::paint_drop_frame(
-                            ui.painter(),
-                            response.rect,
-                            scene_drop(payload.as_ref()),
-                        );
-                    }
-                    if let Some(payload) = response.dnd_release_payload::<Drag>()
-                        && scene_drop(payload.as_ref())
-                        && let Drag::Asset(path) = payload.as_ref()
-                    {
-                        picked = path
-                            .strip_prefix(&root)
-                            .ok()
-                            .map(|relative| relative.to_string_lossy().into_owned());
-                    }
+                                for reference in &references {
+                                    if ui
+                                        .selectable_label(current == *reference, reference)
+                                        .clicked()
+                                    {
+                                        picked = Some(reference.clone());
+                                    }
+                                }
+                            })
+                            .response;
+                        let scene_drop = |payload: &Drag| {
+                            matches!(
+                                payload,
+                                Drag::Asset(path)
+                                    if project::is_scene(path) && path.starts_with(&root)
+                            )
+                        };
+                        if let Some(payload) = response.dnd_hover_payload::<Drag>() {
+                            icons::paint_drop_frame(
+                                ui.painter(),
+                                response.rect,
+                                scene_drop(payload.as_ref()),
+                            );
+                        }
+                        if let Some(payload) = response.dnd_release_payload::<Drag>()
+                            && scene_drop(payload.as_ref())
+                            && let Drag::Asset(path) = payload.as_ref()
+                        {
+                            picked = path
+                                .strip_prefix(&root)
+                                .ok()
+                                .map(|relative| relative.to_string_lossy().into_owned());
+                        }
+                        if ui.button(strings::BROWSE).clicked() {
+                            self.scene_browser = Some(Browser::new(root.clone(), true));
+                        }
+                    });
                     if let Some(next) = picked {
                         self.default_scene = next;
                     }
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.default_scene).hint_text("main.scene"),
+                    );
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(strings::DEFAULT_SCENE_TIP)
@@ -1365,6 +1380,21 @@ impl eframe::App for Editor {
             self.logs.drain(..excess);
         }
         self.shortcuts(&ctx);
+        let choice = self
+            .scene_browser
+            .as_mut()
+            .and_then(|browser| browser.show(&ctx));
+        if let Some(choice) = choice {
+            self.scene_browser = None;
+            if let Some(path) = choice {
+                match path.strip_prefix(&self.project.root) {
+                    Ok(relative) => {
+                        self.default_scene = relative.to_string_lossy().into_owned();
+                    }
+                    Err(_) => self.report(Err(anyhow::anyhow!(strings::INVALID_DEFAULT_SCENE))),
+                }
+            }
+        }
         let chrome = egui::Frame::new()
             .fill(theme::SHELL)
             .inner_margin(theme::TOOLBAR_MARGIN);
