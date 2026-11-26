@@ -75,7 +75,6 @@ struct Options {
 #[derive(Clone)]
 enum ConfirmAction {
     Open(PathBuf),
-    Delete(PathBuf),
     Create {
         directory: PathBuf,
         name: String,
@@ -941,12 +940,16 @@ impl Editor {
                             .clicked()
                         {
                             let targets = std::mem::take(&mut self.asset_delete);
+                            let open_scene = self.project.path.clone();
                             for path in targets {
-                                if path == self.project.path && self.project.dirty {
-                                    self.confirm_action = Some(ConfirmAction::Delete(path));
-                                } else {
-                                    let result = self.delete_asset(&path);
-                                    self.report(result);
+                                let result = self.delete_asset(&path);
+                                let deleted_open = result.is_ok() && path == open_scene;
+                                self.report(result);
+                                // Keep the open document as an in-memory backup so a
+                                // mistaken deletion can be undone with Ctrl+S. It is
+                                // dirty now, so leaving it prompts to save or discard.
+                                if deleted_open {
+                                    self.project.dirty = true;
                                 }
                             }
                         }
@@ -985,9 +988,9 @@ impl Editor {
         if let Some(action) = self.confirm_action.clone() {
             let mut open = true;
             let mut close = false;
+            let mut proceed = false;
             let mut resolved = false;
             let mut save_result = None;
-            let mut delete_result = None;
             let mut create_result = None;
             egui::Window::new(strings::UNSAVED_CHANGES)
                 .open(&mut open)
@@ -996,15 +999,17 @@ impl Editor {
                     if ui.button(strings::SAVE).clicked() {
                         save_result = Some(self.project.save());
                         resolved = save_result.as_ref().is_some_and(Result::is_ok);
+                        proceed = resolved;
                     }
                     if ui.button(strings::DISCARD).clicked() {
                         resolved = true;
+                        proceed = true;
                     }
                     if ui.button(strings::CANCEL).clicked() {
                         close = true;
                     }
                 });
-            if close {
+            if close || proceed {
                 open = false;
             }
             if resolved && save_result.as_ref().is_none_or(Result::is_err) {
@@ -1014,11 +1019,6 @@ impl Editor {
                 match &action {
                     ConfirmAction::Open(path) => {
                         self.pending_open = resolved.then(|| path.clone());
-                    }
-                    ConfirmAction::Delete(path) => {
-                        if resolved {
-                            delete_result = Some(self.delete_asset(path));
-                        }
                     }
                     ConfirmAction::Create {
                         directory,
@@ -1038,9 +1038,6 @@ impl Editor {
                 self.confirm_action = None;
             }
             if let Some(result) = save_result {
-                self.report(result);
-            }
-            if let Some(result) = delete_result {
                 self.report(result);
             }
             if let Some(result) = create_result {
@@ -1262,6 +1259,7 @@ impl Workbench {
         };
         let mut open = true;
         let mut close = false;
+        let mut proceed = false;
         let mut resolved = false;
         let mut save_result = None;
         egui::Window::new(strings::UNSAVED_CHANGES)
@@ -1273,15 +1271,17 @@ impl Workbench {
                 {
                     save_result = Some(editor.project.save());
                     resolved = save_result.as_ref().is_some_and(Result::is_ok);
+                    proceed = resolved;
                 }
                 if ui.button(strings::DISCARD).clicked() {
                     resolved = true;
+                    proceed = true;
                 }
                 if ui.button(strings::CANCEL).clicked() {
                     close = true;
                 }
             });
-        if close {
+        if close || proceed {
             open = false;
         }
         if resolved
