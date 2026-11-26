@@ -740,20 +740,11 @@ impl Editor {
                     ui.horizontal(|ui| {
                         let response = egui::ComboBox::from_id_salt("default-scene")
                             .selected_text(if current.is_empty() {
-                                strings::DEFAULT_SCENE_AUTO.to_owned()
+                                strings::SELECT_SCENE.to_owned()
                             } else {
                                 current.clone()
                             })
                             .show_ui(ui, |ui| {
-                                if ui
-                                    .selectable_label(
-                                        current.is_empty(),
-                                        strings::DEFAULT_SCENE_AUTO,
-                                    )
-                                    .clicked()
-                                {
-                                    picked = Some(String::new());
-                                }
                                 for reference in &references {
                                     if ui
                                         .selectable_label(current == *reference, reference)
