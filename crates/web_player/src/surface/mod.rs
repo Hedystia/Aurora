@@ -28,7 +28,7 @@ impl SurfaceRenderer {
     /// Creates a WebGPU surface for an existing canvas element.
     pub(crate) async fn new(canvas: HtmlCanvasElement) -> Result<Self, String> {
         let size = [canvas.width(), canvas.height()];
-        let instance = Instance::new(InstanceDescriptor::default());
+        let instance = Instance::new(InstanceDescriptor::new_without_display_handle().with_env());
         let surface = instance
             .create_surface(SurfaceTarget::Canvas(canvas.clone()))
             .map_err(|error| format!("create canvas surface: {error}"))?;
