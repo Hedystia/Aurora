@@ -8,6 +8,8 @@ members = [
   "crates/codegen",
   "crates/script_api",
   "crates/cli",
+  "crates/android_player",
+  "crates/web_player",
 ]
 
 [workspace.package]
