@@ -549,6 +549,7 @@ mod tests {
             target: crate::target::Target::parse("macos")?,
             output: root.path().join("Game.app"),
             includes: Vec::new(),
+            template: None,
             image: None,
             keep_image: false,
             dry_run: false,
