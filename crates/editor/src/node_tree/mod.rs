@@ -232,6 +232,15 @@ fn row(
         editor.begin_rename(index);
     }
     response.context_menu(|ui| {
+        if editor.project.document.nodes[index]
+            .spatial
+            .as_ref()
+            .is_some_and(|spatial| spatial.role == engine_core::scene::spatial::Role::Camera)
+            && ui.button(strings::CAMERA_VIEW).clicked()
+        {
+            editor.viewport.look_through_camera(index);
+            ui.close();
+        }
         if ui.button(strings::CREATE_NODE).clicked() {
             editor.project.selected = Some(index);
             editor.create_node = true;
