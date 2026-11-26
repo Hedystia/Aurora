@@ -525,44 +525,6 @@ pub(crate) fn place(
     }
 }
 
-/// Projects one sprite quad point into the perspective view.
-///
-/// Spatial nodes use their authored world matrix. Plain 2D nodes are placed on
-/// the `z = 0` plane at the engine's 32-pixel-per-metre scale so a mixed scene
-/// shows its HUD beside the 3D geometry.
-pub(crate) fn project_sprite_point(
-    view: &View,
-    worlds: &BTreeMap<EntityId, Mat4>,
-    node: &NodeState,
-    point: [f32; 2],
-) -> Pos2 {
-    view.project_clamped(sprite_point(worlds, node, point))
-}
-
-fn sprite_point(worlds: &BTreeMap<EntityId, Mat4>, node: &NodeState, point: [f32; 2]) -> Vec3 {
-    let local = if node.spatial.is_some() {
-        point
-    } else {
-        node.world.point(point)
-    };
-    let local = Vec3::new(
-        local[0] / PIXELS_PER_METRE,
-        -local[1] / PIXELS_PER_METRE,
-        0.0,
-    );
-    let matrix = worlds.get(&node.id).copied().unwrap_or(Mat4::IDENTITY);
-    matrix.transform_point3(local)
-}
-
-/// View depth of a sprite's origin, for far-to-near painting.
-pub(crate) fn sprite_depth(
-    view: &View,
-    worlds: &BTreeMap<EntityId, Mat4>,
-    node: &NodeState,
-) -> f32 {
-    view.depth(sprite_point(worlds, node, [0.0; 2]))
-}
-
 /// Paints the sky gradient and an adaptive ground grid that fades with distance.
 pub(crate) fn backdrop(painter: &Painter, view: &View) {
     render::sky(painter, view.rect);
