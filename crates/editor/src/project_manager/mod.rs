@@ -315,15 +315,10 @@ impl Manager {
                 if dialog == Dialog::Create {
                     ui.label(RichText::new(strings::FIRST_SCENE).strong());
                     ui.horizontal(|ui| {
-                        let card_width = ((ui.available_width() - 18.0) / 4.0).max(96.0);
+                        let card_width = ((ui.available_width() - 12.0) / 3.0).max(96.0);
                         for (kind, title, detail) in [
                             (ProjectKind::TwoD, "2D", strings::SCENE_2D_DETAIL),
                             (ProjectKind::ThreeD, "3D", strings::SCENE_3D_DETAIL),
-                            (
-                                ProjectKind::TwoDThreeD,
-                                "2D + 3D",
-                                strings::SCENE_MIXED_DETAIL,
-                            ),
                             (
                                 ProjectKind::Jumpy,
                                 "Jumpy Bird",
@@ -348,7 +343,6 @@ impl Manager {
                     ui.label(match self.kind {
                         ProjectKind::TwoD => strings::SCENE_2D_DETAIL,
                         ProjectKind::ThreeD => strings::SCENE_3D_DETAIL,
-                        ProjectKind::TwoDThreeD => strings::SCENE_MIXED_DETAIL,
                         ProjectKind::Jumpy => strings::SCENE_JUMPY_DETAIL,
                     });
                     ui.label(strings::PROJECT_NAME);
@@ -577,7 +571,6 @@ mod tests {
         for (name, kind) in [
             ("TwoD", ProjectKind::TwoD),
             ("ThreeD", ProjectKind::ThreeD),
-            ("Mixed", ProjectKind::TwoDThreeD),
             ("Jumpy", ProjectKind::Jumpy),
         ] {
             let mut manager = Manager::new();
@@ -634,21 +627,6 @@ mod tests {
         let three_d = Project::open_existing(&three_d.root)?;
         assert_eq!(three_d.document.nodes[4].name, "Canvas");
         assert!(three_d.document.nodes[4].spatial.is_none());
-
-        let mixed = Project::create(&workspace.path().join("Mixed"), ProjectKind::TwoDThreeD)?;
-        assert_eq!(
-            mixed.document.scene_kind,
-            engine_core::save::SceneKind::TwoDThreeD
-        );
-        assert!(mixed.document.nodes[0].spatial.is_none());
-        assert!(mixed.document.nodes[1].spatial.is_some());
-        assert_eq!(
-            mixed.document.nodes[2]
-                .spatial
-                .as_ref()
-                .map(|spatial| spatial.role),
-            Some(Role::Cube)
-        );
         Ok(())
     }
 
