@@ -192,7 +192,8 @@ impl Editor {
     }
 
     fn play(&mut self) {
-        self.preview.start(&self.project, self.play_scope);
+        self.preview
+            .start(&self.project, self.play_scope, &self.default_scene);
     }
 
     fn stop_play(&mut self) {
