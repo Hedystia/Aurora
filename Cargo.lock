@@ -1032,6 +1032,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "wgpu",
+ "windows-sys 0.61.2",
  "winit",
 ]
 
@@ -3369,6 +3370,7 @@ dependencies = [
  "bincode",
  "memmap2",
  "nix",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
