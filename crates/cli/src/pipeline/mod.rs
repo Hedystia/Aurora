@@ -22,6 +22,7 @@ use serde::Serialize;
 use crate::{
     engine::{ContainerEngine, RunSpec},
     target::Target,
+    template,
 };
 
 /// Build metadata format written beside the package contents.
@@ -41,6 +42,8 @@ pub struct BuildRequest {
     pub output: PathBuf,
     /// Additional saved scenes inside the project, in switch order.
     pub includes: Vec<PathBuf>,
+    /// Template archive path or URL whose player and launcher are exported.
+    pub template: Option<String>,
     /// Exact builder image reference, or the target's default.
     pub image: Option<String>,
     /// Keep the pulled builder image after the build.
@@ -162,6 +165,34 @@ pub fn build(engine: &ContainerEngine, request: &BuildRequest) -> Result<BuildOu
         "--sign and --notarize apply only to --target macos"
     );
     let (project, selected) = resolve_project(&request.project)?;
+    let template = template::resolve(
+        request.template.as_deref(),
+        &project,
+        &request.target,
+        request.dry_run,
+    )?;
+    if let Some(template) = &template {
+        eprintln!(
+            "Using target template {} (player {}, launcher {})",
+            template.directory.display(),
+            template.player.display(),
+            template.launcher.display()
+        );
+    }
+    let (template_dir, template_player) = match &template {
+        Some(resolved) => (
+            Some(resolved.directory.clone()),
+            Some(
+                resolved
+                    .player
+                    .file_name()
+                    .context("Template player has no filename")?
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        ),
+        None => (None, None),
+    };
     let project_arg = if selected == project {
         "/project".to_owned()
     } else {
@@ -203,7 +234,10 @@ pub fn build(engine: &ContainerEngine, request: &BuildRequest) -> Result<BuildOu
             project_arg,
             staging,
             target: request.target.id,
+            export_target: request.target.manifest_target,
             includes,
+            template: template_dir.clone(),
+            template_player: template_player.clone(),
         };
         let args = spec
             .args(engine.kind())
@@ -217,6 +251,9 @@ pub fn build(engine: &ContainerEngine, request: &BuildRequest) -> Result<BuildOu
             image
         );
         eprintln!("  {}", args.join(" "));
+        if let Some(source) = &request.template {
+            eprintln!("  Template: {source} (resolved only when not a dry run)");
+        }
         return Ok(BuildOutcome {
             image,
             image_id: None,
@@ -279,7 +316,10 @@ pub fn build(engine: &ContainerEngine, request: &BuildRequest) -> Result<BuildOu
         project_arg,
         staging: staging.path().to_path_buf(),
         target: request.target.id,
+        export_target: request.target.manifest_target,
         includes,
+        template: template_dir,
+        template_player,
     };
     eprintln!("Building inside {}", spec.name);
     let status = engine.run(&spec)?;
@@ -599,6 +639,7 @@ esac
             target: Target::parse("linux")?,
             output,
             includes: Vec::new(),
+            template: None,
             image: None,
             keep_image: false,
             dry_run: false,
