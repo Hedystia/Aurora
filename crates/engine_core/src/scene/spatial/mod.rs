@@ -5,7 +5,10 @@ use glam::{EulerRot, Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::assets::{AssetId, Assets};
+use crate::{
+    assets::{AssetId, Assets},
+    save::CameraSelection,
+};
 
 /// The visual or camera role of a spatial node.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -406,11 +409,42 @@ impl View3D {
             * self.view
     }
 
+    /// Selects the camera and light for a scene view, or `None` for flat 2D.
+    ///
+    /// An explicitly selected camera node wins; when it is missing or not a
+    /// visible camera the first visible camera is used, as before.
+    pub fn resolve_selected(
+        nodes: &[super::NodeState],
+        worlds: &std::collections::BTreeMap<crate::ecs::EntityId, Mat4>,
+        selection: CameraSelection,
+    ) -> Option<Self> {
+        if selection == CameraSelection::Flat {
+            return None;
+        }
+        let selected = match selection {
+            CameraSelection::Node(index) => Some(index),
+            _ => None,
+        };
+        let (mut view, found) = Self::resolve_filtered(nodes, worlds, selected);
+        if selected.is_some() && !found {
+            view = Self::resolve_filtered(nodes, worlds, None).0;
+        }
+        Some(view)
+    }
+
     /// Selects the first visible camera and directional light in tree order.
     pub fn resolve(
         nodes: &[super::NodeState],
         worlds: &std::collections::BTreeMap<crate::ecs::EntityId, Mat4>,
     ) -> Self {
+        Self::resolve_selected(nodes, worlds, CameraSelection::Auto).unwrap_or_default()
+    }
+
+    fn resolve_filtered(
+        nodes: &[super::NodeState],
+        worlds: &std::collections::BTreeMap<crate::ecs::EntityId, Mat4>,
+        selected: Option<usize>,
+    ) -> (Self, bool) {
         let mut view = Self::default();
         let mut camera = false;
         let mut light = false;
@@ -419,6 +453,9 @@ impl View3D {
                 let world = worlds[&node.id];
                 match spatial.role {
                     Role::Camera if !camera => {
+                        if selected.is_some_and(|wanted| wanted != node.id.value() as usize) {
+                            continue;
+                        }
                         view.view = world.inverse();
                         view.fov = spatial.fov;
                         camera = true;
@@ -431,7 +468,7 @@ impl View3D {
                 }
             }
         }
-        view
+        (view, camera)
     }
 }
 
@@ -445,6 +482,40 @@ mod tests {
             indices: vec![0, 1, 2],
             uvs,
         }
+    }
+
+    #[test]
+    fn camera_selection_can_pick_a_camera_or_request_a_flat_view() -> Result<()> {
+        use crate::{
+            ecs::EntityId,
+            scene::{Affine2D, NodeState, Transform2D},
+        };
+        let node = |id, position| NodeState {
+            draw_tick: 0,
+            id: EntityId(id),
+            parent: None,
+            name: format!("Camera {id}"),
+            local: Transform2D::default(),
+            spatial: Some(SpatialNode {
+                role: Role::Camera,
+                position,
+                ..Default::default()
+            }),
+            world: Affine2D::IDENTITY,
+            sprite: None,
+            appearance: None,
+            visible: true,
+        };
+        let nodes = vec![node(0, [0., 0., 0.]), node(1, [10., 0., 0.])];
+        let worlds = matrices(&nodes);
+        assert!(View3D::resolve_selected(&nodes, &worlds, CameraSelection::Flat).is_none());
+        let auto = View3D::resolve_selected(&nodes, &worlds, CameraSelection::Auto)
+            .ok_or_else(|| anyhow::anyhow!("Expected the automatic camera"))?;
+        let explicit = View3D::resolve_selected(&nodes, &worlds, CameraSelection::Node(1))
+            .ok_or_else(|| anyhow::anyhow!("Expected the selected camera"))?;
+        assert_eq!(auto.view, worlds[&EntityId(0)].inverse());
+        assert_eq!(explicit.view, worlds[&EntityId(1)].inverse());
+        Ok(())
     }
 
     #[test]
