@@ -138,6 +138,8 @@ A scene or prefab can place an optional `spatial` component on any node. Metre-s
 
 The scene kind is only a two-value authoring hint (`two_d` or `three_d`); there is no mixed kind and no view switch. Whether a scene is edited flat or in perspective follows its content: the presence of a spatial node makes it a 3D scene. In the 3D view, 2D nodes stay in screen space as the scene's GUI over the 3D world, so the editor and player present the same composition.
 
+A scene stores its camera choice as `auto`, an explicit node index, or `flat`. `flat` suppresses the mesh pass for that scene, which is how a scene with 3D nodes can still present only its 2D GUI. The editor can lock its Scene view to the chosen camera's pose and FOV to check the game's framing while editing. Scripts override the camera for the current scene through protocol 20's `SetCamera3D`; the override is discarded on scene change so each scene's authored choice stays authoritative.
+
 The editor converts static glTF 2.0 triangle primitives to an ordinary Aurora prefab, including hierarchy, local TRS, geometry and material base colors. The import publishes a new prefab without replacing an existing file. Its meshes are self-contained for Play and export.
 
 ## Engine releases and export packages
