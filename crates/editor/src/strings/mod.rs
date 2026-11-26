@@ -30,8 +30,8 @@ pub(super) const EXPLORER: &str = "Show in Files";
 pub(super) const FIRST_SCENE: &str = "Choose the first scene";
 pub(super) const SCENE_TYPE: &str = "Scene type";
 pub(super) const SCENE_2D_DETAIL: &str = "A 2D scene with a Canvas root.";
-pub(super) const SCENE_3D_DETAIL: &str = "A 3D scene with a camera, light and cube.";
-pub(super) const SCENE_MIXED_DETAIL: &str = "Start with both 2D and 3D nodes.";
+pub(super) const SCENE_3D_DETAIL: &str =
+    "A 3D scene with a camera, light and cube; 2D nodes render as its GUI.";
 pub(super) const SCENE_JUMPY_DETAIL: &str = "Create the editable Jumpy Bird sample.";
 pub(super) const SEARCH_RESULTS: &str = "Search results";
 pub(super) const NO_RESULTS: &str = "No matching assets";
@@ -82,8 +82,6 @@ pub(super) const GAME_VIEW: &str = "Game";
 pub(super) const FRAME_VIEW: &str = "Reset view";
 pub(super) const GAME_EMPTY: &str = "Press Play to start the game";
 pub(super) const VIEW_HINT: &str = "Right drag to pan · Scroll to zoom";
-pub(super) const VIEW_2D: &str = "2D";
-pub(super) const VIEW_3D: &str = "3D";
 pub(super) const ANIMATION_EMPTY: &str =
     "To start creating an animation, you need to add a property.";
 pub(super) const ADD_ANIMATION: &str = "Add Animation Component";
