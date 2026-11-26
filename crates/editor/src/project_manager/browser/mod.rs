@@ -9,7 +9,7 @@ use egui::Context;
 
 use crate::{project, strings, theme};
 
-pub(super) struct Browser {
+pub(crate) struct Browser {
     directory: PathBuf,
     address: String,
     files: bool,
@@ -18,7 +18,7 @@ pub(super) struct Browser {
 }
 
 impl Browser {
-    pub(super) fn new(directory: PathBuf, files: bool) -> Self {
+    pub(crate) fn new(directory: PathBuf, files: bool) -> Self {
         let mut browser = Self {
             address: String::new(),
             directory: PathBuf::new(),
@@ -56,7 +56,7 @@ impl Browser {
         }
     }
 
-    pub(super) fn show(&mut self, ctx: &Context) -> Option<Option<PathBuf>> {
+    pub(crate) fn show(&mut self, ctx: &Context) -> Option<Option<PathBuf>> {
         let mut choice = None;
         let mut navigate = None;
         let modal = super::project_modal("project-browser").show(ctx, |ui| {
