@@ -2,6 +2,10 @@
 
 Pins are declared in the workspace [Cargo.toml](../Cargo.toml), [scripts/package.json](../scripts/package.json), [rust-toolchain.toml](../rust-toolchain.toml), and [tools/setup.sh](../tools/setup.sh). Cargo.lock records the M0 dependency graph.
 
+## 2026-11-25 · Distribution groundwork
+
+Target templates are verified by per-file SHA-256 and a bundle digest before caching; `tools/package-target-template.sh` produces the archive and `aurora build --template` consumes it. Windows script IPC uses a named pipe with a Windows native-script FFI manifest and `windows-sys` under `#[cfg(windows)]`; Android and Web shells are standalone crates gated to their targets. None of these platform packages has been built or run in this checkout: Windows, Android and Web toolchains/devices are absent, and the Docker daemon is not accessible. The package workflows remain disabled.
+
 ## 2026-11-22 · Initial setup
 
 | Component | Pin | Reason |
