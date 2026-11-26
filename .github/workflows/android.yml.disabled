@@ -1,0 +1,32 @@
+#! Aurora Android shell groundwork CI (disabled)
+#
+# This workflow only checks files that can be validated without the Android
+# SDK/NDK. It deliberately does not build an image or publish an artifact:
+# the shell has never been run on a device or emulator, and Google's SDK/NDK
+# redistribution terms still need review. Rename to android.yml only after
+# both conditions are resolved.
+name: Android groundwork
+on:
+  workflow_dispatch:
+  pull_request:
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  static-checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check the builder entry script
+        run: bash -n build/images/android/android-container-build.sh
+      - name: Check Rust formatting
+        run: rustfmt --edition 2024 --check crates/android_player/src/lib.rs crates/android_player/src/shell/mod.rs
+      - name: Check the manifest is well-formed XML
+        run: python3 -c 'import xml.etree.ElementTree as ET; ET.parse("crates/android_player/AndroidManifest.xml")'
+      - name: Verify the wrapper launcher is executable shell
+        run: |
+          test -x crates/android_player/gradlew
+          bash -n crates/android_player/gradlew
