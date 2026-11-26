@@ -62,6 +62,12 @@ struct Options {
     /// Include another saved scene from the project. Repeat to set the switch order.
     #[arg(long, requires = "export", value_name = "PATH")]
     include_scene: Vec<PathBuf>,
+    /// Manifest target to stamp on the export, for example windows-x86_64.
+    #[arg(long, requires = "export", value_name = "TARGET")]
+    export_target: Option<String>,
+    /// Player runtime to bundle instead of the one installed beside the editor.
+    #[arg(long, requires = "export", value_name = "PATH")]
+    player: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -1318,7 +1324,12 @@ fn main() -> Result<()> {
             .as_deref()
             .context("Export requires a project")?;
         let project = Project::open_existing(source)?;
-        return export::export(&project, &options.include_scene, output);
+        return match (options.export_target.as_deref(), options.player.as_deref()) {
+            (None, None) => export::export(&project, &options.include_scene, output),
+            (target, player) => {
+                export::export_to(&project, &options.include_scene, output, target, player)
+            }
+        };
     }
     let project = options.project.as_deref().map(Project::open).transpose()?;
     let capture_requested = options.screenshot.is_some();
