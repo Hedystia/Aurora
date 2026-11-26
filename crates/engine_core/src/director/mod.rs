@@ -12,7 +12,7 @@ use self::script_scene::ScriptScene;
 use crate::{
     assets::Assets,
     ecs::EntityId,
-    save::{Loaded, SceneFile, parent_dir},
+    save::{CameraSelection, Loaded, SceneFile, parent_dir},
     scene::{Lifecycle, Scene},
 };
 
@@ -24,6 +24,7 @@ pub struct Director {
     physics: crate::physics2d::AuthoredPhysics,
     script_scene: ScriptScene,
     assets: Assets,
+    camera: CameraSelection,
     paused: bool,
     ticks: u64,
 }
@@ -39,9 +40,11 @@ impl Director {
             Scene::default(),
         )?;
         loaded.scene.activate()?;
+        let camera = loaded.camera;
         Ok(Self {
             paths,
             current: 0,
+            camera,
             loaded,
             physics: Default::default(),
             script_scene: ScriptScene::default(),
@@ -74,6 +77,16 @@ impl Director {
     /// Number of registered scene paths.
     pub fn scene_count(&self) -> usize {
         self.paths.len()
+    }
+
+    /// Camera currently rendering the 3D layer.
+    pub fn camera(&self) -> CameraSelection {
+        self.camera
+    }
+
+    /// Selects the camera used to render the 3D layer.
+    pub fn set_camera(&mut self, camera: CameraSelection) {
+        self.camera = camera;
     }
 
     /// Number of simulation ticks run, excluding time spent paused.
@@ -168,6 +181,7 @@ impl Director {
     ) -> Result<Vec<Lifecycle>> {
         let mut events = self.loaded.scene.deactivate()?;
         events.extend(entered);
+        self.camera = next.camera;
         self.loaded = next;
         self.physics = Default::default();
         self.script_scene = self.script_scene.successor();
@@ -290,6 +304,7 @@ mod tests {
         SceneFile {
             version: VERSION,
             joints: Vec::new(),
+            camera: CameraSelection::default(),
             scene_kind: crate::save::SceneKind::TwoD,
             nodes: vec![NodeFile {
                 name: "Label".into(),
@@ -440,6 +455,7 @@ mod tests {
         SceneFile {
             version: VERSION,
             joints: Vec::new(),
+            camera: CameraSelection::default(),
             scene_kind: crate::save::SceneKind::ThreeD,
             nodes: vec![NodeFile {
                 name: "Cube".into(),
