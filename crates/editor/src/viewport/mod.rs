@@ -9,7 +9,8 @@ use std::collections::HashMap;
 use egui::{Color32, Mesh, Pos2, Rect, Sense, TextureHandle, TextureOptions, Ui, Vec2, pos2, vec2};
 use engine_core::{
     assets::{AssetId, Assets},
-    scene::{Affine2D, NodeState, Transform2D},
+    save::CameraSelection,
+    scene::{Affine2D, NodeState, Transform2D, spatial::Role},
 };
 
 use crate::{Editor, node_tree::Drag, strings, theme};
@@ -26,6 +27,8 @@ pub(super) struct Viewport {
     game_focus: bool,
     /// Camera, tools, snapping and drag state of the 3D view.
     pub(super) spatial: spatial::State,
+    /// Look through the scene's active camera instead of the free-fly view.
+    camera_preview: bool,
     two_d_drag: Option<TwoDDrag>,
     editing_text: Option<usize>,
     focus_text_edit: bool,
@@ -56,11 +59,129 @@ impl Default for Viewport {
             error: None,
             game_focus: true,
             spatial: spatial::State::default(),
+            camera_preview: false,
             two_d_drag: None,
             editing_text: None,
             focus_text_edit: false,
         }
     }
+}
+
+/// Scene camera picker. Accepts a Camera 3D node dropped from the node tree.
+fn camera_selector(ui: &mut Ui, editor: &mut Editor) {
+    let current = editor.project.document.camera;
+    let cameras: Vec<(usize, String)> = editor
+        .project
+        .document
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, node)| {
+            node.spatial
+                .as_ref()
+                .is_some_and(|spatial| spatial.role == Role::Camera)
+        })
+        .map(|(index, node)| (index, node.name.clone()))
+        .collect();
+    let caption = match current {
+        CameraSelection::Auto => strings::CAMERA_AUTO.to_owned(),
+        CameraSelection::Flat => strings::CAMERA_FLAT.to_owned(),
+        CameraSelection::Node(index) => cameras
+            .iter()
+            .find(|(camera, _)| *camera == index)
+            .map(|(_, name)| name.clone())
+            .unwrap_or_else(|| strings::CAMERA_MISSING.to_owned()),
+    };
+    let mut selected = None;
+    let response = egui::ComboBox::from_id_salt("scene-camera")
+        .selected_text(caption)
+        .show_ui(ui, |ui| {
+            if ui
+                .selectable_label(current == CameraSelection::Auto, strings::CAMERA_AUTO)
+                .clicked()
+            {
+                selected = Some(CameraSelection::Auto);
+            }
+            if ui
+                .selectable_label(current == CameraSelection::Flat, strings::CAMERA_FLAT)
+                .clicked()
+            {
+                selected = Some(CameraSelection::Flat);
+            }
+            for (index, name) in &cameras {
+                if ui
+                    .selectable_label(current == CameraSelection::Node(*index), name)
+                    .clicked()
+                {
+                    selected = Some(CameraSelection::Node(*index));
+                }
+            }
+        })
+        .response;
+    let camera_drop = |payload: &Drag| match payload {
+        Drag::Node(index) => editor
+            .project
+            .document
+            .nodes
+            .get(*index)
+            .and_then(|node| node.spatial.as_ref())
+            .is_some_and(|spatial| spatial.role == Role::Camera),
+        Drag::New(name) => crate::inspector::spatial::PRESETS
+            .iter()
+            .any(|(label, role)| label == name && *role == Role::Camera),
+        _ => false,
+    };
+    if let Some(payload) = response.dnd_hover_payload::<Drag>() {
+        crate::icons::paint_drop_frame(ui.painter(), response.rect, camera_drop(payload.as_ref()));
+    }
+    if let Some(payload) = response.dnd_release_payload::<Drag>()
+        && camera_drop(payload.as_ref())
+    {
+        match payload.as_ref() {
+            Drag::Node(index) => selected = Some(CameraSelection::Node(*index)),
+            Drag::New(name) => {
+                let index = editor.project.add(name, None);
+                crate::viewport::place_new(editor, index);
+                selected = Some(CameraSelection::Node(index));
+            }
+            _ => {}
+        }
+    }
+    if let Some(next) = selected
+        && next != current
+    {
+        editor.project.document.camera = next;
+        editor.project.changed();
+    }
+    ui.toggle_value(&mut editor.viewport.camera_preview, strings::CAMERA_VIEW)
+        .on_hover_text(strings::CAMERA_VIEW_TIP);
+}
+
+/// View through the scene's active camera, for the editor's camera preview.
+fn camera_view(editor: &Editor, rect: Rect) -> Option<spatial::View> {
+    let wanted = match editor.project.document.camera {
+        CameraSelection::Node(index) => Some(index),
+        _ => None,
+    };
+    let nodes = &editor.viewport.nodes;
+    let worlds = engine_core::scene::spatial::matrices(nodes);
+    let mut first = None;
+    for node in nodes.iter().filter(|node| node.visible) {
+        let Some(component) = &node.spatial else {
+            continue;
+        };
+        if component.role != Role::Camera {
+            continue;
+        }
+        let view = spatial::View::from_camera(worlds[&node.id], component.fov, rect);
+        if wanted == Some(node.id.value() as usize) {
+            return Some(view);
+        }
+        if first.is_none() {
+            first = Some(view);
+        }
+    }
+    first
 }
 
 pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
@@ -96,13 +217,15 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         viewport.revision = editor.project.revision;
         viewport.cursor = cursor;
     }
-    // The view follows the scene: spatial nodes make it a 3D scene, otherwise
-    // it is a flat 2D scene. There is no switch between the two presentations.
-    let three_d = editor
-        .viewport
-        .nodes
-        .iter()
-        .any(|node| node.spatial.is_some());
+    // The view follows the scene: spatial nodes make it a 3D scene unless the
+    // scene explicitly selects no camera, which presents it flat like 2D.
+    let camera = editor.project.document.camera;
+    let three_d = camera != CameraSelection::Flat
+        && editor
+            .viewport
+            .nodes
+            .iter()
+            .any(|node| node.spatial.is_some());
     egui::Frame::new()
         .fill(theme::SHELL)
         .corner_radius(theme::CONTROL_RADIUS)
@@ -135,7 +258,9 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
                     editor.viewport.zoom = 1.0;
                     editor.viewport.spatial.reset_camera();
                 }
-                if !three_d {
+                if three_d {
+                    camera_selector(ui, editor);
+                } else {
                     ui.label(
                         egui::RichText::new(format!("{:.0}%", editor.viewport.zoom * 100.0)).weak(),
                     );
@@ -268,8 +393,16 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         return;
     }
 
+    let preview_view = if three_d && editor.viewport.camera_preview {
+        camera_view(editor, rect)
+    } else {
+        None
+    };
     let viewport = &mut editor.viewport;
-    if three_d {
+    if preview_view.is_some() {
+        // Looking through an authored camera keeps the view fixed so the scene
+        // can be judged from the game's point of view while nodes are edited.
+    } else if three_d {
         spatial::navigate(ui, &response, &mut viewport.spatial, rect, &viewport.nodes);
         spatial::shortcuts(
             ui,
@@ -306,8 +439,9 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
             .min(rect.height() / design_size.y)
             .max(theme::MIN_SCALE);
     let design = Rect::from_center_size(center, design_size * scale);
-    let spatial_view =
-        spatial::View::new(viewport.spatial.camera, if three_d { rect } else { design });
+    let spatial_view = preview_view.unwrap_or_else(|| {
+        spatial::View::new(viewport.spatial.camera, if three_d { rect } else { design })
+    });
     if three_d {
         spatial::backdrop(&painter, &spatial_view);
     } else {
@@ -461,7 +595,7 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
             picked = Some(index);
         }
     }
-    if three_d {
+    if three_d && preview_view.is_none() {
         spatial::hud(
             &painter,
             &spatial_view,
