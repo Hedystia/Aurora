@@ -38,6 +38,15 @@ fn project_key(root: &Path) -> String {
     format!("{hash:016x}")
 }
 
+/// Scene a Play session opens first: the configured default in Game scope.
+fn opening_scene(root: &Path, scope: PlayScope, start_scene: &str, open: &Path) -> Option<PathBuf> {
+    if scope == PlayScope::Game {
+        project::valid_scene_ref(root, start_scene).or_else(|| Some(open.to_path_buf()))
+    } else {
+        Some(open.to_path_buf())
+    }
+}
+
 /// Rewrites project-relative asset paths to absolute paths for a staged scene.
 fn rebase_paths(document: &mut SceneFile, project: &Project) {
     for node in &mut document.nodes {
@@ -101,34 +110,53 @@ impl Preview {
         self.run.is_some() || self.pending.is_some()
     }
 
-    pub fn start(&mut self, project: &Project, scope: PlayScope) {
+    pub fn start(&mut self, project: &Project, scope: PlayScope, start_scene: &str) {
         let (send, receive) = mpsc::sync_channel(1);
         let project = project.clone();
+        let start_scene = start_scene.to_owned();
         let logs = self.sender.clone();
         self.pending = Some(receive);
         self.game_view = true;
         std::thread::spawn(move || {
-            let _ = send.send(Self::launch(&project, scope, logs));
+            let _ = send.send(Self::launch(&project, scope, &start_scene, logs));
         });
     }
 
-    fn launch(project: &Project, scope: PlayScope, logs: SyncSender<String>) -> Result<Run> {
+    fn launch(
+        project: &Project,
+        scope: PlayScope,
+        start_scene: &str,
+        logs: SyncSender<String>,
+    ) -> Result<Run> {
+        let mut project = project.clone();
+        let chosen = opening_scene(&project.root, scope, start_scene, &project.path);
+        if let Some(path) = &chosen
+            && *path != project.path
+        {
+            project.document =
+                SceneFile::load(path).with_context(|| format!("Loading {}", path.display()))?;
+            project.path = path.clone();
+        }
+        let chosen_relative = chosen
+            .as_ref()
+            .and_then(|path| path.strip_prefix(&project.root).ok())
+            .map(|path| path.to_string_lossy().into_owned());
         let directory = tempfile::tempdir()?;
         let location = directory.path();
         let mut document = project.document.clone();
-        rebase_paths(&mut document, project);
+        rebase_paths(&mut document, &project);
         let mut scenes = vec![location.join("preview.scene")];
         let mut scene_names = vec![scene_name(&project.path)];
         if scope == PlayScope::Game {
             for reference in project::scene_references(&project.root) {
-                let source = project.root.join(&reference);
-                if source == project.path {
+                if chosen_relative.as_deref() == Some(reference.as_str()) {
                     continue;
                 }
+                let source = project.root.join(&reference);
                 let Ok(mut other) = SceneFile::load(&source) else {
                     continue;
                 };
-                rebase_paths(&mut other, project);
+                rebase_paths(&mut other, &project);
                 let destination = location.join(format!("game-{}.scene", scenes.len()));
                 if other.save(&destination).is_err() {
                     continue;
@@ -141,8 +169,8 @@ impl Preview {
                 );
             }
         }
-        let nodes = binding_nodes(project)?;
-        let prefabs = freeze_script_prefabs(script_prefabs(project, &nodes)?, location)?;
+        let nodes = binding_nodes(&project)?;
+        let prefabs = freeze_script_prefabs(script_prefabs(&project, &nodes)?, location)?;
         document.script_prefabs = prefabs.values().cloned().collect();
         let scene = location.join("preview.scene");
         document.save(&scene)?;
@@ -173,7 +201,7 @@ impl Preview {
             );
         }
         let (entry, bindings) = script_entry_for(
-            project,
+            &project,
             &nodes,
             &engine_root.join("scripts/build/dev.ts"),
             &prefabs,
@@ -1223,6 +1251,30 @@ mod tests {
             project_key(Path::new("/tmp/aurora-game")),
             project_key(Path::new("/tmp/other-game"))
         );
+    }
+
+    #[test]
+    fn game_scope_starts_from_the_configured_default_scene() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        fs::create_dir(root.join("levels"))?;
+        let main = root.join("main.scene");
+        let intro = root.join("levels/Intro.scene");
+        fs::write(&main, r#"{"version":1,"nodes":[]}"#)?;
+        fs::write(&intro, r#"{"version":1,"nodes":[]}"#)?;
+        assert_eq!(
+            opening_scene(root, PlayScope::Game, "levels/Intro.scene", &main),
+            Some(intro.clone())
+        );
+        assert_eq!(
+            opening_scene(root, PlayScope::Game, "", &main),
+            Some(main.clone())
+        );
+        assert_eq!(
+            opening_scene(root, PlayScope::Scene, "levels/Intro.scene", &main),
+            Some(main)
+        );
+        Ok(())
     }
 
     #[test]
