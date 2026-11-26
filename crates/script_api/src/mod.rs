@@ -2,6 +2,8 @@
 
 #[cfg(unix)]
 pub mod transport;
+#[cfg(windows)]
+pub mod transport;
 
 use bincode::{Decode, Encode};
 
