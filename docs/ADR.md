@@ -132,9 +132,11 @@ Scenes and prefab templates store an optional body and collider on each node. Th
 
 Text runs, atlas cells, tile grids and nine-slice panels resolve to content-addressed RGBA textures at their authored pixel dimensions. They use the existing sprite pass for transforms, alpha compositing, draw order and picking. Scene and prefab documents retain their editable source and asset reference. Fixed-tick particle emitters instead generate local quads at draw time. Their particles share one texture and leave entity handles and simulation order intact.
 
-## Mixed 2D and 3D authoring
+## Combined 2D and 3D authoring
 
 A scene or prefab can place an optional `spatial` component on any node. Metre-space transforms compose through spatial ancestors. Pixel-space transforms and sprite ordering keep their existing interpretation. The first visible camera and directional light in traversal order drive the depth-tested mesh pass, then the existing sprite pass overlays the scene. The Director owns the authored Rapier world and replaces it together with a successfully loaded scene. A 3D project starter uses the same scene format as a 2D project.
+
+The scene kind is only a two-value authoring hint (`two_d` or `three_d`); there is no mixed kind and no view switch. Whether a scene is edited flat or in perspective follows its content: the presence of a spatial node makes it a 3D scene. In the 3D view, 2D nodes stay in screen space as the scene's GUI over the 3D world, so the editor and player present the same composition.
 
 The editor converts static glTF 2.0 triangle primitives to an ordinary Aurora prefab, including hierarchy, local TRS, geometry and material base colors. The import publishes a new prefab without replacing an existing file. Its meshes are self-contained for Play and export.
 
