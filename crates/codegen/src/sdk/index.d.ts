@@ -128,10 +128,15 @@ export declare function registerScriptScenes(names: string[]): void;
 export declare class Director {
     action: number;
     scene: number;
+    camera: number;
     pause(): void;
     resume(): void;
     showLoading(): void;
     hideLoading(): void;
+    /** Renders the scene through a camera node, like a scripted loading screen view. */
+    setCamera(node: number | NodeRef): void;
+    /** Returns to the camera selected in the scene. */
+    useSceneCamera(): void;
     loadScene(name: string): boolean;
     changeScene(index: number): void;
 }
