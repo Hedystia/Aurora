@@ -142,6 +142,10 @@ The editor converts static glTF 2.0 triangle primitives to an ordinary Aurora pr
 
 Engine/editor downloads and project export packages are distinct versioned deliverables. The engine's wgpu/winit backend remains the cross-platform renderer/window layer; Sokol bindings would not remove Android/Apple SDK or linker requirements and would not solve script portability. Target packages should be built on hosted platform runners, checksum-verified, and installed independently by the editor. Script IPC now uses Unix descriptor passing on Linux and macOS; Windows still needs a separate transport and packaging path.
 
+## Target templates and platform shells
+
+Target templates carry a target player and launcher with a hashed `template.json`; the CLI verifies engine version, target, triple, per-file digests and bundle digest before caching them, and the editor stamps the requested target instead of the compiling host. This separates cross-target packaging from host export without claiming a runnable runtime for a platform that has no toolchain here. Windows script IPC uses a per-session named pipe in full-frame mode (no shared memory) with the same 60-byte envelope and deadline semantics; it is implemented but not compiled or verified on a Windows host. Android uses a scriptless-first NativeActivity shell because a normal app cannot spawn the supervised native script child; Web uses a scriptless-first wasm canvas shell for the same reason. All three targets stay blocked until their toolchains and devices/browsers are available and an in-process script runtime exists where needed.
+
 ## Local container build toolchain
 
 Engine releases, builder images, and game packages are separate deliverables. `crates/cli` adds the `aurora` binary, which resolves one versioned OCI builder image, pulls it, runs the existing editor export inside it, verifies the package, and copies it to the host. The CLI reuses `engine_core`'s `ExportManifest` so host verification and player verification share one integrity algorithm rather than maintaining a second one.
