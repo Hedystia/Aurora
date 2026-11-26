@@ -460,8 +460,12 @@ fn file_row(
 
 fn asset_menu(response: egui::Response, editor: &mut Editor, path: &Path) {
     response.context_menu(|ui| {
-        // Right-click never navigates: opening stays on double-click. Delete is
-        // the primary action so folders can be removed directly from here.
+        // Open mirrors double-click; Delete is the primary action so folders
+        // can still be removed directly from here.
+        if !path.is_dir() && ui.button(strings::OPEN).clicked() {
+            editor.pending_open = Some(path.to_path_buf());
+            ui.close();
+        }
         if ui.button(strings::DELETE).clicked() {
             editor.request_asset_delete(path);
             ui.close();
