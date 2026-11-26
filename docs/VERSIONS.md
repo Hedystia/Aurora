@@ -88,6 +88,10 @@ Protocol 12 streams local node transforms to the script and adds a per-tick twee
 
 Protocol 13 adds queued ScaleNode and RotateNode edits, so scripts and tweens can change local scale and rotation alongside position. `NodeRef` and `Node` gain `setScale`, `setAngle`, and writable `scaleX`, `scaleY`, and `angle` (degrees), and `tween` drives all three channels. The demo launcher now advances tweens and drains queued edits. `@property` accepts component classes and the editor serializes component references. Existing native scripts must be rebuilt.
 
+## 2026-11-26 · Script protocol 20
+
+Protocol 20 adds `SetCamera3D`, so a script can render the scene through an authored camera node (for example a loading-screen view) or return to the scene's selected camera. The 60-byte envelope is unchanged; existing native scripts must be rebuilt.
+
 ## 2026-11-25 · Script protocol 19
 
 Protocol 19 adds box overlap and shape-cast queries, on-demand asset staging in exported bundles, scene joint authoring in the Inspector, and prefab joint rebasing, all inside the unchanged 60-byte envelope. Existing native scripts must be rebuilt.
