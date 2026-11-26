@@ -5,7 +5,7 @@
 //! `look_at_rh` player camera, so the editor shows the same handedness as Play.
 
 use egui::{Pos2, Rect, Vec2, pos2};
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 
 /// Vertical field of view of the editor camera.
 pub(crate) const FOV_Y: f32 = 60.0 * std::f32::consts::PI / 180.0;
@@ -231,6 +231,23 @@ impl View {
             right,
             up,
             forward,
+        }
+    }
+
+    /// Builds a view through an authored camera node's world matrix and FOV.
+    pub(crate) fn from_camera(world: Mat4, fov: f32, rect: Rect) -> Self {
+        let right = Vec3::new(world.x_axis.x, world.y_axis.x, world.z_axis.x);
+        let up = Vec3::new(world.x_axis.y, world.y_axis.y, world.z_axis.y);
+        let forward = -Vec3::new(world.x_axis.z, world.y_axis.z, world.z_axis.z);
+        let (right, up) = (right.normalize_or(Vec3::X), up.normalize_or(Vec3::Y));
+        Self {
+            camera: Camera::default(),
+            rect,
+            focal: rect.height().max(1.0) * 0.5 / (fov.to_radians() * 0.5).tan().max(1e-3),
+            eye: world.inverse().w_axis.truncate(),
+            right,
+            up,
+            forward: forward.normalize_or(Vec3::NEG_Z),
         }
     }
 
