@@ -12,12 +12,22 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use egui::{ColorImage, Context as EguiContext, TextureHandle, TextureOptions};
-use engine_core::save::{MAX_NODES, NodeFile, PrefabFile, PropertyValue, ScriptFile};
+use engine_core::save::{MAX_NODES, NodeFile, PrefabFile, PropertyValue, SceneFile, ScriptFile};
 
 use crate::{
     project::{self, Project},
     strings,
 };
+
+/// Which part of the project Play starts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum PlayScope {
+    /// Stage only the open scene.
+    #[default]
+    Scene,
+    /// Stage every scene in the project, with the open scene first.
+    Game,
+}
 
 /// Stable per-project key for host-only secret files outside the project tree.
 fn project_key(root: &Path) -> String {
@@ -26,6 +36,30 @@ fn project_key(root: &Path) -> String {
         hash = (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3);
     }
     format!("{hash:016x}")
+}
+
+/// Rewrites project-relative asset paths to absolute paths for a staged scene.
+fn rebase_paths(document: &mut SceneFile, project: &Project) {
+    for node in &mut document.nodes {
+        if let Some(path) = node.visual.as_mut().and_then(|visual| visual.asset_mut()) {
+            *path = project.root.join(&*path);
+        }
+        if let Some(sprite) = &mut node.sprite {
+            sprite.png = project.root.join(&sprite.png);
+        }
+    }
+    for instance in &mut document.instances {
+        instance.prefab = project.root.join(&instance.prefab);
+    }
+    if let Some(gameplay) = &mut document.gameplay {
+        for path in gameplay
+            .sounds
+            .iter_mut()
+            .chain(gameplay.frames.iter_mut().flat_map(|frame| &mut frame.png))
+        {
+            *path = project.root.join(&*path);
+        }
+    }
 }
 
 pub(super) struct Preview {
@@ -67,39 +101,44 @@ impl Preview {
         self.run.is_some() || self.pending.is_some()
     }
 
-    pub fn start(&mut self, project: &Project) {
+    pub fn start(&mut self, project: &Project, scope: PlayScope) {
         let (send, receive) = mpsc::sync_channel(1);
         let project = project.clone();
         let logs = self.sender.clone();
         self.pending = Some(receive);
         self.game_view = true;
         std::thread::spawn(move || {
-            let _ = send.send(Self::launch(&project, logs));
+            let _ = send.send(Self::launch(&project, scope, logs));
         });
     }
 
-    fn launch(project: &Project, logs: SyncSender<String>) -> Result<Run> {
+    fn launch(project: &Project, scope: PlayScope, logs: SyncSender<String>) -> Result<Run> {
         let directory = tempfile::tempdir()?;
         let location = directory.path();
         let mut document = project.document.clone();
-        for node in &mut document.nodes {
-            if let Some(path) = node.visual.as_mut().and_then(|visual| visual.asset_mut()) {
-                *path = project.root.join(&*path);
-            }
-            if let Some(sprite) = &mut node.sprite {
-                sprite.png = project.root.join(&sprite.png);
-            }
-        }
-        for instance in &mut document.instances {
-            instance.prefab = project.root.join(&instance.prefab);
-        }
-        if let Some(gameplay) = &mut document.gameplay {
-            for path in gameplay
-                .sounds
-                .iter_mut()
-                .chain(gameplay.frames.iter_mut().flat_map(|frame| &mut frame.png))
-            {
-                *path = project.root.join(&*path);
+        rebase_paths(&mut document, project);
+        let mut scenes = vec![location.join("preview.scene")];
+        let mut scene_names = vec![scene_name(&project.path)];
+        if scope == PlayScope::Game {
+            for reference in project::scene_references(&project.root) {
+                let source = project.root.join(&reference);
+                if source == project.path {
+                    continue;
+                }
+                let Ok(mut other) = SceneFile::load(&source) else {
+                    continue;
+                };
+                rebase_paths(&mut other, project);
+                let destination = location.join(format!("game-{}.scene", scenes.len()));
+                if other.save(&destination).is_err() {
+                    continue;
+                }
+                scenes.push(destination);
+                scene_names.push(
+                    Path::new(&reference)
+                        .file_stem()
+                        .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
+                );
             }
         }
         let nodes = binding_nodes(project)?;
@@ -110,11 +149,11 @@ impl Preview {
         let engine_root = crate::engine_resources()?;
         let player = std::env::current_exe()?.with_file_name("aurora-player");
         let mut command = Command::new(player);
+        command.arg("--preview-dir").arg(location);
+        for scene in &scenes {
+            command.arg("--scene").arg(scene);
+        }
         command
-            .arg("--preview-dir")
-            .arg(location)
-            .arg("--scene")
-            .arg(scene)
             .arg("--asset-cache")
             .arg(project.root.join(".aurora/import"));
         if document.gameplay.is_some() {
@@ -138,7 +177,7 @@ impl Preview {
             &nodes,
             &engine_root.join("scripts/build/dev.ts"),
             &prefabs,
-            &[scene_name(&project.path)],
+            &scene_names,
             |path| {
                 let relative = path
                     .canonicalize()?
@@ -1184,6 +1223,22 @@ mod tests {
             project_key(Path::new("/tmp/aurora-game")),
             project_key(Path::new("/tmp/other-game"))
         );
+    }
+
+    #[test]
+    fn script_entry_registers_every_scene_name_in_play_order() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let project = Project::open(temp.path())?;
+        let (entry, _) = script_entry_for(
+            &project,
+            &[],
+            Path::new("dev.ts"),
+            &BTreeMap::new(),
+            &["main".to_owned(), "level2".to_owned()],
+            |path| Ok(path.to_path_buf()),
+        )?;
+        assert!(entry.contains("registerScriptScenes([\"main\",\"level2\"]);"));
+        Ok(())
     }
 
     #[test]
