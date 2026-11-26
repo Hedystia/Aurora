@@ -9,7 +9,10 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         ui.selectable_value(&mut editor.custom_nodes, false, strings::BUILTIN);
         ui.selectable_value(&mut editor.custom_nodes, true, strings::CUSTOM);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new(strings::DRAG_HINT).color(theme::TEXT));
+            ui.add(
+                egui::Label::new(egui::RichText::new(strings::DRAG_HINT).color(theme::TEXT))
+                    .truncate(),
+            );
         });
     });
     ui.separator();
@@ -66,7 +69,8 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
                         let response = tile(ui, icon, name, tint);
                         response.dnd_set_drag_payload(Drag::New(name));
                         if response.clicked() {
-                            editor.project.add_to_selection(name);
+                            let index = editor.project.add_to_selection(name);
+                            crate::viewport::place_new(editor, index);
                         }
                     }
                 });
