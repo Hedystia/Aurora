@@ -272,7 +272,8 @@ impl Demo {
                     | Command::RaycastEnd(_)
                     | Command::OverlapStart(_)
                     | Command::OverlapChunk(..)
-                    | Command::OverlapEnd(_),
+                    | Command::OverlapEnd(_)
+                    | Command::SetCamera3D(_),
                 ) => {
                     anyhow::bail!("Director commands require an authored scene");
                 }
