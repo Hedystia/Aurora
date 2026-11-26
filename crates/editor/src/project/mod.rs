@@ -11,9 +11,10 @@ use anyhow::{Context, Result, ensure};
 use engine_core::{
     assets::Assets,
     save::{
-        NodeFile, PrefabFile, PropertyValue, SceneFile, SceneKind, ScriptFile, SpriteFile, VERSION,
+        CameraSelection, NodeFile, PrefabFile, PropertyValue, SceneFile, SceneKind, ScriptFile,
+        SpriteFile, VERSION,
     },
-    scene::spatial::{Body, JointFile, JointKind},
+    scene::spatial::{Body, JointFile, JointKind, Role},
 };
 use serde::{Deserialize, Serialize};
 
@@ -117,6 +118,7 @@ impl Project {
             };
             if kind == ProjectKind::ThreeD {
                 project.document.nodes = default_scene_nodes(SceneKind::ThreeD, "Node 3D");
+                project.document.camera = default_camera(&project.document.nodes);
                 project.selected = Some(1);
                 project.changed();
             }
@@ -419,6 +421,10 @@ impl Project {
                 map[index]
             }
         };
+        if let CameraSelection::Node(index) = self.document.camera {
+            self.document.camera =
+                remap(index).map_or(CameraSelection::Auto, CameraSelection::Node);
+        }
         self.document.joints.retain_mut(|joint| {
             let (Some(a), Some(b)) = (remap(joint.a), remap(joint.b)) else {
                 return false;
@@ -626,6 +632,35 @@ fn startup_scene(root: &Path) -> PathBuf {
         .unwrap_or_else(|| main_scene(root))
 }
 
+/// Project-relative paths of every scene, sorted for stable play order.
+pub(super) fn scene_references(root: &Path) -> Vec<String> {
+    fn visit(directory: &Path, root: &Path, results: &mut Vec<String>) {
+        let Ok(entries) = fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if !path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with('.'))
+                {
+                    visit(&path, root, results);
+                }
+            } else if is_scene(&path)
+                && let Ok(relative) = path.strip_prefix(root)
+            {
+                results.push(relative.to_string_lossy().into_owned());
+            }
+        }
+    }
+    let mut results = Vec::new();
+    visit(root, root, &mut results);
+    results.sort();
+    results
+}
+
 pub(super) fn main_scene(directory: &Path) -> PathBuf {
     let preferred = directory.join("main.scene");
     let legacy = directory.join("main.aurora-scene");
@@ -663,6 +698,18 @@ fn node(name: &str, parent: Option<usize>) -> NodeFile {
     }
 }
 
+/// Selects the first camera in a starter scene, or automatic selection when there is none.
+pub(super) fn default_camera(nodes: &[NodeFile]) -> CameraSelection {
+    nodes
+        .iter()
+        .position(|node| {
+            node.spatial
+                .as_ref()
+                .is_some_and(|spatial| spatial.role == Role::Camera)
+        })
+        .map_or(CameraSelection::Auto, CameraSelection::Node)
+}
+
 pub(super) fn default_scene_nodes(kind: SceneKind, root_name: &str) -> Vec<NodeFile> {
     let mut root = node(root_name, None);
     match kind {
@@ -682,6 +729,7 @@ pub(super) fn default_scene_nodes(kind: SceneKind, root_name: &str) -> Vec<NodeF
 fn empty() -> SceneFile {
     SceneFile {
         version: VERSION,
+        camera: CameraSelection::Auto,
         scene_kind: SceneKind::TwoD,
         nodes: Vec::new(),
         instances: Vec::new(),
@@ -698,6 +746,30 @@ fn empty() -> SceneFile {
 mod tests {
     use super::*;
     use engine_core::animation::{Clip, Interpolation, Key, Property, Track, Wrap};
+
+    #[test]
+    fn scene_references_list_project_scenes_in_stable_order() -> Result<()> {
+        let scratch = tempfile::tempdir()?;
+        let root = scratch.path().canonicalize()?;
+        let levels = root.join("levels");
+        fs::create_dir(&levels)?;
+        fs::write(root.join("main.scene"), r#"{"version":1,"nodes":[]}"#)?;
+        fs::write(levels.join("Two.scene"), r#"{"version":1,"nodes":[]}"#)?;
+        fs::write(root.join("notes.txt"), "ignored")?;
+        assert_eq!(
+            scene_references(&root),
+            vec!["levels/Two.scene".to_owned(), "main.scene".to_owned()]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn starter_scenes_select_their_camera() {
+        let two_d = default_scene_nodes(SceneKind::TwoD, "Canvas");
+        assert_eq!(default_camera(&two_d), CameraSelection::Auto);
+        let three_d = default_scene_nodes(SceneKind::ThreeD, "Node 3D");
+        assert_eq!(default_camera(&three_d), CameraSelection::Node(2));
+    }
 
     #[test]
     fn scenes_opened_inside_the_project_keep_the_project_root() -> Result<()> {
