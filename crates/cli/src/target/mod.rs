@@ -44,7 +44,7 @@ pub struct Target {
 
 impl Target {
     /// Returns the supported-target table in display order.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self {
             id: "linux",
             triple: "x86_64-unknown-linux-gnu",
@@ -57,12 +57,11 @@ impl Target {
             triple: "x86_64-pc-windows-gnu",
             manifest_target: "windows-x86_64",
             status: Status::Blocked {
-                reason: "Scripted exports need Aurora's Linux-only script IPC, and the editor's \
-                         export manifest stamps the compiling host target. A container can \
-                         cross-build the player but cannot yet produce a verified Windows game \
-                         package.",
-                next: "Port the script transport and native packaging off Linux, then add a \
-                       Windows export target whose manifest records the cross target.",
+                reason: "A named-pipe script transport and target-aware manifest stamping are \
+                         implemented, but no Windows std target, MinGW linker or Windows scriptc \
+                         is available here, so no Windows package has been built or run.",
+                next: "Run the Windows CI job on a Windows runner with a Windows scriptc \
+                       distribution, then unblock the target.",
             },
             features: &[],
         },
@@ -71,11 +70,11 @@ impl Target {
             triple: "aarch64-linux-android",
             manifest_target: "android-aarch64",
             status: Status::Blocked {
-                reason: "Aurora has no Android application runtime. There is no Activity, \
-                         SurfaceView, or Gradle packaging path that can host the wgpu player, and \
-                         script IPC is Linux-only.",
-                next: "Add a minimal Android app shell that owns the native window and surface, \
-                       then package the built player with the command-line SDK and NDK.",
+                reason: "An Android NativeActivity shell, manifest, Gradle files and APK build \
+                         script are implemented, but no SDK/NDK, emulator or device is available \
+                         here and the shell is scriptless-first.",
+                next: "Build an APK on a host with the Android SDK/NDK and validate it on a \
+                       device, then add an in-process script runtime for authored games.",
             },
             features: &[],
         },
@@ -88,6 +87,19 @@ impl Target {
                        on an Apple-branded macOS host. Apple's SLA permits macOS virtualization \
                        only on Apple hardware, so Linux container images such as dockurr/macos \
                        are not supported. Scripted exports use the shared-memory Unix transport.",
+            },
+            features: &[],
+        },
+        Self {
+            id: "web",
+            triple: "wasm32-unknown-unknown",
+            manifest_target: "web-wasm32",
+            status: Status::Blocked {
+                reason: "A wasm-bindgen browser shell with a WebGPU canvas and RAF loop is \
+                         implemented, but no wasm target, wasm-bindgen CLI or browser harness is \
+                         available here. The runtime is scriptless-first and has no audio path.",
+                next: "Install the wasm toolchain, build the shell, test in a WebGPU browser, \
+                       then add an in-process script runtime and audio gesture handling.",
             },
             features: &[],
         },
@@ -151,7 +163,8 @@ mod tests {
     fn parses_ids_case_insensitively() -> Result<()> {
         assert_eq!(Target::parse("Linux")?.id, "linux");
         assert_eq!(Target::parse("WINDOWS")?.id, "windows");
-        assert!(Target::parse("web").is_err());
+        assert_eq!(Target::parse("WEB")?.id, "web");
+        assert!(Target::parse("unknown").is_err());
         Ok(())
     }
 
