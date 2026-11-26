@@ -20,7 +20,7 @@ mod toolbar;
 mod viewport;
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -98,9 +98,13 @@ struct Editor {
     asset_search: String,
     tree_search: String,
     selected_asset: Option<PathBuf>,
+    /// All FileSystem entries selected with click, Ctrl-click or Shift-click.
+    asset_selection: BTreeSet<PathBuf>,
+    /// Anchor used by Shift-click range selection.
+    asset_anchor: Option<PathBuf>,
     asset_directory: PathBuf,
     asset_grid: bool,
-    asset_delete: Option<PathBuf>,
+    asset_delete: Vec<PathBuf>,
     custom_nodes: bool,
     rename: Option<(usize, String)>,
     focus_rename: bool,
@@ -145,9 +149,11 @@ impl Editor {
             asset_search: String::new(),
             tree_search: String::new(),
             selected_asset: None,
+            asset_selection: BTreeSet::new(),
+            asset_anchor: None,
             asset_directory: PathBuf::new(),
             asset_grid: true,
-            asset_delete: None,
+            asset_delete: Vec::new(),
             custom_nodes: false,
             rename: None,
             focus_rename: false,
@@ -215,20 +221,84 @@ impl Editor {
         Ok(())
     }
 
+    /// Selects one FileSystem entry, extending the selection with Ctrl or by range with Shift.
+    fn select_asset(&mut self, path: &Path, ctrl: bool, shift: bool, entries: &[PathBuf]) {
+        if shift {
+            let anchor = self
+                .asset_anchor
+                .clone()
+                .or_else(|| self.selected_asset.clone())
+                .unwrap_or_else(|| path.to_path_buf());
+            self.asset_selection.clear();
+            for entry in assets_browser::range_selection(entries, &anchor, path) {
+                self.asset_selection.insert(entry);
+            }
+        } else if ctrl {
+            if !self.asset_selection.remove(path) {
+                self.asset_selection.insert(path.to_path_buf());
+            }
+            self.asset_anchor = Some(path.to_path_buf());
+        } else {
+            self.asset_selection.clear();
+            self.asset_selection.insert(path.to_path_buf());
+            self.asset_anchor = Some(path.to_path_buf());
+        }
+        self.selected_asset = if self.asset_selection.contains(path) {
+            Some(path.to_path_buf())
+        } else {
+            self.asset_selection.iter().next_back().cloned()
+        };
+    }
+
+    fn clear_asset_selection(&mut self) {
+        self.asset_selection.clear();
+        self.asset_anchor = None;
+        self.selected_asset = None;
+    }
+
+    fn asset_selection_vec(&self) -> Vec<PathBuf> {
+        self.asset_selection
+            .iter()
+            .filter(|path| path.exists())
+            .cloned()
+            .collect()
+    }
+
+    fn request_asset_delete(&mut self, path: &Path) {
+        let targets = if self.asset_selection.contains(path) {
+            self.asset_selection_vec()
+        } else {
+            self.clear_asset_selection();
+            self.asset_selection.insert(path.to_path_buf());
+            self.asset_anchor = Some(path.to_path_buf());
+            self.selected_asset = Some(path.to_path_buf());
+            vec![path.to_path_buf()]
+        };
+        self.asset_delete = targets;
+    }
+
     fn delete_asset(&mut self, path: &Path) -> Result<()> {
         let deleted_dir = path.is_dir();
         assets_browser::remove(&self.project.root, path)?;
+        self.asset_selection
+            .retain(|selected| !selected.starts_with(path));
         if self
             .selected_asset
             .as_ref()
             .is_some_and(|selected| selected.starts_with(path))
         {
-            self.selected_asset = None;
+            self.selected_asset = self.asset_selection.iter().next_back().cloned();
+        }
+        if self
+            .asset_anchor
+            .as_ref()
+            .is_some_and(|anchor| anchor.starts_with(path))
+        {
+            self.asset_anchor = self.selected_asset.clone();
         }
         if deleted_dir && self.asset_directory.starts_with(path) {
             self.asset_directory = path.parent().unwrap_or(&self.project.root).to_path_buf();
         }
-        self.asset_delete = None;
         self.refresh_assets();
         Ok(())
     }
@@ -248,12 +318,14 @@ impl Editor {
         if !self.asset_directory.starts_with(&self.project.root) || !self.asset_directory.is_dir() {
             self.asset_directory = self.project.root.clone();
         }
+        self.asset_selection.retain(|path| path.exists());
         if self
             .selected_asset
             .as_ref()
             .is_some_and(|path| !path.exists())
         {
-            self.selected_asset = None;
+            self.selected_asset = self.asset_selection.iter().next_back().cloned();
+            self.asset_anchor = self.selected_asset.clone();
         }
         self.metadata.clear();
         for path in self
@@ -340,13 +412,13 @@ impl Editor {
             self.timeline = timeline::Timeline::default();
             self.animation_display = None;
             self.viewport = viewport::Viewport::default();
-            self.selected_asset = None;
+            self.clear_asset_selection();
             self.asset_directory = if in_project {
                 previous_directory
             } else {
                 PathBuf::new()
             };
-            self.asset_delete = None;
+            self.asset_delete.clear();
             self.rename = None;
             self.layout = load_layout(&project);
             self.default_scene = project::load_session(&project.root).default_scene;
@@ -749,38 +821,56 @@ impl Editor {
                 }
             });
         }
-        if let Some(path) = self.asset_delete.clone() {
-            if !path.exists() {
-                self.asset_delete = None;
+        if !self.asset_delete.is_empty() {
+            self.asset_delete.retain(|path| path.exists());
+            if self.asset_delete.is_empty() {
+                self.asset_delete.clear();
             } else {
                 egui::Window::new(strings::DELETE_CONFIRM).show(ctx, |ui| {
-                    ui.label(
-                        egui::RichText::new(path.file_name().unwrap_or_default().to_string_lossy())
+                    if self.asset_delete.len() == 1 {
+                        let path = &self.asset_delete[0];
+                        ui.label(
+                            egui::RichText::new(
+                                path.file_name().unwrap_or_default().to_string_lossy(),
+                            )
                             .strong(),
-                    );
-                    ui.colored_label(
-                        theme::REJECT,
-                        if path.is_dir() {
-                            strings::DELETE_FOLDER_WARNING
-                        } else {
-                            strings::DELETE_WARNING
-                        },
-                    );
+                        );
+                        ui.colored_label(
+                            theme::REJECT,
+                            if path.is_dir() {
+                                strings::DELETE_FOLDER_WARNING
+                            } else {
+                                strings::DELETE_WARNING
+                            },
+                        );
+                    } else {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} {}",
+                                self.asset_delete.len(),
+                                strings::ASSETS_SELECTED
+                            ))
+                            .strong(),
+                        );
+                        ui.colored_label(theme::REJECT, strings::DELETE_FOLDER_WARNING);
+                    }
                     ui.horizontal(|ui| {
                         if ui
                             .add(egui::Button::new(strings::DELETE).fill(theme::PRIMARY))
                             .clicked()
                         {
-                            if path == self.project.path && self.project.dirty {
-                                self.asset_delete = None;
-                                self.confirm_action = Some(ConfirmAction::Delete(path));
-                            } else {
-                                let result = self.delete_asset(&path);
-                                self.report(result);
+                            let targets = std::mem::take(&mut self.asset_delete);
+                            for path in targets {
+                                if path == self.project.path && self.project.dirty {
+                                    self.confirm_action = Some(ConfirmAction::Delete(path));
+                                } else {
+                                    let result = self.delete_asset(&path);
+                                    self.report(result);
+                                }
                             }
                         }
                         if ui.button(strings::CANCEL).clicked() {
-                            self.asset_delete = None;
+                            self.asset_delete.clear();
                         }
                     });
                 });
