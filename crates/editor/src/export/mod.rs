@@ -22,7 +22,27 @@ use crate::{
 const MAX_ON_DEMAND_ASSETS: usize = 4096;
 const MAX_ON_DEMAND_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Exports with the target and runtime derived from the compiling host.
 pub(super) fn export(project: &Project, includes: &[PathBuf], output: &Path) -> Result<()> {
+    export_to(project, includes, output, None, None)
+}
+
+/// Exports for an explicit manifest target, optionally copying a caller-supplied player.
+///
+/// With `target` or `player` absent, both fall back to the host-derived values so
+/// ordinary exports are byte-for-byte identical to [`export`].
+pub(super) fn export_to(
+    project: &Project,
+    includes: &[PathBuf],
+    output: &Path,
+    target: Option<&str>,
+    player: Option<&Path>,
+) -> Result<()> {
+    let target = match target {
+        Some(value) => value.to_owned(),
+        None => host_target(),
+    };
+    validate_target(&target)?;
     ensure!(
         !project.prefab && project.path.is_file(),
         "Export needs a saved scene"
@@ -113,8 +133,7 @@ pub(super) fn export(project: &Project, includes: &[PathBuf], output: &Path) -> 
         "Bundle manifest is too large"
     );
     fs::write(staged.path().join(name), bytes)?;
-    include_player_runtime(staged.path())?;
-    let target = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+    include_player_runtime(staged.path(), &target, player)?;
     let export_manifest =
         bundle::ExportManifest::create(staged.path(), env!("CARGO_PKG_VERSION"), &target)?;
     let bytes = serde_json::to_vec_pretty(&export_manifest)?;
@@ -133,38 +152,92 @@ pub(super) fn export(project: &Project, includes: &[PathBuf], output: &Path) -> 
     Ok(())
 }
 
-fn include_player_runtime(output: &Path) -> Result<()> {
-    let runtime_name = format!("aurora-player{}", std::env::consts::EXE_SUFFIX);
-    let runtime_source = std::env::current_exe()?.with_file_name(&runtime_name);
+/// The manifest target used when no override is supplied.
+fn host_target() -> String {
+    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// Targets are recorded verbatim in `export.json` and drive runtime filenames,
+/// so only a plain `os-arch` identifier is accepted.
+fn validate_target(target: &str) -> Result<()> {
+    let parts: Vec<_> = target.split('-').collect();
+    ensure!(
+        parts.len() == 2
+            && parts.iter().all(|part| {
+                !part.is_empty()
+                    && part
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            }),
+        "Invalid export target {target:?}: expected os-arch"
+    );
+    Ok(())
+}
+
+/// Resolves an explicit player path without following symlinks or traversing
+/// linked parent directories, then returns its canonical file location.
+fn explicit_player(path: &Path) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut cursor = PathBuf::new();
+    for component in absolute.components() {
+        cursor.push(component.as_os_str());
+        let metadata = fs::symlink_metadata(&cursor)
+            .with_context(|| format!("Resolving player runtime {}", cursor.display()))?;
+        ensure!(
+            !metadata.file_type().is_symlink(),
+            "Player runtime path contains a symlink: {}",
+            cursor.display()
+        );
+    }
+    let metadata = fs::symlink_metadata(&absolute)
+        .with_context(|| format!("Resolving player runtime {}", absolute.display()))?;
+    ensure!(
+        metadata.is_file(),
+        "Player runtime is not a regular file: {}",
+        absolute.display()
+    );
+    absolute
+        .canonicalize()
+        .with_context(|| format!("Canonicalizing player runtime {}", absolute.display()))
+}
+
+fn include_player_runtime(output: &Path, target: &str, player: Option<&Path>) -> Result<()> {
+    let (runtime_name, launcher, contents) = if target.starts_with("windows-") {
+        (
+            "aurora-player.exe",
+            "run-game.cmd",
+            "@echo off\r\n\"%~dp0aurora-player.exe\" --bundle \"%~dp0\" %*\r\n".to_owned(),
+        )
+    } else {
+        (
+            "aurora-player",
+            "run-game.sh",
+            "#!/bin/sh\nset -eu\ncd -- \"$(dirname -- \"$0\")\"\nexec ./aurora-player --bundle . \"$@\"\n".to_owned(),
+        )
+    };
+    let runtime_source = match player {
+        Some(path) => explicit_player(path)?,
+        None => std::env::current_exe()?.with_file_name(runtime_name),
+    };
     ensure!(
         runtime_source.is_file(),
         "Cannot create a runnable export: {} must be installed beside aurora-editor",
         runtime_name
     );
-    fs::copy(&runtime_source, output.join(&runtime_name))
+    fs::copy(&runtime_source, output.join(runtime_name))
         .with_context(|| format!("Copying player runtime from {}", runtime_source.display()))?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
 
-        fs::set_permissions(
-            output.join(&runtime_name),
-            fs::Permissions::from_mode(0o755),
-        )?;
+        fs::set_permissions(output.join(runtime_name), fs::Permissions::from_mode(0o755))?;
     }
 
-    let (launcher, contents) = if cfg!(windows) {
-        (
-            "run-game.cmd",
-            "@echo off\r\n\"%~dp0aurora-player.exe\" --bundle \"%~dp0\" %*\r\n",
-        )
-    } else {
-        (
-            "run-game.sh",
-            "#!/bin/sh\nset -eu\ncd -- \"$(dirname -- \"$0\")\"\nexec ./aurora-player --bundle . \"$@\"\n",
-        )
-    };
     let launcher_path = output.join(launcher);
     fs::write(&launcher_path, contents)?;
     #[cfg(unix)]
@@ -549,6 +622,71 @@ mod tests {
         }
         let mut assets = Assets::new(project.path(), output.path());
         assert!(assets.stage_on_demand_from(project.path()).is_err());
+        Ok(())
+    }
+
+    fn saved_project(root: &Path) -> Result<Project> {
+        let scene = root.join("main.scene");
+        let mut project = Project::open(&scene)?;
+        project.save()?;
+        Ok(project)
+    }
+
+    #[test]
+    fn export_to_uses_explicit_windows_runtime_names() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let project = saved_project(root.path())?;
+        let binaries = tempfile::tempdir()?;
+        let player = binaries.path().join("cross-built-player.exe");
+        fs::write(&player, b"windows player")?;
+        let output = root.path().join("WindowsExport");
+
+        export_to(
+            &project,
+            &[],
+            &output,
+            Some("windows-x86_64"),
+            Some(&player),
+        )?;
+
+        assert_eq!(
+            fs::read(output.join("aurora-player.exe"))?,
+            b"windows player".to_vec()
+        );
+        assert!(!output.join("aurora-player").exists());
+        assert!(output.join("run-game.cmd").is_file());
+        assert!(!output.join("run-game.sh").exists());
+        assert!(fs::read_to_string(output.join("run-game.cmd"))?.contains("aurora-player.exe"));
+        let manifest: engine_core::app::bundle::ExportManifest = serde_json::from_slice(
+            &fs::read(output.join(engine_core::app::bundle::EXPORT_MANIFEST))?,
+        )?;
+        assert_eq!(manifest.target, "windows-x86_64");
+        manifest.verify(&output)?;
+        Ok(())
+    }
+
+    #[test]
+    fn export_rejects_invalid_targets_and_linked_players() -> Result<()> {
+        assert!(validate_target("../windows-x86_64").is_err());
+        assert!(validate_target("windows-x86_64/extra").is_err());
+        assert!(validate_target("windows").is_err());
+        assert!(validate_target("windows-x86_64").is_ok());
+
+        let root = tempfile::tempdir()?;
+        let player = root.path().join("player");
+        fs::write(&player, b"player")?;
+        assert!(explicit_player(&player).is_ok());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let link = root.path().join("linked-player");
+            symlink(&player, &link)?;
+            assert!(explicit_player(&link).is_err());
+        }
+        let directory = root.path().join("directory");
+        fs::create_dir(&directory)?;
+        assert!(explicit_player(&directory).is_err());
         Ok(())
     }
 }
