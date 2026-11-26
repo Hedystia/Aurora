@@ -1,0 +1,25 @@
+[package]
+name = "android_player"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.0"
+license = "MIT"
+publish = false
+
+# Android loads this library as `libmain.so` from a NativeActivity.
+[lib]
+name = "main"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+# Self-contained so this crate can also be inspected before it joins the
+# workspace. The root Cargo.toml lists it as a member once the shell lands.
+[lints.rust]
+missing_docs = "deny"
+
+[dependencies]
+anyhow = "=1.0.104"
+engine_core = { path = "../engine_core" }
+pollster = "=0.4.0"
+wgpu = "=29.0.4"
+winit = { version = "=0.30.13", features = ["android-native-activity"] }
