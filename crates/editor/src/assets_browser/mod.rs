@@ -68,13 +68,13 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
 
 fn toolbar(ui: &mut Ui, editor: &mut Editor) {
     ui.horizontal(|ui| {
-        let selected = editor.selected_asset.clone().filter(|path| path.exists());
+        let selected = editor.asset_selection_vec();
         if ui.available_width() < 460.0 {
             ui.menu_button("☰", |ui| {
                 ui.menu_button(strings::ADD_FILE, |ui| creation(ui, editor));
                 ui.separator();
                 if ui
-                    .add_enabled(selected.is_some(), egui::Button::new(strings::DELETE))
+                    .add_enabled(!selected.is_empty(), egui::Button::new(strings::DELETE))
                     .clicked()
                 {
                     editor.asset_delete = selected.clone();
@@ -116,7 +116,7 @@ fn toolbar(ui: &mut Ui, editor: &mut Editor) {
                 ui,
                 icons::Icon::Trash,
                 strings::DELETE,
-                selected.is_some(),
+                !selected.is_empty(),
             )
             .clicked()
             {
@@ -189,12 +189,12 @@ fn files(ui: &mut Ui, editor: &mut Editor) {
             if editor.asset_grid {
                 ui.horizontal_wrapped(|ui| {
                     for path in &entries {
-                        tile(ui, editor, path, &root, searching);
+                        tile(ui, editor, path, &root, searching, &entries);
                     }
                 });
             } else {
                 for path in &entries {
-                    file_row(ui, editor, path, &root, searching);
+                    file_row(ui, editor, path, &root, searching, &entries);
                 }
             }
         });
@@ -289,11 +289,11 @@ fn breadcrumb(ui: &mut Ui, editor: &mut Editor, root: &Path, directory: &Path) {
             && let Some(parent) = parent
         {
             editor.asset_directory = parent;
-            editor.selected_asset = None;
+            editor.clear_asset_selection();
         }
         if ui.small_button("res://").clicked() {
             editor.asset_directory = root.to_path_buf();
-            editor.selected_asset = None;
+            editor.clear_asset_selection();
         }
         let mut current = root.to_path_buf();
         for name in breadcrumb_segments(root, directory) {
@@ -301,7 +301,7 @@ fn breadcrumb(ui: &mut Ui, editor: &mut Editor, root: &Path, directory: &Path) {
             current.push(&name);
             if ui.small_button(name.as_str()).clicked() {
                 editor.asset_directory = current.clone();
-                editor.selected_asset = None;
+                editor.clear_asset_selection();
             }
         }
     });
@@ -329,10 +329,42 @@ fn paint_label(ui: &Ui, rect: Rect, name: &str, align: egui::Align2) {
     );
 }
 
-fn tile(ui: &mut Ui, editor: &mut Editor, path: &Path, root: &Path, searching: bool) {
+/// Returns the inclusive display-order range between two entries.
+pub(super) fn range_selection(entries: &[PathBuf], anchor: &Path, target: &Path) -> Vec<PathBuf> {
+    let Some(first) = entries.iter().position(|entry| entry == anchor) else {
+        return vec![target.to_path_buf()];
+    };
+    let Some(last) = entries.iter().position(|entry| entry == target) else {
+        return vec![target.to_path_buf()];
+    };
+    let (start, end) = if first <= last {
+        (first, last)
+    } else {
+        (last, first)
+    };
+    entries[start..=end].to_vec()
+}
+
+fn selection_modifiers(ui: &Ui) -> (bool, bool) {
+    ui.input(|input| {
+        (
+            input.modifiers.ctrl || input.modifiers.command,
+            input.modifiers.shift,
+        )
+    })
+}
+
+fn tile(
+    ui: &mut Ui,
+    editor: &mut Editor,
+    path: &Path,
+    root: &Path,
+    searching: bool,
+    entries: &[PathBuf],
+) {
     let (rect, response) =
         ui.allocate_exact_size(vec2(theme::TILE, theme::TILE), Sense::click_and_drag());
-    let selected = editor.selected_asset.as_deref() == Some(path);
+    let selected = editor.asset_selection.contains(path);
     crate::icons::row_background(ui, rect, selected, response.hovered());
     let icon_rect =
         Rect::from_center_size(pos2(rect.center().x, rect.top() + 27.0), vec2(32.0, 32.0));
@@ -358,12 +390,13 @@ fn tile(ui: &mut Ui, editor: &mut Editor, path: &Path, root: &Path, searching: b
     );
     response.dnd_set_drag_payload(Drag::Asset(path.to_path_buf()));
     if response.clicked() {
-        editor.selected_asset = Some(path.to_path_buf());
+        let (ctrl, shift) = selection_modifiers(ui);
+        editor.select_asset(path, ctrl, shift, entries);
     }
     if response.double_clicked() {
         if path.is_dir() {
             editor.asset_directory = path.to_path_buf();
-            editor.selected_asset = None;
+            editor.clear_asset_selection();
         } else {
             editor.pending_open = Some(path.to_path_buf());
         }
@@ -371,12 +404,19 @@ fn tile(ui: &mut Ui, editor: &mut Editor, path: &Path, root: &Path, searching: b
     asset_menu(response, editor, path);
 }
 
-fn file_row(ui: &mut Ui, editor: &mut Editor, path: &Path, root: &Path, searching: bool) {
+fn file_row(
+    ui: &mut Ui,
+    editor: &mut Editor,
+    path: &Path,
+    root: &Path,
+    searching: bool,
+    entries: &[PathBuf],
+) {
     let (rect, response) = ui.allocate_exact_size(
         vec2(ui.available_width(), theme::ROW_HEIGHT),
         Sense::click_and_drag(),
     );
-    let selected = editor.selected_asset.as_deref() == Some(path);
+    let selected = editor.asset_selection.contains(path);
     crate::icons::row_background(ui, rect, selected, response.hovered());
     let icon_rect = Rect::from_center_size(
         pos2(rect.left() + 10.0, rect.center().y),
@@ -404,12 +444,13 @@ fn file_row(ui: &mut Ui, editor: &mut Editor, path: &Path, root: &Path, searchin
     );
     response.dnd_set_drag_payload(Drag::Asset(path.to_path_buf()));
     if response.clicked() {
-        editor.selected_asset = Some(path.to_path_buf());
+        let (ctrl, shift) = selection_modifiers(ui);
+        editor.select_asset(path, ctrl, shift, entries);
     }
     if response.double_clicked() {
         if path.is_dir() {
             editor.asset_directory = path.to_path_buf();
-            editor.selected_asset = None;
+            editor.clear_asset_selection();
         } else {
             editor.pending_open = Some(path.to_path_buf());
         }
@@ -419,13 +460,10 @@ fn file_row(ui: &mut Ui, editor: &mut Editor, path: &Path, root: &Path, searchin
 
 fn asset_menu(response: egui::Response, editor: &mut Editor, path: &Path) {
     response.context_menu(|ui| {
-        if ui.button(strings::OPEN).clicked() {
-            if path.is_dir() {
-                editor.asset_directory = path.to_path_buf();
-                editor.selected_asset = None;
-            } else {
-                editor.pending_open = Some(path.to_path_buf());
-            }
+        // Right-click never navigates: opening stays on double-click. Delete is
+        // the primary action so folders can be removed directly from here.
+        if ui.button(strings::DELETE).clicked() {
+            editor.request_asset_delete(path);
             ui.close();
         }
         if ui.button(strings::EXPLORER).clicked() {
@@ -448,10 +486,6 @@ fn asset_menu(response: egui::Response, editor: &mut Editor, path: &Path) {
             editor.asset_directory = target.clone();
             creation(ui, editor);
         });
-        if ui.button(strings::DELETE).clicked() {
-            editor.asset_delete = Some(path.to_path_buf());
-            ui.close();
-        }
     });
 }
 
@@ -740,6 +774,28 @@ mod tests {
             .is_err()
         );
         Ok(())
+    }
+
+    #[test]
+    fn shift_range_selects_entries_between_anchor_and_target_in_display_order() {
+        let entries = [
+            PathBuf::from("a"),
+            PathBuf::from("b"),
+            PathBuf::from("c"),
+            PathBuf::from("d"),
+        ];
+        assert_eq!(
+            range_selection(&entries, Path::new("b"), Path::new("d")),
+            vec![PathBuf::from("b"), PathBuf::from("c"), PathBuf::from("d")]
+        );
+        assert_eq!(
+            range_selection(&entries, Path::new("d"), Path::new("b")),
+            vec![PathBuf::from("b"), PathBuf::from("c"), PathBuf::from("d")]
+        );
+        assert_eq!(
+            range_selection(&entries, Path::new("missing"), Path::new("c")),
+            vec![PathBuf::from("c")]
+        );
     }
 
     #[test]
