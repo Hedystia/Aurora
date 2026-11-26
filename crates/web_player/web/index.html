@@ -1,0 +1,70 @@
+<!doctype html>
+<!--
+  Aurora browser shell (groundwork).
+
+  Build the wasm glue next to this file before serving the page:
+    wasm-bindgen --target web --out-dir crates/web_player/web \
+      target/wasm32-unknown-unknown/debug/aurora_web_player.wasm
+
+  Serve the directory over HTTP (fetch and WebGPU do not work from file://):
+    python3 -m http.server 8000 --directory crates/web_player/web
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Aurora Web Player (groundwork)</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: system-ui, sans-serif;
+        background: #10161f;
+        color: #d7e0ea;
+      }
+      body {
+        margin: 0;
+        padding: 1.5rem;
+      }
+      main {
+        max-width: 60rem;
+        margin: 0 auto;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: auto;
+        background: #0a1729;
+        border: 1px solid #31435a;
+        touch-action: none;
+      }
+      canvas:focus-visible {
+        outline: 2px solid #65a9ff;
+      }
+      pre {
+        white-space: pre-wrap;
+        min-height: 3em;
+        padding: 0.5rem 0.75rem;
+        background: #0a1729;
+        border: 1px solid #31435a;
+      }
+      .note {
+        font-size: 0.9rem;
+        color: #9fb0c3;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Aurora Web Player</h1>
+      <canvas id="aurora-canvas" width="960" height="540" tabindex="0"></canvas>
+      <pre id="status" role="status">Starting Aurora shell…</pre>
+      <p class="note">
+        Groundwork only: this page clears a WebGPU canvas and forwards keyboard
+        and pointer input into a scriptless fixed-step runtime. Scene rendering,
+        physics and script bindings are not implemented here. Audio requires a
+        user gesture and is not started by this shell.
+      </p>
+    </main>
+    <script type="module" src="./shell.js"></script>
+  </body>
+</html>
