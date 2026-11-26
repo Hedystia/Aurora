@@ -75,10 +75,20 @@ jobs:
             echo "The container builder test was skipped; refusing to publish an unverified image path." >&2
             exit 1
           fi
+      - name: Build the Linux target template and its checksum
+        run: |
+          tools/package-target-template.sh linux "$RUNNER_TEMP/aurora-template-linux-x86_64.tar.gz" release
+          (cd "$RUNNER_TEMP" && sha256sum aurora-template-linux-x86_64.tar.gz > aurora-template-linux-x86_64.tar.gz.sha256)
       - uses: actions/upload-artifact@v4
         with:
           name: aurora-linux-x86_64-kit
           path: ${{ runner.temp }}/aurora-linux-x86_64-kit.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aurora-template-linux-x86_64
+          path: |
+            ${{ runner.temp }}/aurora-template-linux-x86_64.tar.gz
+            ${{ runner.temp }}/aurora-template-linux-x86_64.tar.gz.sha256
 
   macos-test:
     strategy:
@@ -194,6 +204,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/aurora-linux-x86_64-kit.tar.gz" --clobber
+      - uses: actions/download-artifact@v4
+        with:
+          name: aurora-template-linux-x86_64
+          path: ${{ runner.temp }}
+      - name: Publish the Linux target template and checksum
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" \
+            "$RUNNER_TEMP/aurora-template-linux-x86_64.tar.gz" \
+            "$RUNNER_TEMP/aurora-template-linux-x86_64.tar.gz.sha256" --clobber
 
   macos-publish:
     needs: [validate, create-release, macos-test]
