@@ -244,7 +244,7 @@ impl View {
             camera: Camera::default(),
             rect,
             focal: rect.height().max(1.0) * 0.5 / (fov.to_radians() * 0.5).tan().max(1e-3),
-            eye: world.inverse().w_axis.truncate(),
+            eye: world.w_axis.truncate(),
             right,
             up,
             forward: forward.normalize_or(Vec3::NEG_Z),
@@ -259,6 +259,16 @@ impl View {
     /// Unit view direction.
     pub(crate) fn forward(&self) -> Vec3 {
         self.forward
+    }
+
+    /// Unit screen-right direction of the view.
+    pub(crate) fn right(&self) -> Vec3 {
+        self.right
+    }
+
+    /// Unit screen-up direction of the view.
+    pub(crate) fn up(&self) -> Vec3 {
+        self.up
     }
 
     /// Distance of a point in front of the eye along the view direction.
