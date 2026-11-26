@@ -30,12 +30,16 @@ pub(super) struct MeshScene<'a> {
 }
 
 impl<'a> MeshScene<'a> {
-    pub(super) fn authored(nodes: &'a [NodeState], assets: &'a Assets) -> Option<Self> {
+    pub(super) fn authored(
+        nodes: &'a [NodeState],
+        assets: &'a Assets,
+        selection: crate::save::CameraSelection,
+    ) -> Option<Self> {
         if !nodes.iter().any(|n| n.spatial.is_some() && n.visible) {
             return None;
         }
         let worlds = matrices(nodes);
-        let camera = View3D::resolve(nodes, &worlds);
+        let camera = View3D::resolve_selected(nodes, &worlds, selection)?;
         let instances = nodes
             .iter()
             .filter(|n| n.visible)
