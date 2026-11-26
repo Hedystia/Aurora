@@ -52,6 +52,7 @@ pub(crate) enum Command {
     OverlapStart(u32),
     OverlapChunk(u32, [u8; 12], u8),
     OverlapEnd(u32),
+    SetCamera3D(usize),
 }
 
 #[cfg(unix)]
@@ -101,6 +102,7 @@ pub(crate) mod decode {
             Kind::Pause => Ok(Some(ScriptCommand::Pause)),
             Kind::Resume => Ok(Some(ScriptCommand::Resume)),
             Kind::ChangeScene => Ok(Some(ScriptCommand::ChangeScene(reply.detail.try_into()?))),
+            Kind::SetCamera3D => Ok(Some(ScriptCommand::SetCamera3D(reply.detail.try_into()?))),
             Kind::MoveNode => {
                 let position = [reply.x as f32, reply.y as f32];
                 ensure!(
