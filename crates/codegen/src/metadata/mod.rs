@@ -449,6 +449,7 @@ pub fn protocol_typescript() -> Result<String> {
         script_api::Kind::NodeWorldRotation3D,
         script_api::Kind::OverlapQuery,
         script_api::Kind::OverlapHit,
+        script_api::Kind::SetCamera3D,
     ] {
         writeln!(protocol, "export const kind{kind:?} = {};", kind as u32)?;
     }
