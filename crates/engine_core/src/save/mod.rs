@@ -34,10 +34,8 @@ pub enum SceneKind {
     /// Two-dimensional scene.
     #[default]
     TwoD,
-    /// Three-dimensional scene.
+    /// Three-dimensional scene: 3D geometry with 2D nodes drawn as a screen overlay.
     ThreeD,
-    /// Scene intended to combine two- and three-dimensional content.
-    TwoDThreeD,
 }
 
 /// Texture path and local dimensions for a serialized sprite.
@@ -343,13 +341,10 @@ impl SceneFile {
         let document = Self {
             version: VERSION,
             joints: Vec::new(),
-            scene_kind: match (
-                nodes.iter().any(|node| node.spatial.is_some()),
-                nodes.iter().any(|node| node.spatial.is_none()),
-            ) {
-                (true, true) => SceneKind::TwoDThreeD,
-                (true, false) => SceneKind::ThreeD,
-                _ => SceneKind::TwoD,
+            scene_kind: if nodes.iter().any(|node| node.spatial.is_some()) {
+                SceneKind::ThreeD
+            } else {
+                SceneKind::TwoD
             },
             nodes,
             instances: Vec::new(),
@@ -1028,12 +1023,12 @@ mod tests {
         assert_eq!(legacy.scene_kind, SceneKind::TwoD);
         assert_eq!(serde_json::to_value(&legacy)?["scene_kind"], "two_d");
 
-        let mut mixed = legacy;
-        mixed.scene_kind = SceneKind::TwoDThreeD;
-        let encoded = serde_json::to_value(&mixed)?;
-        assert_eq!(encoded["scene_kind"], "two_d_three_d");
+        let mut three_d = legacy;
+        three_d.scene_kind = SceneKind::ThreeD;
+        let encoded = serde_json::to_value(&three_d)?;
+        assert_eq!(encoded["scene_kind"], "three_d");
         let decoded: SceneFile = serde_json::from_value(encoded)?;
-        assert_eq!(decoded.scene_kind, SceneKind::TwoDThreeD);
+        assert_eq!(decoded.scene_kind, SceneKind::ThreeD);
         Ok(())
     }
 
