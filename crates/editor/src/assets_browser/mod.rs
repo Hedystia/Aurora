@@ -525,10 +525,12 @@ pub(super) fn create_with_scene_kind(
             output.persist_noclobber(&target)?;
         }
         AssetKind::Scene => {
+            let nodes = crate::project::default_scene_nodes(scene_kind, name);
             SceneFile {
                 version: VERSION,
+                camera: crate::project::default_camera(&nodes),
                 scene_kind,
-                nodes: crate::project::default_scene_nodes(scene_kind, name),
+                nodes,
                 instances: Vec::new(),
                 script_prefabs: Vec::new(),
                 animations: Vec::new(),
