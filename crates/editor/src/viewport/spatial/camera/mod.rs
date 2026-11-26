@@ -236,10 +236,9 @@ impl View {
 
     /// Builds a view through an authored camera node's world matrix and FOV.
     pub(crate) fn from_camera(world: Mat4, fov: f32, rect: Rect) -> Self {
-        let right = Vec3::new(world.x_axis.x, world.y_axis.x, world.z_axis.x);
-        let up = Vec3::new(world.x_axis.y, world.y_axis.y, world.z_axis.y);
-        let forward = -Vec3::new(world.x_axis.z, world.y_axis.z, world.z_axis.z);
-        let (right, up) = (right.normalize_or(Vec3::X), up.normalize_or(Vec3::Y));
+        let right = world.x_axis.truncate().normalize_or(Vec3::X);
+        let up = world.y_axis.truncate().normalize_or(Vec3::Y);
+        let forward = -world.z_axis.truncate().normalize_or(Vec3::NEG_Z);
         Self {
             camera: Camera::default(),
             rect,
@@ -373,6 +372,17 @@ mod tests {
             Camera::default(),
             Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(800.0, 600.0)),
         )
+    }
+
+    #[test]
+    fn authored_camera_view_looks_where_the_node_rotation_points() {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+        let yaw = View::from_camera(Mat4::from_rotation_y(-30.0_f32.to_radians()), 60.0, rect);
+        assert!(yaw.forward().x > 0.0, "turning right should look right");
+        assert!(yaw.forward().z < 0.0);
+        let pitch = View::from_camera(Mat4::from_rotation_x(20.0_f32.to_radians()), 60.0, rect);
+        assert!(pitch.forward().y > 0.0, "pitching up should look up");
+        assert!(pitch.forward().z < 0.0);
     }
 
     #[test]
