@@ -786,18 +786,15 @@ impl Editor {
                 if kind == assets_browser::AssetKind::Scene {
                     ui.label(egui::RichText::new(strings::SCENE_TYPE).strong());
                     ui.horizontal(|ui| {
-                        for (scene_kind, label) in [
-                            (SceneKind::TwoD, "2D"),
-                            (SceneKind::ThreeD, "3D"),
-                            (SceneKind::TwoDThreeD, "2D + 3D"),
-                        ] {
+                        for (scene_kind, label) in
+                            [(SceneKind::TwoD, "2D"), (SceneKind::ThreeD, "3D")]
+                        {
                             ui.selectable_value(&mut self.new_scene_kind, scene_kind, label);
                         }
                     });
                     ui.label(match self.new_scene_kind {
                         SceneKind::TwoD => strings::SCENE_2D_DETAIL,
                         SceneKind::ThreeD => strings::SCENE_3D_DETAIL,
-                        SceneKind::TwoDThreeD => strings::SCENE_MIXED_DETAIL,
                     });
                 }
                 ui.add(
