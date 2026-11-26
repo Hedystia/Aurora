@@ -26,8 +26,6 @@ pub(super) struct Viewport {
     game_focus: bool,
     /// Camera, tools, snapping and drag state of the 3D view.
     pub(super) spatial: spatial::State,
-    /// None follows the scene: mixed and 3D scenes open in the perspective view.
-    view_3d: Option<bool>,
     two_d_drag: Option<TwoDDrag>,
     editing_text: Option<usize>,
     focus_text_edit: bool,
@@ -58,7 +56,6 @@ impl Default for Viewport {
             error: None,
             game_focus: true,
             spatial: spatial::State::default(),
-            view_3d: None,
             two_d_drag: None,
             editing_text: None,
             focus_text_edit: false,
@@ -67,14 +64,45 @@ impl Default for Viewport {
 }
 
 pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
-    let three_d_hint = editor.viewport.view_3d.unwrap_or_else(|| {
-        editor
-            .project
-            .document
-            .nodes
-            .iter()
-            .any(|node| node.spatial.is_some())
-    });
+    {
+        let viewport = &mut editor.viewport;
+        let cursor = editor
+            .animation_display
+            .or_else(|| editor.timeline.cursor_for_preview());
+        if viewport.revision != editor.project.revision || viewport.cursor != cursor {
+            if viewport.revision != editor.project.revision {
+                viewport.assets = Assets::new(None);
+            }
+            match editor.project.document.preview(
+                &editor.project.root,
+                &mut viewport.assets,
+                cursor,
+            ) {
+                Ok(nodes) => {
+                    let live: std::collections::HashSet<_> = nodes
+                        .iter()
+                        .filter_map(|node| node.sprite.map(|sprite| sprite.texture))
+                        .collect();
+                    viewport.textures.retain(|id, _| live.contains(id));
+                    viewport.nodes = nodes;
+                    viewport.error = None;
+                }
+                Err(error) => {
+                    viewport.nodes.clear();
+                    viewport.error = Some(error.to_string());
+                }
+            }
+        }
+        viewport.revision = editor.project.revision;
+        viewport.cursor = cursor;
+    }
+    // The view follows the scene: spatial nodes make it a 3D scene, otherwise
+    // it is a flat 2D scene. There is no switch between the two presentations.
+    let three_d = editor
+        .viewport
+        .nodes
+        .iter()
+        .any(|node| node.spatial.is_some());
     egui::Frame::new()
         .fill(theme::SHELL)
         .corner_radius(theme::CONTROL_RADIUS)
@@ -87,30 +115,27 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
                     return;
                 }
                 ui.separator();
-                if three_d_hint {
+                if three_d {
                     spatial::toolbar(ui, &mut editor.viewport.spatial);
                     ui.separator();
-                }
-                ui.selectable_value(&mut editor.viewport.view_3d, Some(false), strings::VIEW_2D);
-                ui.selectable_value(&mut editor.viewport.view_3d, Some(true), strings::VIEW_3D);
-                if three_d_hint
-                    && ui
+                    if ui
                         .button(strings::FRAME_SELECTED)
                         .on_hover_text(strings::FRAME_TIP)
                         .clicked()
-                {
-                    spatial::frame_selection(
-                        &mut editor.viewport.spatial,
-                        &editor.project,
-                        &editor.viewport.nodes,
-                    );
+                    {
+                        spatial::frame_selection(
+                            &mut editor.viewport.spatial,
+                            &editor.project,
+                            &editor.viewport.nodes,
+                        );
+                    }
                 }
                 if ui.button(strings::FRAME_VIEW).clicked() {
                     editor.viewport.pan = Vec2::ZERO;
                     editor.viewport.zoom = 1.0;
                     editor.viewport.spatial.reset_camera();
                 }
-                if !three_d_hint {
+                if !three_d {
                     ui.label(
                         egui::RichText::new(format!("{:.0}%", editor.viewport.zoom * 100.0)).weak(),
                     );
@@ -244,38 +269,6 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
     }
 
     let viewport = &mut editor.viewport;
-    let cursor = editor
-        .animation_display
-        .or_else(|| editor.timeline.cursor_for_preview());
-    if viewport.revision != editor.project.revision || viewport.cursor != cursor {
-        if viewport.revision != editor.project.revision {
-            viewport.assets = Assets::new(None);
-        }
-        match editor
-            .project
-            .document
-            .preview(&editor.project.root, &mut viewport.assets, cursor)
-        {
-            Ok(nodes) => {
-                let live: std::collections::HashSet<_> = nodes
-                    .iter()
-                    .filter_map(|node| node.sprite.map(|sprite| sprite.texture))
-                    .collect();
-                viewport.textures.retain(|id, _| live.contains(id));
-                viewport.nodes = nodes;
-                viewport.error = None;
-            }
-            Err(error) => {
-                viewport.nodes.clear();
-                viewport.error = Some(error.to_string());
-            }
-        }
-        viewport.revision = editor.project.revision;
-        viewport.cursor = cursor;
-    }
-    let three_d = viewport
-        .view_3d
-        .unwrap_or_else(|| viewport.nodes.iter().any(|node| node.spatial.is_some()));
     if three_d {
         spatial::navigate(ui, &response, &mut viewport.spatial, rect, &viewport.nodes);
         spatial::shortcuts(
@@ -305,7 +298,10 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         .unwrap_or_default()
         .resolution;
     let design_size = vec2(w as f32, h as f32);
-    let scale = viewport.zoom
+    // The GUI overlay fits the viewport like it does in the player; only the
+    // flat design view carries the editor's pan and zoom.
+    let zoom = if three_d { 1.0 } else { viewport.zoom };
+    let scale = zoom
         * (rect.width() / design_size.x)
             .min(rect.height() / design_size.y)
             .max(theme::MIN_SCALE);
@@ -343,44 +339,32 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
             if valid { theme::ACCEPT } else { theme::REJECT },
         );
     }
+    // Shaded 3D geometry is the background; 2D nodes are the scene's GUI and
+    // paint over it, matching how the player composites sprites over the mesh.
+    let outcome = spatial::draw(
+        ui,
+        &painter,
+        spatial_view,
+        &response,
+        &viewport.nodes,
+        &mut viewport.spatial,
+        &mut editor.project,
+    );
+    let keep_selection = outcome.keep_selection;
+    let mut picked = if keep_selection { None } else { outcome.picked };
     let project = |p: [f32; 2]| center + vec2(p[0], -p[1]) * scale;
-    let mut picked = None;
     let mut selected_2d_quad = None;
     let mut selected_text_rect = None;
     let mut scale_handles = Vec::new();
-    let spatial_worlds = if three_d {
-        Some(engine_core::scene::spatial::matrices(&viewport.nodes))
-    } else {
-        None
-    };
     let mut ordered: Vec<_> = viewport.nodes.iter().collect();
-    if three_d {
-        // egui has no depth buffer, so paint far sprites first and let nearer
-        // ones cover them. Shaded 3D geometry is painted afterwards.
-        ordered.sort_by(|left, right| {
-            let depth = |node: &&NodeState| {
-                spatial_worlds.as_ref().map_or(0.0_f32, |worlds| {
-                    spatial::sprite_depth(&spatial_view, worlds, node)
-                })
-            };
-            depth(right).total_cmp(&depth(left))
-        });
-    } else {
-        ordered.sort_by_key(|node| node.appearance.map_or(0, |appearance| appearance.layer));
-    }
+    ordered.sort_by_key(|node| node.appearance.map_or(0, |appearance| appearance.layer));
     for state in ordered {
         let index = state.id.value() as usize;
         if !state.visible {
             continue;
         }
         let appearance = state.appearance.unwrap_or_default();
-        let world = |point: [f32; 2]| {
-            if let Some(worlds) = &spatial_worlds {
-                spatial::project_sprite_point(&spatial_view, worlds, state, point)
-            } else {
-                project(state.world.point(point))
-            }
-        };
+        let world = |point: [f32; 2]| project(state.world.point(point));
         let origin = world([0.0; 2]);
         if let Some(sprite) = state.sprite {
             if let std::collections::hash_map::Entry::Vacant(entry) =
@@ -477,22 +461,6 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
             picked = Some(index);
         }
     }
-    // Spatial geometry and gizmos paint over sprites so handles stay grabbable.
-    let outcome = spatial::draw(
-        ui,
-        &painter,
-        spatial_view,
-        &response,
-        &viewport.nodes,
-        &mut viewport.spatial,
-        &mut editor.project,
-    );
-    if outcome.keep_selection {
-        picked = outcome.picked.or(editor.project.selected);
-    } else if outcome.picked.is_some() {
-        picked = outcome.picked;
-    }
-    let keep_selection = outcome.keep_selection;
     if three_d {
         spatial::hud(
             &painter,
@@ -793,14 +761,12 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
 
 /// Places a node just added from the library in front of the 3D camera.
 pub(super) fn place_new(editor: &mut Editor, index: usize) {
-    let three_d = editor.viewport.view_3d.unwrap_or_else(|| {
-        editor
-            .viewport
-            .nodes
-            .iter()
-            .any(|node| node.spatial.is_some())
-    });
-    if three_d {
+    if editor
+        .viewport
+        .nodes
+        .iter()
+        .any(|node| node.spatial.is_some())
+    {
         spatial::place(
             &editor.viewport.spatial,
             &editor.viewport.nodes,
