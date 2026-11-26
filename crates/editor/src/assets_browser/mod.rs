@@ -804,18 +804,18 @@ mod tests {
         let assets = project.path().join("assets");
         fs::create_dir(&assets)?;
         for (name, kind, expected_nodes) in [
+            ("TwoD", SceneKind::TwoD, 1),
             ("ThreeD", SceneKind::ThreeD, 4),
-            ("Mixed", SceneKind::TwoDThreeD, 5),
         ] {
             let path =
                 create_with_scene_kind(project.path(), &assets, name, AssetKind::Scene, kind)?;
             let scene = SceneFile::load(&path)?;
             assert_eq!(scene.scene_kind, kind);
             assert_eq!(scene.nodes.len(), expected_nodes);
-            assert!(scene.nodes.iter().any(|node| node.spatial.is_some()));
-            if kind == SceneKind::TwoDThreeD {
-                assert!(scene.nodes.iter().any(|node| node.spatial.is_none()));
-            }
+            assert_eq!(
+                scene.nodes.iter().any(|node| node.spatial.is_some()),
+                kind == SceneKind::ThreeD
+            );
         }
         Ok(())
     }
