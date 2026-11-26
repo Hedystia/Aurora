@@ -213,8 +213,14 @@ pub struct RunSpec {
     pub staging: PathBuf,
     /// Target identifier exposed to the builder.
     pub target: &'static str,
+    /// Manifest target stamped on the exported bundle.
+    pub export_target: &'static str,
     /// Included scenes as container paths below `/project`.
     pub includes: Vec<String>,
+    /// Host directory with a verified target template, mounted at `/template`.
+    pub template: Option<PathBuf>,
+    /// Player filename inside the mounted template.
+    pub template_player: Option<String>,
 }
 
 impl RunSpec {
@@ -233,10 +239,16 @@ impl RunSpec {
             "--env".into(),
             format!("AURORA_TARGET={}", self.target).into(),
             "--env".into(),
+            format!("AURORA_EXPORT_TARGET={}", self.export_target).into(),
+            "--env".into(),
             format!("AURORA_PROJECT={}", self.project_arg).into(),
             "--env".into(),
             "AURORA_OUTPUT=/out/app".into(),
         ];
+        if let Some(player) = &self.template_player {
+            args.push(OsString::from("--env"));
+            args.push(OsString::from(format!("AURORA_PLAYER=/template/{player}")));
+        }
         if !self.includes.is_empty() {
             args.push(OsString::from("--env"));
             args.push(OsString::from(format!(
@@ -258,6 +270,12 @@ impl RunSpec {
         args.push(project);
         args.push(OsString::from("--volume"));
         args.push(staging);
+        if let Some(template) = &self.template {
+            let mut mount = template.clone().into_os_string();
+            mount.push(":/template:ro");
+            args.push(OsString::from("--volume"));
+            args.push(mount);
+        }
         args.push(OsString::from("--label"));
         args.push(OsString::from("org.aurora.builder=1"));
         args.push(OsString::from(&self.image));
@@ -303,7 +321,10 @@ mod tests {
             project_arg: "/project".into(),
             staging: PathBuf::from("/tmp/stage dir"),
             target: "linux",
+            export_target: "linux-x86_64",
             includes: vec!["/project/scenes/second.scene".into()],
+            template: None,
+            template_player: None,
         };
         let args = spec.args(EngineKind::Docker);
         let args: Vec<String> = args
@@ -314,6 +335,7 @@ mod tests {
         assert!(args.contains(&"--network=none".to_owned()));
         assert!(args.contains(&"--cap-drop=ALL".to_owned()));
         assert!(args.contains(&"AURORA_TARGET=linux".to_owned()));
+        assert!(args.contains(&"AURORA_EXPORT_TARGET=linux-x86_64".to_owned()));
         assert!(args.contains(&"AURORA_PROJECT=/project".to_owned()));
         assert!(args.contains(&"AURORA_OUTPUT=/out/app".to_owned()));
         assert!(args.contains(&"AURORA_INCLUDE_SCENES=/project/scenes/second.scene".to_owned()));
@@ -336,7 +358,10 @@ mod tests {
             project_arg: "/project".into(),
             staging: PathBuf::from("/s"),
             target: "linux",
+            export_target: "linux-x86_64",
             includes: Vec::new(),
+            template: None,
+            template_player: None,
         };
         let args: Vec<String> = spec
             .args(EngineKind::Podman)
@@ -346,5 +371,29 @@ mod tests {
         assert!(args.contains(&"--security-opt=label=disable".to_owned()));
         assert!(args.contains(&"/p:/project:ro".to_owned()));
         assert!(args.contains(&"/s:/out:rw".to_owned()));
+    }
+
+    #[test]
+    fn template_player_is_mounted_and_forwarded() {
+        let spec = RunSpec {
+            name: "n".into(),
+            image: "i".into(),
+            project: PathBuf::from("/p"),
+            project_arg: "/project".into(),
+            staging: PathBuf::from("/s"),
+            target: "windows",
+            export_target: "windows-x86_64",
+            includes: Vec::new(),
+            template: Some(PathBuf::from("/host/template")),
+            template_player: Some("aurora-player.exe".into()),
+        };
+        let args: Vec<String> = spec
+            .args(EngineKind::Docker)
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.contains(&"AURORA_EXPORT_TARGET=windows-x86_64".to_owned()));
+        assert!(args.contains(&"AURORA_PLAYER=/template/aurora-player.exe".to_owned()));
+        assert!(args.contains(&"/host/template:/template:ro".to_owned()));
     }
 }
