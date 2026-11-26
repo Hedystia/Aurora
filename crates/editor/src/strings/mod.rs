@@ -82,11 +82,9 @@ pub(super) const GAME_VIEW: &str = "Game";
 pub(super) const FRAME_VIEW: &str = "Reset view";
 pub(super) const GAME_EMPTY: &str = "Press Play to start the game";
 pub(super) const VIEW_HINT: &str = "Right drag to pan · Scroll to zoom";
-pub(super) const CAMERA_AUTO: &str = "Auto (first camera)";
-pub(super) const CAMERA_FLAT: &str = "None (flat 2D)";
+pub(super) const NO_CAMERA: &str = "None";
 pub(super) const CAMERA_MISSING: &str = "Missing camera";
 pub(super) const CAMERA_VIEW: &str = "Camera view";
-pub(super) const CAMERA_VIEW_TIP: &str = "Look through the selected 3D camera";
 pub(super) const ANIMATION_EMPTY: &str =
     "To start creating an animation, you need to add a property.";
 pub(super) const ADD_ANIMATION: &str = "Add Animation Component";
