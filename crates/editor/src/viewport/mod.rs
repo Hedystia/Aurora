@@ -6,12 +6,15 @@ mod spatial;
 
 use std::collections::HashMap;
 
-use egui::{Color32, Mesh, Pos2, Rect, Sense, TextureHandle, TextureOptions, Ui, Vec2, pos2, vec2};
+use egui::{
+    Color32, Mesh, Pos2, Rect, Response, Sense, TextureHandle, TextureOptions, Ui, Vec2, pos2, vec2,
+};
 use engine_core::{
     assets::{AssetId, Assets},
     save::CameraSelection,
     scene::{Affine2D, NodeState, Transform2D, spatial::Role},
 };
+use glam::Vec3;
 
 use crate::{Editor, node_tree::Drag, strings, theme};
 
@@ -28,7 +31,9 @@ pub(super) struct Viewport {
     /// Camera, tools, snapping and drag state of the 3D view.
     pub(super) spatial: spatial::State,
     /// Look through the scene's active camera instead of the free-fly view.
-    camera_preview: bool,
+    pub(super) camera_preview: bool,
+    /// Camera node to look through, overriding the scene's selection while previewing.
+    pub(super) preview_camera: Option<usize>,
     two_d_drag: Option<TwoDDrag>,
     editing_text: Option<usize>,
     focus_text_edit: bool,
@@ -60,10 +65,19 @@ impl Default for Viewport {
             game_focus: true,
             spatial: spatial::State::default(),
             camera_preview: false,
+            preview_camera: None,
             two_d_drag: None,
             editing_text: None,
             focus_text_edit: false,
         }
+    }
+}
+
+impl Viewport {
+    /// Enters camera view through a specific camera node.
+    pub(super) fn look_through_camera(&mut self, index: usize) {
+        self.camera_preview = true;
+        self.preview_camera = Some(index);
     }
 }
 
@@ -84,26 +98,20 @@ fn camera_selector(ui: &mut Ui, editor: &mut Editor) {
         .map(|(index, node)| (index, node.name.clone()))
         .collect();
     let caption = match current {
-        CameraSelection::Auto => strings::CAMERA_AUTO.to_owned(),
-        CameraSelection::Flat => strings::CAMERA_FLAT.to_owned(),
         CameraSelection::Node(index) => cameras
             .iter()
             .find(|(camera, _)| *camera == index)
             .map(|(_, name)| name.clone())
             .unwrap_or_else(|| strings::CAMERA_MISSING.to_owned()),
+        _ => strings::NO_CAMERA.to_owned(),
     };
+    let none_selected = !matches!(current, CameraSelection::Node(_));
     let mut selected = None;
     let response = egui::ComboBox::from_id_salt("scene-camera")
         .selected_text(caption)
         .show_ui(ui, |ui| {
             if ui
-                .selectable_label(current == CameraSelection::Auto, strings::CAMERA_AUTO)
-                .clicked()
-            {
-                selected = Some(CameraSelection::Auto);
-            }
-            if ui
-                .selectable_label(current == CameraSelection::Flat, strings::CAMERA_FLAT)
+                .selectable_label(none_selected, strings::NO_CAMERA)
                 .clicked()
             {
                 selected = Some(CameraSelection::Flat);
@@ -153,16 +161,17 @@ fn camera_selector(ui: &mut Ui, editor: &mut Editor) {
         editor.project.document.camera = next;
         editor.project.changed();
     }
-    ui.toggle_value(&mut editor.viewport.camera_preview, strings::CAMERA_VIEW)
-        .on_hover_text(strings::CAMERA_VIEW_TIP);
 }
 
-/// View through the scene's active camera, for the editor's camera preview.
-fn camera_view(editor: &Editor, rect: Rect) -> Option<spatial::View> {
-    let wanted = match editor.project.document.camera {
-        CameraSelection::Node(index) => Some(index),
-        _ => None,
-    };
+/// View through the preview camera, or the scene's selected camera.
+fn camera_view(editor: &Editor, rect: Rect) -> Option<(spatial::View, usize)> {
+    let wanted = editor
+        .viewport
+        .preview_camera
+        .or(match editor.project.document.camera {
+            CameraSelection::Node(index) => Some(index),
+            _ => None,
+        });
     let nodes = &editor.viewport.nodes;
     let worlds = engine_core::scene::spatial::matrices(nodes);
     let mut first = None;
@@ -175,13 +184,78 @@ fn camera_view(editor: &Editor, rect: Rect) -> Option<spatial::View> {
         }
         let view = spatial::View::from_camera(worlds[&node.id], component.fov, rect);
         if wanted == Some(node.id.value() as usize) {
-            return Some(view);
+            return Some((view, node.id.value() as usize));
         }
         if first.is_none() {
-            first = Some(view);
+            first = Some((view, node.id.value() as usize));
         }
     }
     first
+}
+
+/// Moves the camera node itself while looking through it, like Blender's
+/// camera view: right-drag turns it, middle-drag and the wheel slide it, and
+/// WASD/Q/E fly it.
+fn move_camera_view(
+    editor: &mut Editor,
+    ui: &Ui,
+    response: &Response,
+    view: &spatial::View,
+    index: usize,
+) {
+    let delta = ui.input(|input| input.pointer.delta());
+    let scroll = ui.input(|input| input.smooth_scroll_delta.y);
+    let mut translation = Vec3::ZERO;
+    let mut rotation = [0.0_f32; 3];
+    if response.dragged_by(egui::PointerButton::Secondary) {
+        rotation[1] -= delta.x * 0.25;
+        rotation[0] -= delta.y * 0.25;
+    }
+    if response.dragged_by(egui::PointerButton::Middle) {
+        translation += (-view.right() * delta.x + view.up() * delta.y) * 0.02;
+    }
+    if scroll != 0.0 {
+        translation += view.forward() * scroll * 0.02;
+    }
+    let down = |keys: &[egui::Key]| ui.input(|input| keys.iter().any(|key| input.key_down(*key)));
+    let step = 0.1_f32;
+    if down(&[egui::Key::W]) {
+        translation += view.forward() * step;
+    }
+    if down(&[egui::Key::S]) {
+        translation -= view.forward() * step;
+    }
+    if down(&[egui::Key::D]) {
+        translation += view.right() * step;
+    }
+    if down(&[egui::Key::A]) {
+        translation -= view.right() * step;
+    }
+    if down(&[egui::Key::E]) {
+        translation += Vec3::Y * step;
+    }
+    if down(&[egui::Key::Q]) {
+        translation -= Vec3::Y * step;
+    }
+    if translation == Vec3::ZERO && rotation == [0.0; 3] {
+        return;
+    }
+    let Some(spatial) = editor
+        .project
+        .document
+        .nodes
+        .get_mut(index)
+        .and_then(|node| node.spatial.as_mut())
+    else {
+        return;
+    };
+    for (value, change) in spatial.position.iter_mut().zip(translation.to_array()) {
+        *value += change;
+    }
+    for (value, change) in spatial.rotation.iter_mut().zip(rotation) {
+        *value += change;
+    }
+    editor.project.changed();
 }
 
 pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
@@ -217,15 +291,13 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         viewport.revision = editor.project.revision;
         viewport.cursor = cursor;
     }
-    // The view follows the scene: spatial nodes make it a 3D scene unless the
-    // scene explicitly selects no camera, which presents it flat like 2D.
-    let camera = editor.project.document.camera;
-    let three_d = camera != CameraSelection::Flat
-        && editor
-            .viewport
-            .nodes
-            .iter()
-            .any(|node| node.spatial.is_some());
+    // The view follows the scene's content only; the camera picker selects the
+    // game camera and never changes the editor's presentation.
+    let three_d = editor
+        .viewport
+        .nodes
+        .iter()
+        .any(|node| node.spatial.is_some());
     egui::Frame::new()
         .fill(theme::SHELL)
         .corner_radius(theme::CONTROL_RADIUS)
@@ -393,15 +465,22 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         return;
     }
 
-    let preview_view = if three_d && editor.viewport.camera_preview {
+    if editor.viewport.camera_preview && ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+        editor.viewport.camera_preview = false;
+        editor.viewport.preview_camera = None;
+    }
+    let mut preview_view = if three_d && editor.viewport.camera_preview {
         camera_view(editor, rect)
     } else {
         None
     };
+    if let Some((view, index)) = preview_view {
+        move_camera_view(editor, ui, &response, &view, index);
+        preview_view = camera_view(editor, rect);
+    }
     let viewport = &mut editor.viewport;
     if preview_view.is_some() {
-        // Looking through an authored camera keeps the view fixed so the scene
-        // can be judged from the game's point of view while nodes are edited.
+        // Navigation drives the camera node itself through move_camera_view.
     } else if three_d {
         spatial::navigate(ui, &response, &mut viewport.spatial, rect, &viewport.nodes);
         spatial::shortcuts(
@@ -439,7 +518,7 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
             .min(rect.height() / design_size.y)
             .max(theme::MIN_SCALE);
     let design = Rect::from_center_size(center, design_size * scale);
-    let spatial_view = preview_view.unwrap_or_else(|| {
+    let spatial_view = preview_view.map(|(view, _)| view).unwrap_or_else(|| {
         spatial::View::new(viewport.spatial.camera, if three_d { rect } else { design })
     });
     if three_d {
