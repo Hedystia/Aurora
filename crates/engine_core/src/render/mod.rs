@@ -30,6 +30,7 @@ pub(crate) enum Frame<'a> {
         assets: &'a Assets,
         nodes: Vec<NodeState>,
         camera: Camera2D,
+        view3d: crate::save::CameraSelection,
     },
     Cubes(&'a [Cube]),
 }
@@ -193,8 +194,9 @@ impl GpuScene {
                 assets,
                 nodes,
                 camera,
+                view3d,
             } => {
-                let spatial = MeshScene::authored(&nodes, assets);
+                let spatial = MeshScene::authored(&nodes, assets, view3d);
                 let overlay = spatial.is_some();
                 if let Some(scene) = spatial {
                     self.mesh
