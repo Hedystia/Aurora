@@ -3,6 +3,7 @@
 #[cfg(unix)]
 pub mod transport;
 #[cfg(windows)]
+#[path = "transport/windows/mod.rs"]
 pub mod transport;
 
 use bincode::{Decode, Encode};

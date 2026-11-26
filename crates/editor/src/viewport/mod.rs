@@ -24,10 +24,8 @@ pub(super) struct Viewport {
     zoom: f32,
     error: Option<String>,
     game_focus: bool,
-    spatial_drag: Option<usize>,
-    spatial_axis: Option<usize>,
-    spatial_mode: spatial::Mode,
-    spatial_camera: spatial::Camera,
+    /// Camera, tools, snapping and drag state of the 3D view.
+    pub(super) spatial: spatial::State,
     /// None follows the scene: mixed and 3D scenes open in the perspective view.
     view_3d: Option<bool>,
     two_d_drag: Option<TwoDDrag>,
@@ -59,10 +57,7 @@ impl Default for Viewport {
             zoom: 1.0,
             error: None,
             game_focus: true,
-            spatial_drag: None,
-            spatial_axis: None,
-            spatial_mode: spatial::Mode::Move,
-            spatial_camera: spatial::Camera::default(),
+            spatial: spatial::State::default(),
             view_3d: None,
             two_d_drag: None,
             editing_text: None,
@@ -72,44 +67,56 @@ impl Default for Viewport {
 }
 
 pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
-    ui.horizontal(|ui| {
-        ui.selectable_value(&mut editor.preview.game_view, false, strings::SCENE);
-        ui.selectable_value(&mut editor.preview.game_view, true, strings::GAME_VIEW);
-        if !editor.preview.game_view {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.selectable_value(&mut editor.viewport.view_3d, Some(true), strings::VIEW_3D);
-                ui.selectable_value(&mut editor.viewport.view_3d, Some(false), strings::VIEW_2D);
+    let three_d_hint = editor.viewport.view_3d.unwrap_or_else(|| {
+        editor
+            .project
+            .document
+            .nodes
+            .iter()
+            .any(|node| node.spatial.is_some())
+    });
+    egui::Frame::new()
+        .fill(theme::SHELL)
+        .corner_radius(theme::CONTROL_RADIUS)
+        .inner_margin(egui::Margin::symmetric(6, 4))
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.selectable_value(&mut editor.preview.game_view, false, strings::SCENE);
+                ui.selectable_value(&mut editor.preview.game_view, true, strings::GAME_VIEW);
+                if editor.preview.game_view {
+                    return;
+                }
                 ui.separator();
+                if three_d_hint {
+                    spatial::toolbar(ui, &mut editor.viewport.spatial);
+                    ui.separator();
+                }
+                ui.selectable_value(&mut editor.viewport.view_3d, Some(false), strings::VIEW_2D);
+                ui.selectable_value(&mut editor.viewport.view_3d, Some(true), strings::VIEW_3D);
+                if three_d_hint
+                    && ui
+                        .button(strings::FRAME_SELECTED)
+                        .on_hover_text(strings::FRAME_TIP)
+                        .clicked()
+                {
+                    spatial::frame_selection(
+                        &mut editor.viewport.spatial,
+                        &editor.project,
+                        &editor.viewport.nodes,
+                    );
+                }
                 if ui.button(strings::FRAME_VIEW).clicked() {
                     editor.viewport.pan = Vec2::ZERO;
                     editor.viewport.zoom = 1.0;
-                    editor.viewport.spatial_camera = spatial::Camera::default();
+                    editor.viewport.spatial.reset_camera();
                 }
-                ui.label(
-                    egui::RichText::new(format!("{:.0}%", editor.viewport.zoom * 100.0)).weak(),
-                );
+                if !three_d_hint {
+                    ui.label(
+                        egui::RichText::new(format!("{:.0}%", editor.viewport.zoom * 100.0)).weak(),
+                    );
+                }
             });
-        }
-    });
-    if !editor.preview.game_view
-        && editor
-            .project
-            .selected
-            .and_then(|index| editor.project.document.nodes.get(index))
-            .is_some_and(|node| node.spatial.is_some())
-    {
-        ui.horizontal(|ui| {
-            ui.label(strings::TRANSFORM);
-            for (mode, label) in [
-                (spatial::Mode::Move, strings::MOVE),
-                (spatial::Mode::Rotate, strings::ROTATE),
-                (spatial::Mode::Scale, strings::SCALE),
-            ] {
-                ui.selectable_value(&mut editor.viewport.spatial_mode, mode, label);
-            }
-            ui.label(egui::RichText::new(strings::ORBIT_HINT).weak());
         });
-    }
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, theme::VIEWPORT);
@@ -270,18 +277,18 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         .view_3d
         .unwrap_or_else(|| viewport.nodes.iter().any(|node| node.spatial.is_some()));
     if three_d {
-        if response.dragged_by(egui::PointerButton::Secondary) {
-            viewport
-                .spatial_camera
-                .pan(ui.input(|input| input.pointer.delta()), 40.0);
-        }
-        if response.hovered() {
-            viewport
-                .spatial_camera
-                .zoom(ui.input(|input| input.smooth_scroll_delta.y));
-        }
+        spatial::navigate(ui, &response, &mut viewport.spatial, rect, &viewport.nodes);
+        spatial::shortcuts(
+            ui,
+            &mut viewport.spatial,
+            &mut editor.project,
+            &viewport.nodes,
+            response.hovered(),
+        );
     } else {
-        if response.dragged_by(egui::PointerButton::Secondary) {
+        if response.dragged_by(egui::PointerButton::Secondary)
+            || response.dragged_by(egui::PointerButton::Middle)
+        {
             viewport.pan += ui.input(|input| input.pointer.delta());
         }
         if response.hovered() {
@@ -289,11 +296,6 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
             viewport.zoom = (viewport.zoom * (scroll * theme::ZOOM_FACTOR).exp())
                 .clamp(theme::MIN_ZOOM, theme::MAX_ZOOM);
         }
-    }
-    if response.dragged_by(egui::PointerButton::Middle) {
-        viewport
-            .spatial_camera
-            .orbit(ui.input(|input| input.pointer.delta()));
     }
     let center = rect.center() + if three_d { Vec2::ZERO } else { viewport.pan };
     let [w, h] = editor
@@ -308,31 +310,10 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
             .min(rect.height() / design_size.y)
             .max(theme::MIN_SCALE);
     let design = Rect::from_center_size(center, design_size * scale);
-    let spatial_rect = if three_d { rect } else { design };
-    let spatial_scale = (spatial_rect.width().min(spatial_rect.height()) / 10.0).clamp(12.0, 64.0);
+    let spatial_view =
+        spatial::View::new(viewport.spatial.camera, if three_d { rect } else { design });
     if three_d {
-        spatial::draw_grid(
-            &painter,
-            spatial_rect,
-            viewport.spatial_camera,
-            spatial_scale,
-        );
-        spatial::draw_axis_widget(&painter, rect, viewport.spatial_camera);
-        if let Some(pointer) = response.hover_pos()
-            && let Some(ground) = viewport.spatial_camera.screen_to_ground(
-                pointer,
-                spatial_rect.center(),
-                spatial_scale,
-            )
-        {
-            painter.text(
-                pos2(rect.left() + 10.0, rect.bottom() - 12.0),
-                egui::Align2::LEFT_BOTTOM,
-                format!("X {:.1}  Z {:.1}", ground.x, ground.z),
-                theme::font(),
-                theme::TEXT,
-            );
-        }
+        spatial::backdrop(&painter, &spatial_view);
     } else {
         painter.rect_stroke(
             design,
@@ -363,20 +344,7 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         );
     }
     let project = |p: [f32; 2]| center + vec2(p[0], -p[1]) * scale;
-    let mut picked = spatial::draw(
-        &painter,
-        spatial_rect,
-        &response,
-        ui.input(|i| i.pointer.delta()),
-        &viewport.nodes,
-        spatial::Interaction {
-            dragging: &mut viewport.spatial_drag,
-            axis: &mut viewport.spatial_axis,
-            mode: viewport.spatial_mode,
-            camera: viewport.spatial_camera,
-        },
-        &mut editor.project,
-    );
+    let mut picked = None;
     let mut selected_2d_quad = None;
     let mut selected_text_rect = None;
     let mut scale_handles = Vec::new();
@@ -388,13 +356,12 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
     let mut ordered: Vec<_> = viewport.nodes.iter().collect();
     if three_d {
         // egui has no depth buffer, so paint far sprites first and let nearer
-        // ones cover them. The 3D wireframes are already underneath.
+        // ones cover them. Shaded 3D geometry is painted afterwards.
         ordered.sort_by(|left, right| {
             let depth = |node: &&NodeState| {
-                spatial_worlds
-                    .as_ref()
-                    .and_then(|worlds| worlds.get(&node.id))
-                    .map_or(0.0_f32, |world| world.w_axis.z)
+                spatial_worlds.as_ref().map_or(0.0_f32, |worlds| {
+                    spatial::sprite_depth(&spatial_view, worlds, node)
+                })
             };
             depth(right).total_cmp(&depth(left))
         });
@@ -409,14 +376,7 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         let appearance = state.appearance.unwrap_or_default();
         let world = |point: [f32; 2]| {
             if let Some(worlds) = &spatial_worlds {
-                spatial::project_sprite_point(
-                    viewport.spatial_camera,
-                    worlds,
-                    state,
-                    point,
-                    spatial_rect.center(),
-                    spatial_scale,
-                )
+                spatial::project_sprite_point(&spatial_view, worlds, state, point)
             } else {
                 project(state.world.point(point))
             }
@@ -517,6 +477,31 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
             picked = Some(index);
         }
     }
+    // Spatial geometry and gizmos paint over sprites so handles stay grabbable.
+    let outcome = spatial::draw(
+        ui,
+        &painter,
+        spatial_view,
+        &response,
+        &viewport.nodes,
+        &mut viewport.spatial,
+        &mut editor.project,
+    );
+    if outcome.keep_selection {
+        picked = outcome.picked.or(editor.project.selected);
+    } else if outcome.picked.is_some() {
+        picked = outcome.picked;
+    }
+    let keep_selection = outcome.keep_selection;
+    if three_d {
+        spatial::hud(
+            &painter,
+            &spatial_view,
+            &viewport.spatial,
+            response.hover_pos(),
+        );
+        spatial::view_gizmo(ui, rect, &mut viewport.spatial);
+    }
     if let Some(index) = editor.project.selected
         && let Some(body) = editor
             .project
@@ -547,18 +532,20 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
             theme::REJECT,
         );
     }
-    painter.text(
-        rect.left_bottom() + vec2(theme::PAD, -theme::PAD),
-        egui::Align2::LEFT_BOTTOM,
-        strings::VIEW_HINT,
-        theme::font(),
-        theme::TEXT,
-    );
+    if !three_d {
+        painter.text(
+            rect.left_bottom() + vec2(theme::PAD, -theme::PAD),
+            egui::Align2::LEFT_BOTTOM,
+            strings::VIEW_HINT,
+            theme::font(),
+            theme::TEXT,
+        );
+    }
     let scale_started = scale_handles
         .iter()
         .find(|(_, _, handle)| handle.drag_started_by(egui::PointerButton::Primary));
     let primary_started = response.drag_started_by(egui::PointerButton::Primary);
-    if response.clicked() || primary_started {
+    if (response.clicked() || primary_started) && !keep_selection {
         editor.project.selected = picked;
     }
     if let Some((index, corner, handle)) = scale_started {
@@ -790,9 +777,37 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         {
             if editor.project.document.nodes[index].spatial.is_none() {
                 editor.project.document.nodes[index].transform.position = position;
+                editor.project.changed();
+            } else if three_d {
+                spatial::place(
+                    &editor.viewport.spatial,
+                    &editor.viewport.nodes,
+                    &mut editor.project,
+                    index,
+                    response.interact_pointer_pos(),
+                );
             }
-            editor.project.changed();
         }
+    }
+}
+
+/// Places a node just added from the library in front of the 3D camera.
+pub(super) fn place_new(editor: &mut Editor, index: usize) {
+    let three_d = editor.viewport.view_3d.unwrap_or_else(|| {
+        editor
+            .viewport
+            .nodes
+            .iter()
+            .any(|node| node.spatial.is_some())
+    });
+    if three_d {
+        spatial::place(
+            &editor.viewport.spatial,
+            &editor.viewport.nodes,
+            &mut editor.project,
+            index,
+            None,
+        );
     }
 }
 

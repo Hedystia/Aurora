@@ -4,6 +4,7 @@ mod assets_browser;
 mod console;
 mod docks;
 mod export;
+mod history;
 mod icons;
 mod inspector;
 mod node_library;
@@ -86,6 +87,7 @@ struct Editor {
     layout: DockState<docks::Dock>,
     preview: preview::Preview,
     viewport: viewport::Viewport,
+    history: history::History,
     timeline: timeline::Timeline,
     key_property: Property,
     animation_display: Option<(usize, f64)>,
@@ -137,6 +139,7 @@ impl Editor {
             project,
             preview: preview::Preview::default(),
             viewport: viewport::Viewport::default(),
+            history: history::History::default(),
             timeline: timeline::Timeline::default(),
             key_property: Property::X,
             animation_display: None,
@@ -644,6 +647,22 @@ impl Editor {
         }
         if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::O)) {
             self.open_dialog = true;
+        }
+        // Text fields keep their own Ctrl+Z; the Game view owns the keyboard while playing.
+        if !ctx.egui_wants_keyboard_input() && !self.preview.game_view {
+            let redo = ctx.input_mut(|input| {
+                input.consume_key(
+                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                    egui::Key::Z,
+                ) || input.consume_key(egui::Modifiers::COMMAND, egui::Key::Y)
+            });
+            if redo {
+                self.history.redo(&mut self.project);
+            } else if ctx
+                .input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Z))
+            {
+                self.history.undo(&mut self.project);
+            }
         }
         if self.rename.is_none()
             && let Some(index) = self.project.selected
@@ -1332,6 +1351,8 @@ impl eframe::App for Editor {
             }
         }
         self.dialogs(&ctx);
+        let busy = ctx.input(|input| input.pointer.any_down()) || ctx.egui_wants_keyboard_input();
+        self.history.track(&self.project, busy);
     }
 }
 

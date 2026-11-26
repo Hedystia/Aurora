@@ -40,6 +40,27 @@ pub(super) fn menus(ui: &mut Ui, editor: &mut Editor) {
             editor.open_dialog = true;
         }
         ui.menu_button(strings::EDIT, |ui| {
+            if ui
+                .add_enabled(
+                    editor.history.can_undo(&editor.project),
+                    egui::Button::new(strings::UNDO).shortcut_text("Ctrl+Z"),
+                )
+                .clicked()
+            {
+                editor.history.undo(&mut editor.project);
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    editor.history.can_redo(),
+                    egui::Button::new(strings::REDO).shortcut_text("Ctrl+Shift+Z"),
+                )
+                .clicked()
+            {
+                editor.history.redo(&mut editor.project);
+                ui.close();
+            }
+            ui.separator();
             if let Some(index) = editor.project.selected {
                 if ui.button(strings::RENAME).clicked() {
                     editor.begin_rename(index);

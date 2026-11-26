@@ -5,7 +5,7 @@
 //! child, so no handle inheritance and no shared memory are required.
 
 use std::{
-    ffi::{OsStr, OsString},
+    ffi::OsString,
     mem::size_of,
     os::windows::ffi::OsStrExt,
     ptr,
@@ -24,12 +24,12 @@ use windows_sys::Win32::{
         InitializeSecurityDescriptor, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR,
         SetSecurityDescriptorDacl, TOKEN_QUERY, TOKEN_USER, TokenUser,
     },
-    Storage::FileSystem::{FILE_FLAG_OVERLAPPED, ReadFile, WriteFile},
+    Storage::FileSystem::{FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX, ReadFile, WriteFile},
     System::{
         IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED},
         Pipes::{
-            ConnectNamedPipe, CreateNamedPipeW, PIPE_ACCESS_DUPLEX, PIPE_READMODE_BYTE,
-            PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
+            ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
+            PIPE_TYPE_BYTE, PIPE_WAIT,
         },
         Threading::{CreateEventW, GetCurrentProcess, OpenProcessToken, WaitForSingleObject},
     },
@@ -89,7 +89,7 @@ impl Link {
         let connected =
             unsafe { ConnectNamedPipe(self.handle, &mut operation.overlapped) } != FALSE;
         if !connected {
-            match GetLastError() {
+            match unsafe { GetLastError() } {
                 ERROR_IO_PENDING => {
                     operation.wait(self.handle, Instant::now() + CONNECT_DEADLINE)?;
                 }
@@ -150,7 +150,7 @@ fn write_all(handle: HANDLE, bytes: &[u8], deadline: Instant) -> Result<()> {
         let transferred = if completed {
             written as usize
         } else {
-            match GetLastError() {
+            match unsafe { GetLastError() } {
                 ERROR_IO_PENDING => operation.wait(handle, deadline)?,
                 error => bail!("Writing script frame failed: {error}"),
             }
@@ -179,7 +179,7 @@ fn read_all(handle: HANDLE, bytes: &mut [u8], deadline: Instant) -> Result<()> {
         let transferred = if completed {
             read as usize
         } else {
-            match GetLastError() {
+            match unsafe { GetLastError() } {
                 ERROR_IO_PENDING => operation.wait(handle, deadline)?,
                 error => bail!("Reading script frame failed: {error}"),
             }
@@ -242,6 +242,8 @@ impl Drop for Operation {
 }
 
 /// Security descriptor granting pipe access only to the current user's SID.
+// The buffers are only referenced through raw pointers inside `descriptor`.
+#[allow(dead_code)]
 struct PipeSecurity {
     token: Vec<u64>,
     acl: Vec<u64>,

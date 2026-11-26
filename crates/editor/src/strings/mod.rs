@@ -68,9 +68,6 @@ pub(super) const ACTIVE: &str = "Active";
 pub(super) const POSITION: &str = "Position";
 pub(super) const ROTATION: &str = "Rotation ";
 pub(super) const SCALE: &str = "Scale";
-pub(super) const TRANSFORM: &str = "Transform";
-pub(super) const MOVE: &str = "Move";
-pub(super) const ROTATE: &str = "Rotate";
 pub(super) const ANCHOR: &str = "Anchor";
 pub(super) const SKEW: &str = "Skew";
 pub(super) const COLOR: &str = "Color";
@@ -85,7 +82,6 @@ pub(super) const GAME_VIEW: &str = "Game";
 pub(super) const FRAME_VIEW: &str = "Reset view";
 pub(super) const GAME_EMPTY: &str = "Press Play to start the game";
 pub(super) const VIEW_HINT: &str = "Right drag to pan · Scroll to zoom";
-pub(super) const ORBIT_HINT: &str = "Middle-drag to orbit · Right-drag to pan · Scroll to dolly";
 pub(super) const VIEW_2D: &str = "2D";
 pub(super) const VIEW_3D: &str = "3D";
 pub(super) const ANIMATION_EMPTY: &str =
@@ -144,8 +140,7 @@ pub(super) const GODOT_LAYOUT: &str = "Godot Layout";
 pub(super) const SAVE_LAYOUT: &str = "Save Layout";
 pub(super) const NO_PACKAGES: &str = "No project packages";
 pub(super) const REFRESH_ASSETS: &str = "Refresh Assets";
-pub(super) const SHORTCUT_HELP: &str =
-    "Ctrl+S save · Ctrl+O open · F2 rename · Ctrl+D duplicate · F5 play · F8 stop";
+pub(super) const SHORTCUT_HELP: &str = "Ctrl+S save · Ctrl+Z/Ctrl+Shift+Z undo/redo · Ctrl+O open · F2 rename · Ctrl+D duplicate · F5 play · F8 stop · 3D: Q/W/E/R tools, X local/world, F frame, RMB+WASD fly";
 pub(super) const BROWSER: &str = "Browser";
 pub(super) const DIRTY: &str = " *";
 pub(super) const ERRORS: &str = "errors";
@@ -254,3 +249,25 @@ pub(super) const TYPES_REOPEN: &str =
     "The project SDK version changed. Reopen the project to review the update.";
 pub(super) const DISMISS: &str = "Dismiss";
 pub(super) const VERSION_TO: &str = "to";
+
+pub(super) const FRAME_SELECTED: &str = "Frame";
+pub(super) const FRAME_TIP: &str = "Frame the selection (F)";
+pub(super) const FLY_SPEED: &str = "Fly speed";
+pub(super) const SNAP_ON: &str = "Snap on (hold Ctrl to bypass)";
+pub(super) const SPATIAL_HINT: &str =
+    "RMB look + WASD/QE fly · MMB pan · Alt+LMB orbit · Wheel zoom · F frame · Ctrl+Z undo";
+pub(super) const TOOL_SELECT: &str = "Select (Q · Ctrl+1)";
+pub(super) const TOOL_MOVE: &str = "Move (W · Ctrl+2)";
+pub(super) const TOOL_ROTATE: &str = "Rotate (E · Ctrl+4)";
+pub(super) const TOOL_SCALE: &str = "Scale (R · Ctrl+3)";
+pub(super) const SPACE_WORLD: &str = "World";
+pub(super) const SPACE_LOCAL: &str = "Local";
+pub(super) const SPACE_TIP: &str = "Gizmo axes: world or local (X · Ctrl+L)";
+pub(super) const SNAP: &str = "Snap";
+pub(super) const SNAP_TIP: &str =
+    "Snap moves, turns and scales to increments. Hold Ctrl to invert while dragging.";
+pub(super) const SNAP_MOVE: &str = "Move increment";
+pub(super) const SNAP_ROTATE: &str = "Rotation increment";
+pub(super) const SNAP_SCALE: &str = "Scale increment";
+pub(super) const UNDO: &str = "Undo";
+pub(super) const REDO: &str = "Redo";
