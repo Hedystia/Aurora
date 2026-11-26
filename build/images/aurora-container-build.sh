@@ -46,6 +46,12 @@ cd /opt/aurora
 export HOME=${HOME:-/home/builder}
 
 set -- --project "$project" --export "$output"
+if [ -n "${AURORA_EXPORT_TARGET:-}" ]; then
+    set -- "$@" --export-target "$AURORA_EXPORT_TARGET"
+fi
+if [ -n "${AURORA_PLAYER:-}" ]; then
+    set -- "$@" --player "$AURORA_PLAYER"
+fi
 if [ -n "${AURORA_INCLUDE_SCENES:-}" ]; then
     previous_ifs=$IFS
     IFS='
