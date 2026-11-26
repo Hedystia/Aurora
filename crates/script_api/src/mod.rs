@@ -9,7 +9,7 @@ pub mod transport;
 use bincode::{Decode, Encode};
 
 /// Current script protocol version.
-pub const VERSION: u32 = 19;
+pub const VERSION: u32 = 20;
 /// Fixed byte count of an encoded envelope.
 pub const ENVELOPE_BYTES: usize = 60;
 /// Size of the protocol, sequence and kind prefix.
@@ -184,6 +184,8 @@ pub enum Kind {
     OverlapQuery,
     /// Delivers one overlap hit. Detail is the request index, X the node reference and Y one on the last hit.
     OverlapHit,
+    /// Renders through this camera node. Detail holds the node reference.
+    SetCamera3D,
 }
 
 /// Wire message encoded with bincode 2 fixed-width, little-endian configuration.
@@ -305,6 +307,7 @@ mod tests {
         assert_eq!(Kind::NodeWorldRotation3D as u32, 78);
         assert_eq!(Kind::OverlapQuery as u32, 79);
         assert_eq!(Kind::OverlapHit as u32, 80);
-        assert_eq!(VERSION, 19);
+        assert_eq!(Kind::SetCamera3D as u32, 81);
+        assert_eq!(VERSION, 20);
     }
 }
