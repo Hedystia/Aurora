@@ -38,6 +38,26 @@ pub enum SceneKind {
     ThreeD,
 }
 
+/// Camera that renders a scene's 3D layer.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CameraSelection {
+    /// Use the first visible camera, or the default view when the scene has none.
+    #[default]
+    Auto,
+    /// Render through the camera at this node index.
+    Node(usize),
+    /// No camera: present the scene as flat 2D.
+    Flat,
+}
+
+impl CameraSelection {
+    /// Whether this is the default automatic choice.
+    pub fn is_auto(&self) -> bool {
+        matches!(self, Self::Auto)
+    }
+}
+
 /// Texture path and local dimensions for a serialized sprite.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -263,6 +283,9 @@ pub struct SceneFile {
     /// Intended authoring mode. Older documents without this field open as 2D scenes.
     #[serde(default)]
     pub scene_kind: SceneKind,
+    /// Camera used for the 3D layer. Older documents use automatic selection.
+    #[serde(default, skip_serializing_if = "CameraSelection::is_auto")]
+    pub camera: CameraSelection,
     /// Inline nodes in parent-first order.
     pub nodes: Vec<NodeFile>,
     /// Additional prefab instances in document order.
@@ -346,6 +369,7 @@ impl SceneFile {
             } else {
                 SceneKind::TwoD
             },
+            camera: CameraSelection::Auto,
             nodes,
             instances: Vec::new(),
             script_prefabs: Vec::new(),
@@ -380,6 +404,13 @@ impl SceneFile {
         ensure!(
             self.display.is_none_or(Display2D::is_valid),
             "Unsupported design resolution"
+        );
+        ensure!(
+            match self.camera {
+                CameraSelection::Node(index) => index < self.nodes.len(),
+                _ => true,
+            },
+            "Invalid scene camera"
         );
         ensure!(
             self.instances
@@ -528,6 +559,7 @@ impl SceneFile {
         let mut loaded = Loaded {
             spatial_physics: Default::default(),
             joints,
+            camera: self.camera,
             display: self.display.unwrap_or_default(),
             scene,
             ids,
@@ -654,6 +686,7 @@ impl PrefabFile {
 
 pub(crate) struct Loaded {
     pub spatial_physics: crate::physics3d::authored::AuthoredWorld,
+    pub camera: CameraSelection,
     pub display: Display2D,
     pub scene: Scene,
     pub ids: Vec<EntityId>,
@@ -896,6 +929,7 @@ mod tests {
         prefab.save(&scratch.path().join("pair.prefab"))?;
         let scene = SceneFile {
             version: VERSION,
+            camera: CameraSelection::default(),
             scene_kind: SceneKind::ThreeD,
             nodes: vec![NodeFile {
                 name: "Canvas".into(),
@@ -984,6 +1018,7 @@ mod tests {
         let document = SceneFile {
             version: VERSION,
             joints: Vec::new(),
+            camera: CameraSelection::default(),
             scene_kind: SceneKind::ThreeD,
             nodes: vec![host],
             instances: vec![InstanceFile {
@@ -1022,13 +1057,33 @@ mod tests {
         let legacy: SceneFile = serde_json::from_str(r#"{"version":1,"nodes":[]}"#)?;
         assert_eq!(legacy.scene_kind, SceneKind::TwoD);
         assert_eq!(serde_json::to_value(&legacy)?["scene_kind"], "two_d");
+        assert_eq!(legacy.camera, CameraSelection::Auto);
 
-        let mut three_d = legacy;
+        let mut three_d = legacy.clone();
         three_d.scene_kind = SceneKind::ThreeD;
         let encoded = serde_json::to_value(&three_d)?;
         assert_eq!(encoded["scene_kind"], "three_d");
         let decoded: SceneFile = serde_json::from_value(encoded)?;
         assert_eq!(decoded.scene_kind, SceneKind::ThreeD);
+
+        let mut selected = legacy;
+        selected.camera = CameraSelection::Node(0);
+        let encoded = serde_json::to_value(&selected)?;
+        assert_eq!(
+            encoded["camera"]
+                .get("node")
+                .and_then(|value| value.as_u64()),
+            Some(0)
+        );
+        let decoded: SceneFile = serde_json::from_value(encoded)?;
+        assert_eq!(decoded.camera, CameraSelection::Node(0));
+
+        let mut flat = selected;
+        flat.camera = CameraSelection::Flat;
+        let encoded = serde_json::to_value(&flat)?;
+        assert_eq!(encoded["camera"], "flat");
+        let decoded: SceneFile = serde_json::from_value(encoded)?;
+        assert_eq!(decoded.camera, CameraSelection::Flat);
         Ok(())
     }
 
