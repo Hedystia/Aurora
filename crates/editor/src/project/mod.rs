@@ -24,7 +24,6 @@ pub(crate) enum ProjectKind {
     #[default]
     TwoD,
     ThreeD,
-    TwoDThreeD,
     Jumpy,
 }
 
@@ -114,17 +113,11 @@ impl Project {
             let mut project = Self::open(path)?;
             project.document.scene_kind = match kind {
                 ProjectKind::ThreeD => SceneKind::ThreeD,
-                ProjectKind::TwoDThreeD => SceneKind::TwoDThreeD,
                 ProjectKind::TwoD | ProjectKind::Jumpy => SceneKind::TwoD,
             };
             if kind == ProjectKind::ThreeD {
                 project.document.nodes = default_scene_nodes(SceneKind::ThreeD, "Node 3D");
                 project.selected = Some(1);
-                project.changed();
-            } else if kind == ProjectKind::TwoDThreeD {
-                project.document.nodes =
-                    default_scene_nodes(SceneKind::TwoDThreeD, crate::strings::CANVAS);
-                project.selected = Some(2);
                 project.changed();
             }
             let assets = project.root.join("assets");
@@ -683,13 +676,6 @@ pub(super) fn default_scene_nodes(kind: SceneKind, root_name: &str) -> Vec<NodeF
                 node("Directional Light", Some(0)),
             ]
         }
-        SceneKind::TwoDThreeD => vec![
-            root,
-            node("Node 3D", Some(0)),
-            node("Cube 3D", Some(1)),
-            node("Camera 3D", Some(1)),
-            node("Directional Light", Some(1)),
-        ],
     }
 }
 
