@@ -1048,6 +1048,7 @@ fn write_properties(
                     let reference_type = match spec.node_filter {
                         Some(codegen::NodeFilter::Text) => "TextRef",
                         Some(codegen::NodeFilter::Image) => "ImageRef",
+                        Some(codegen::NodeFilter::Design) => "DesignRef",
                         None => "NodeRef",
                     };
                     format!("new {reference_type}({reference}, {instance}.scene)")
@@ -1226,6 +1227,10 @@ fn node_matches_filter(filter: codegen::NodeFilter, node: &NodeFile) -> bool {
                     )
                 )
         }
+        codegen::NodeFilter::Design => matches!(
+            &node.visual,
+            Some(engine_core::save::visual::Visual::Design(_))
+        ),
     }
 }
 
