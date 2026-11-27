@@ -341,6 +341,146 @@ impl Project {
         }
     }
 
+    /// Authored size of a node in design pixels, used by design alignment tools.
+    pub(super) fn node_size(node: &NodeFile) -> [f32; 2] {
+        if let Some(sprite) = &node.sprite {
+            return sprite.size;
+        }
+        match &node.visual {
+            Some(engine_core::save::visual::Visual::Design(design)) => design.size,
+            Some(engine_core::save::visual::Visual::NineSlice { size, .. }) => {
+                [size[0] as f32, size[1] as f32]
+            }
+            Some(engine_core::save::visual::Visual::Atlas { cell, .. }) => {
+                [cell[0] as f32, cell[1] as f32]
+            }
+            _ => [0.0, 0.0],
+        }
+    }
+
+    /// Applies a frame's auto layout to its direct children.
+    pub(super) fn apply_auto_layout(&mut self, index: usize) {
+        let Some(layout) = self
+            .document
+            .nodes
+            .get(index)
+            .and_then(|node| match &node.visual {
+                Some(engine_core::save::visual::Visual::Design(design)) => {
+                    design.layout.enabled.then_some(design.layout)
+                }
+                _ => None,
+            })
+        else {
+            return;
+        };
+        let parent_size = Self::node_size(&self.document.nodes[index]);
+        let children: Vec<usize> = self
+            .document
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| node.parent == Some(index))
+            .map(|(child, _)| child)
+            .collect();
+        if children.is_empty() {
+            return;
+        }
+        let mut cursor = if layout.horizontal {
+            layout.padding[0]
+        } else {
+            layout.padding[1]
+        };
+        for child in children {
+            let size = Self::node_size(&self.document.nodes[child]);
+            let cross = if layout.horizontal {
+                let available = parent_size[1] - layout.padding[1] - layout.padding[3] - size[1];
+                layout.padding[1] + available.max(0.0) * layout.align
+            } else {
+                let available = parent_size[0] - layout.padding[0] - layout.padding[2] - size[0];
+                layout.padding[0] + available.max(0.0) * layout.align
+            };
+            let node = &mut self.document.nodes[child].transform;
+            if layout.horizontal {
+                node.position = [cursor, cross - parent_size[1] * 0.5];
+            } else {
+                node.position = [cross - parent_size[0] * 0.5, cursor];
+            }
+            cursor += if layout.horizontal { size[0] } else { size[1] } + layout.gap;
+        }
+        self.changed();
+    }
+
+    /// Aligns the group selection on one axis.
+    pub(super) fn align_selection(&mut self, horizontal: bool, align_end: bool, center: bool) {
+        let indices: Vec<usize> = self.group_selection.iter().copied().collect();
+        if indices.len() < 2 {
+            return;
+        }
+        let axis = usize::from(!horizontal);
+        let mut bounds: Vec<(usize, f32, f32)> = indices
+            .iter()
+            .map(|&index| {
+                let position = self.document.nodes[index].transform.position[axis];
+                let size = Self::node_size(&self.document.nodes[index])[axis];
+                (index, position - size * 0.5, position + size * 0.5)
+            })
+            .collect();
+        let target = if center {
+            let low = bounds
+                .iter()
+                .map(|(_, low, _)| *low)
+                .fold(f32::INFINITY, f32::min);
+            let high = bounds
+                .iter()
+                .map(|(_, _, high)| *high)
+                .fold(f32::NEG_INFINITY, f32::max);
+            (low + high) * 0.5
+        } else if align_end {
+            bounds
+                .iter()
+                .map(|(_, _, high)| *high)
+                .fold(f32::NEG_INFINITY, f32::max)
+        } else {
+            bounds
+                .iter()
+                .map(|(_, low, _)| *low)
+                .fold(f32::INFINITY, f32::min)
+        };
+        for (index, low, high) in &mut bounds {
+            let size = *high - *low;
+            let position = if center || align_end {
+                target - size * 0.5
+            } else {
+                target + size * 0.5
+            };
+            self.document.nodes[*index].transform.position[axis] = position;
+        }
+        self.changed();
+    }
+
+    /// Evenly distributes the group selection on one axis.
+    pub(super) fn distribute_selection(&mut self, horizontal: bool) {
+        let mut indices: Vec<usize> = self.group_selection.iter().copied().collect();
+        if indices.len() < 3 {
+            return;
+        }
+        let axis = usize::from(!horizontal);
+        indices.sort_by(|a, b| {
+            self.document.nodes[*a].transform.position[axis]
+                .total_cmp(&self.document.nodes[*b].transform.position[axis])
+        });
+        let (Some(&first), Some(&last)) = (indices.first(), indices.last()) else {
+            return;
+        };
+        let start = self.document.nodes[first].transform.position[axis];
+        let end = self.document.nodes[last].transform.position[axis];
+        let step = (end - start) / (indices.len() - 1) as f32;
+        for (slot, index) in indices.iter().enumerate() {
+            self.document.nodes[*index].transform.position[axis] = start + step * slot as f32;
+        }
+        self.changed();
+    }
+
     fn subtree(&self, id: usize) -> BTreeSet<usize> {
         let mut set = BTreeSet::from([id]);
         for (index, node) in self.document.nodes.iter().enumerate().skip(id + 1) {
@@ -769,6 +909,76 @@ mod tests {
         assert_eq!(default_camera(&two_d), CameraSelection::Auto);
         let three_d = default_scene_nodes(SceneKind::ThreeD, "Node 3D");
         assert_eq!(default_camera(&three_d), CameraSelection::Node(2));
+    }
+
+    #[test]
+    fn auto_layout_and_alignment_arrange_design_children() {
+        let mut project = Project {
+            path: PathBuf::new(),
+            root: PathBuf::new(),
+            document: empty(),
+            selected: None,
+            group_selection: BTreeSet::new(),
+            dirty: false,
+            revision: 0,
+            prefab: false,
+        };
+        let frame = project.document.nodes.len();
+        project.document.nodes.push(NodeFile {
+            name: "Frame".into(),
+            parent: None,
+            transform: Default::default(),
+            spatial: None,
+            visual: Some(engine_core::save::visual::Visual::Design(
+                engine_core::save::visual::design::Design {
+                    size: [200.0, 100.0],
+                    layout: engine_core::save::visual::design::AutoLayout {
+                        enabled: true,
+                        horizontal: true,
+                        gap: 10.0,
+                        padding: [8.0, 8.0, 8.0, 8.0],
+                        align: 0.0,
+                    },
+                    ..Default::default()
+                },
+            )),
+            sprite: None,
+            appearance: None,
+            physics2d: None,
+            scripts: Vec::new(),
+        });
+        for index in 0..2 {
+            project.document.nodes.push(NodeFile {
+                name: format!("Child {index}"),
+                parent: Some(frame),
+                transform: Default::default(),
+                spatial: None,
+                visual: Some(engine_core::save::visual::Visual::Design(
+                    engine_core::save::visual::design::Design {
+                        size: [40.0, 20.0],
+                        ..Default::default()
+                    },
+                )),
+                sprite: None,
+                appearance: None,
+                physics2d: None,
+                scripts: Vec::new(),
+            });
+        }
+        project.apply_auto_layout(frame);
+        assert_eq!(project.document.nodes[frame + 1].transform.position[0], 8.0);
+        assert_eq!(
+            project.document.nodes[frame + 2].transform.position[0],
+            58.0
+        );
+
+        project.group_selection.insert(frame + 1);
+        project.group_selection.insert(frame + 2);
+        project.align_selection(true, false, true);
+        assert_eq!(
+            project.document.nodes[frame + 1].transform.position[0],
+            project.document.nodes[frame + 2].transform.position[0]
+        );
     }
 
     #[test]
