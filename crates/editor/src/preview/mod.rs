@@ -823,6 +823,11 @@ fn script_text_contents(nodes: &[NodeFile]) -> Vec<Option<String>> {
             Some(engine_core::save::visual::Visual::Text { spans, .. }) => {
                 Some(spans.iter().map(|span| span.text.as_str()).collect())
             }
+            Some(engine_core::save::visual::Visual::Design(design))
+                if design.kind == engine_core::save::visual::design::DesignKind::Text =>
+            {
+                Some(design.text.clone())
+            }
             _ => None,
         })
         .collect()
@@ -1212,10 +1217,13 @@ fn write_properties(
 
 fn node_matches_filter(filter: codegen::NodeFilter, node: &NodeFile) -> bool {
     match filter {
-        codegen::NodeFilter::Text => matches!(
-            &node.visual,
-            Some(engine_core::save::visual::Visual::Text { .. })
-        ),
+        codegen::NodeFilter::Text => match &node.visual {
+            Some(engine_core::save::visual::Visual::Text { .. }) => true,
+            Some(engine_core::save::visual::Visual::Design(design)) => {
+                design.kind == engine_core::save::visual::design::DesignKind::Text
+            }
+            _ => false,
+        },
         codegen::NodeFilter::Image => {
             node.sprite.is_some()
                 || matches!(
