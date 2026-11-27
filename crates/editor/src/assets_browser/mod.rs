@@ -574,6 +574,15 @@ pub(super) fn remove(root: &Path, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Writes a generated texture into the project's `assets` folder.
+pub(super) fn save_generated(root: &Path, name: &str, image: &image::RgbaImage) -> Result<PathBuf> {
+    let directory = root.join("assets");
+    fs::create_dir_all(&directory)?;
+    let target = files::copy_name(&directory.join(format!("{name}.png")));
+    image.save(&target)?;
+    Ok(target)
+}
+
 /// Imports an external file into the project's `assets` folder.
 pub(super) fn import(root: &Path, source: &Path) -> Result<()> {
     if matches!(extension(source), "gltf" | "glb") {
