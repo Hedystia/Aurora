@@ -189,6 +189,9 @@ impl Project {
         self.shift_gameplay(id, 1);
         self.selected = Some(id);
         self.changed();
+        if let Some(parent) = parent {
+            self.apply_auto_layout(parent);
+        }
         id
     }
 
@@ -385,27 +388,48 @@ impl Project {
         if children.is_empty() {
             return;
         }
+        // A frame's origin is its centre, and each child sprite is centred on
+        // its own origin. Positions are therefore in frame-local coordinates
+        // starting at the frame's top-left corner, not at its centre.
+        let left = -parent_size[0] * 0.5;
+        let top = -parent_size[1] * 0.5;
         let mut cursor = if layout.horizontal {
-            layout.padding[0]
+            left + layout.padding[0]
         } else {
-            layout.padding[1]
+            top + layout.padding[1]
         };
         for child in children {
             let size = Self::node_size(&self.document.nodes[child]);
-            let cross = if layout.horizontal {
-                let available = parent_size[1] - layout.padding[1] - layout.padding[3] - size[1];
-                layout.padding[1] + available.max(0.0) * layout.align
-            } else {
-                let available = parent_size[0] - layout.padding[0] - layout.padding[2] - size[0];
-                layout.padding[0] + available.max(0.0) * layout.align
-            };
             let node = &mut self.document.nodes[child].transform;
             if layout.horizontal {
-                node.position = [cursor, cross - parent_size[1] * 0.5];
+                let usable = parent_size[1] - layout.padding[1] - layout.padding[3] - size[1];
+                let cross = top + layout.padding[1] + usable.max(0.0) * layout.align;
+                node.position = [cursor + size[0] * 0.5, cross + size[1] * 0.5];
+                cursor += size[0] + layout.gap;
             } else {
-                node.position = [cross - parent_size[0] * 0.5, cursor];
+                let usable = parent_size[0] - layout.padding[0] - layout.padding[2] - size[0];
+                let cross = left + layout.padding[0] + usable.max(0.0) * layout.align;
+                node.position = [cross + size[0] * 0.5, cursor + size[1] * 0.5];
+                cursor += size[1] + layout.gap;
             }
-            cursor += if layout.horizontal { size[0] } else { size[1] } + layout.gap;
+        }
+        self.changed();
+    }
+
+    /// Centres the selected node in its parent, or on the design/3D origin.
+    pub(super) fn center_selection(&mut self, in_parent: bool) {
+        let Some(index) = self.selected else {
+            return;
+        };
+        if in_parent && self.document.nodes[index].parent.is_none() {
+            return;
+        }
+        self.document.nodes[index].transform.position = [0.0; 2];
+        if let Some(spatial) = &mut self.document.nodes[index].spatial {
+            spatial.position = [0.0; 3];
+        }
+        if !in_parent {
+            self.apply_auto_layout(index);
         }
         self.changed();
     }
@@ -966,10 +990,13 @@ mod tests {
             });
         }
         project.apply_auto_layout(frame);
-        assert_eq!(project.document.nodes[frame + 1].transform.position[0], 8.0);
+        assert_eq!(
+            project.document.nodes[frame + 1].transform.position[0],
+            -72.0
+        );
         assert_eq!(
             project.document.nodes[frame + 2].transform.position[0],
-            58.0
+            -22.0
         );
 
         project.group_selection.insert(frame + 1);
