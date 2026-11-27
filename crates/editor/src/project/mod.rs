@@ -403,6 +403,15 @@ impl Project {
         };
         for child in children {
             let size = Self::node_size(&self.document.nodes[child]);
+            // Bind design text to the frame width so longer strings wrap and
+            // shrink instead of overflowing the styled layout.
+            if let Some(engine_core::save::visual::Visual::Design(design)) =
+                &mut self.document.nodes[child].visual
+                && design.kind == engine_core::save::visual::design::DesignKind::Text
+            {
+                design.text_wrap =
+                    (parent_size[0] - layout.padding[0] - layout.padding[2]).max(1.0);
+            }
             let node = &mut self.document.nodes[child].transform;
             if layout.horizontal {
                 let usable = parent_size[1] - layout.padding[1] - layout.padding[3] - size[1];
