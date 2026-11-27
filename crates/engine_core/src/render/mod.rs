@@ -17,6 +17,14 @@ use mesh::{MeshPass, MeshScene};
 use serde::Serialize;
 use sprite::SpriteBatch;
 
+/// Clear color when a scene has no background: plain black.
+pub(crate) const BLACK: Color = Color {
+    r: 0.0,
+    g: 0.0,
+    b: 0.0,
+    a: 1.0,
+};
+
 #[derive(Serialize)]
 pub(crate) struct Cube {
     pub(crate) name: &'static str,
@@ -290,12 +298,7 @@ impl GpuScene {
                     load: if overlay {
                         LoadOp::Load
                     } else {
-                        LoadOp::Clear(Color {
-                            r: 0.04,
-                            g: 0.09,
-                            b: 0.16,
-                            a: 1.0,
-                        })
+                        LoadOp::Clear(BLACK)
                     },
                     store: StoreOp::Store,
                 },
