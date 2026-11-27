@@ -1,6 +1,6 @@
 //! Spatial node presets and local component editing.
 use egui::{DragValue, Ui};
-use engine_core::scene::spatial::{Body, Collider, Role, SpatialNode};
+use engine_core::scene::spatial::{Body, Collider, FaceUv, Role, SpatialNode};
 
 pub(crate) const PRESETS: [(&str, Role); 4] = [
     ("Node 3D", Role::Pivot),
@@ -24,7 +24,7 @@ pub(crate) fn preset(name: &str) -> Option<SpatialNode> {
     Some(node)
 }
 
-pub(super) fn show(ui: &mut Ui, node: &mut SpatialNode) -> bool {
+pub(super) fn show(ui: &mut Ui, node: &mut SpatialNode, root: &std::path::Path) -> bool {
     let mut changed = false;
     ui.collapsing("Spatial 3D", |ui| {
         for (label, values, speed) in [
@@ -56,8 +56,59 @@ pub(super) fn show(ui: &mut Ui, node: &mut SpatialNode) -> bool {
             changed |= ui
                 .add(egui::Slider::new(&mut node.roughness, 0.0..=1.0).text("Roughness"))
                 .changed();
-            if let Some(path) = &node.texture {
-                ui.label(format!("Base texture: {}", path.display()));
+            if let Some(path) = super::asset_drop(ui, "Drop base texture", &["png"], root) {
+                node.texture = Some(path);
+                changed = true;
+            }
+            ui.horizontal(|ui| {
+                if let Some(path) = &node.texture {
+                    ui.label(path.display().to_string());
+                    if ui.small_button("Clear").clicked() {
+                        node.texture = None;
+                        changed = true;
+                    }
+                }
+            });
+            ui.collapsing("Procedural noise", |ui| {
+                let mut enabled = node.noise.is_some();
+                changed |= ui.checkbox(&mut enabled, "Noise base color").changed();
+                if enabled && node.noise.is_none() {
+                    node.noise = Some(Default::default());
+                    changed = true;
+                }
+                if !enabled && node.noise.is_some() {
+                    node.noise = None;
+                    changed = true;
+                }
+                if let Some(texture) = &mut node.noise {
+                    changed |= super::design::noise_ui(ui, texture, root);
+                }
+            });
+            if node.role == Role::Cube {
+                ui.collapsing("Face UVs", |ui| {
+                    let mut enabled = node.faces.is_some();
+                    changed |= ui.checkbox(&mut enabled, "Per-face regions").changed();
+                    if enabled && node.faces.is_none() {
+                        node.faces = Some(FaceUv::default());
+                        changed = true;
+                    }
+                    if !enabled && node.faces.is_some() {
+                        node.faces = None;
+                        changed = true;
+                    }
+                    if let Some(faces) = &mut node.faces {
+                        for (face, region) in faces.regions.iter_mut().enumerate() {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(format!("Face {face}"));
+                                for value in region {
+                                    changed |= ui
+                                        .add(DragValue::new(value).range(0.0..=1.0).speed(0.01))
+                                        .changed();
+                                }
+                            });
+                        }
+                    }
+                });
             }
         }
         if node.role == Role::Cube {
