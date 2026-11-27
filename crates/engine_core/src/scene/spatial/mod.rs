@@ -1,6 +1,6 @@
 //! Optional spatial components coexist with the pixel-space scene graph.
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use glam::{EulerRot, Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -97,6 +97,46 @@ impl Geometry {
     }
 }
 
+/// Per-face UV regions of a unit cube, in Minecraft-skin style.
+///
+/// Each entry is `[u, v, width, height]` in normalized texture space. The face
+/// order is +X, -X, +Y, -Y, +Z, -Z.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FaceUv {
+    /// Six UV rectangles, one per cube face.
+    pub regions: [[f32; 4]; 6],
+}
+
+impl Default for FaceUv {
+    fn default() -> Self {
+        Self {
+            regions: [[0.0, 0.0, 1.0, 1.0]; 6],
+        }
+    }
+}
+
+impl FaceUv {
+    /// Checks that every region stays inside the texture.
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.regions.iter().all(|region| {
+                region.iter().all(|value| value.is_finite())
+                    && (0.0..=1.0).contains(&region[0])
+                    && (0.0..=1.0).contains(&region[1])
+                    && (0.0..=1.0).contains(&region[2])
+                    && (0.0..=1.0).contains(&region[3])
+                    && region[2] > 0.0
+                    && region[3] > 0.0
+                    && region[0] + region[2] <= 1.0
+                    && region[1] + region[3] <= 1.0
+            }),
+            "Invalid face UV region"
+        );
+        Ok(())
+    }
+}
+
 /// Constraint type between two spatial bodies.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -183,6 +223,15 @@ pub struct SpatialNode {
     /// Resolved texture identity, filled while loading the document.
     #[serde(skip)]
     pub texture_asset: Option<AssetId>,
+    /// Procedural base-color noise, used when no PNG is assigned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub noise: Option<crate::save::noise::Noise>,
+    /// Resolved procedural texture identity, filled while loading.
+    #[serde(skip)]
+    pub noise_asset: Option<AssetId>,
+    /// Per-face UV regions of a unit cube.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub faces: Option<FaceUv>,
     /// PBR metalness in the zero-to-one range.
     pub metallic: f32,
     /// PBR perceptual roughness in the zero-to-one range.
@@ -216,6 +265,9 @@ impl Default for SpatialNode {
             color: [0.35, 0.66, 0.9],
             texture: None,
             texture_asset: None,
+            noise: None,
+            noise_asset: None,
+            faces: None,
             metallic: 0.,
             roughness: 0.5,
             body: Body::None,
@@ -248,6 +300,21 @@ impl SpatialNode {
         self.validate()?;
         self.texture_asset = match &self.texture {
             Some(path) => Some(assets.import_file(&directory.join(path))?),
+            None => None,
+        };
+        self.noise_asset = match &self.noise {
+            Some(texture) => {
+                let image = if let Some(path) = &texture.baked {
+                    let id = assets.import_file(&directory.join(path))?;
+                    assets
+                        .texture(id)
+                        .context("Missing baked spatial noise texture")?
+                        .clone()
+                } else {
+                    texture.render()?
+                };
+                Some(assets.generated(image))
+            }
             None => None,
         };
         Ok(())
@@ -285,6 +352,12 @@ impl SpatialNode {
         );
         if let Some(mesh) = &self.geometry {
             mesh.validate()?;
+        }
+        if let Some(texture) = &self.noise {
+            texture.validate()?;
+        }
+        if let Some(faces) = &self.faces {
+            faces.validate()?;
         }
         let shaped = matches!(self.collider, Collider::Mesh | Collider::ConvexHull);
         ensure!(
