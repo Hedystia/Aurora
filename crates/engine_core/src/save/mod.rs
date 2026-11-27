@@ -1,5 +1,6 @@
 //! Versioned, human-readable scene and prefab documents.
 
+pub mod noise;
 pub mod visual;
 
 use std::{
