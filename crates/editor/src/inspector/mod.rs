@@ -121,6 +121,18 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
                 )
         })
         .collect();
+    let node_is_design: Vec<_> = editor
+        .project
+        .document
+        .nodes
+        .iter()
+        .map(|node| {
+            matches!(
+                &node.visual,
+                Some(engine_core::save::visual::Visual::Design(_))
+            )
+        })
+        .collect();
     let components: Vec<_> = editor
         .project
         .document
@@ -328,6 +340,7 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
                                 &names,
                                 &node_is_text,
                                 &node_is_image,
+                                &node_is_design,
                                 &components,
                                 &prefab_assets,
                                 &audio_assets,
@@ -405,6 +418,7 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
     }
     if changed {
         editor.project.changed();
+        editor.project.apply_auto_layout(selected);
     }
 }
 
@@ -413,6 +427,7 @@ fn node_filter_matches(
     value: &PropertyValue,
     node_is_text: &[bool],
     node_is_image: &[bool],
+    node_is_design: &[bool],
 ) -> bool {
     match (filter, value) {
         (None, PropertyValue::Node(_)) => true,
@@ -421,6 +436,9 @@ fn node_filter_matches(
         }
         (Some(NodeFilter::Image), PropertyValue::Node(index)) => {
             node_is_image.get(*index).copied().unwrap_or(false)
+        }
+        (Some(NodeFilter::Design), PropertyValue::Node(index)) => {
+            node_is_design.get(*index).copied().unwrap_or(false)
         }
         (_, PropertyValue::Prefab(_)) => true,
         _ => false,
@@ -572,6 +590,7 @@ fn fields(
     names: &[String],
     node_is_text: &[bool],
     node_is_image: &[bool],
+    node_is_design: &[bool],
     components: &[(usize, String)],
     prefab_assets: &[std::path::PathBuf],
     audio_assets: &[std::path::PathBuf],
@@ -805,6 +824,7 @@ fn fields(
                                     value,
                                     node_is_text,
                                     node_is_image,
+                                    node_is_design,
                                 ),
                                 _ => true,
                             };
@@ -830,6 +850,7 @@ fn fields(
                                             &value,
                                             node_is_text,
                                             node_is_image,
+                                            node_is_design,
                                         )
                                     },
                                 );
@@ -855,6 +876,7 @@ fn fields(
                                         value,
                                         node_is_text,
                                         node_is_image,
+                                        node_is_design,
                                     )
                                 })
                                 .map(|value| match value {
@@ -1329,25 +1351,29 @@ mod tests {
             Some(NodeFilter::Text),
             &text,
             &node_is_text,
-            &node_is_image
+            &node_is_image,
+            &[]
         ));
         assert!(!node_filter_matches(
             Some(NodeFilter::Text),
             &sprite,
             &node_is_text,
-            &node_is_image
+            &node_is_image,
+            &[]
         ));
         assert!(node_filter_matches(
             Some(NodeFilter::Image),
             &sprite,
             &node_is_text,
-            &[true, false]
+            &[true, false],
+            &[]
         ));
         assert!(node_filter_matches(
             None,
             &sprite,
             &node_is_text,
-            &node_is_image
+            &node_is_image,
+            &[]
         ));
     }
 }
