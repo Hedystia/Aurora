@@ -89,6 +89,8 @@ pub enum Visual {
     },
     /// Figma-style design element.
     Design(design::Design),
+    /// Deterministic procedural noise texture.
+    Noise(crate::save::noise::Noise),
 }
 
 fn dimensions(size: [u32; 2]) -> Result<()> {
@@ -150,6 +152,7 @@ impl Visual {
                 "Invalid particle parameters"
             ),
             Self::Design(element) => element.validate()?,
+            Self::Noise(texture) => texture.validate()?,
         }
         Ok(())
     }
@@ -163,6 +166,7 @@ impl Visual {
             }
             Self::Particles { .. } => None,
             Self::Design(element) => element.png.as_mut(),
+            Self::Noise(texture) => texture.baked.as_mut(),
         }
     }
 
@@ -195,6 +199,17 @@ impl Visual {
                 self.raster_sheet(assets.texture(id).context("Missing atlas texture")?)?
             }
             Self::Design(element) => element.resolve(dir, assets)?,
+            Self::Noise(texture) => {
+                if let Some(path) = &texture.baked {
+                    let id = assets.import_file(&dir.join(path))?;
+                    assets
+                        .texture(id)
+                        .context("Missing baked noise texture")?
+                        .clone()
+                } else {
+                    texture.render()?
+                }
+            }
         };
         let size = [image.width() as f32, image.height() as f32];
         Ok(Sprite {
