@@ -4,6 +4,7 @@ use egui::{DragValue, Ui};
 use engine_core::{
     save::{
         NodeFile,
+        noise::Noise,
         visual::{
             Visual,
             design::{Constraint, DesignKind, Fill, TextAlign},
@@ -12,7 +13,7 @@ use engine_core::{
     scene::SpriteAppearance,
 };
 
-use crate::strings;
+use crate::{assets_browser, strings};
 
 fn section(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui) -> bool) -> bool {
     let mut changed = false;
@@ -52,6 +53,83 @@ fn constraint(ui: &mut Ui, label: &str, value: &mut Constraint) -> bool {
                     .changed();
             }
         });
+    changed
+}
+
+/// Fill controls shared by design elements and standalone noise visuals.
+pub(super) fn fill_ui(ui: &mut Ui, fill: &mut Fill, root: &std::path::Path) -> bool {
+    let mode = match fill {
+        Fill::Solid(_) => "Solid",
+        Fill::Linear { .. } => "Gradient",
+        Fill::Noise(_) => "Noise",
+    };
+    let mut next = mode;
+    egui::ComboBox::from_id_salt("fill-mode")
+        .selected_text(mode)
+        .show_ui(ui, |ui| {
+            for choice in ["Solid", "Gradient", "Noise"] {
+                ui.selectable_value(&mut next, choice, choice);
+            }
+        });
+    if next != mode {
+        let start = match fill {
+            Fill::Solid(color) => *color,
+            Fill::Linear { start, .. } => *start,
+            Fill::Noise(noise) => noise.low,
+        };
+        *fill = match next {
+            "Gradient" => Fill::Linear {
+                start,
+                end: [255, 255, 255, 255],
+                angle: 0.0,
+            },
+            "Noise" => Fill::Noise(Noise::default()),
+            _ => Fill::Solid(start),
+        };
+        return true;
+    }
+    match fill {
+        Fill::Solid(value) => color(ui, "Color", value),
+        Fill::Linear { start, end, angle } => {
+            let mut changed = color(ui, "From", start) | color(ui, "To", end);
+            changed |= field(ui, angle, "Angle ", -360.0..=360.0);
+            changed
+        }
+        Fill::Noise(noise) => noise_ui(ui, noise, root),
+    }
+}
+
+pub(super) fn noise_ui(ui: &mut Ui, noise: &mut Noise, root: &std::path::Path) -> bool {
+    let mut changed = false;
+    ui.horizontal_wrapped(|ui| {
+        changed |= field(ui, &mut noise.frequency, "Scale ", 0.01..=100.0);
+        changed |= ui
+            .add(egui::DragValue::new(&mut noise.octaves).range(1..=8))
+            .changed();
+        changed |= ui
+            .add(egui::DragValue::new(&mut noise.seed).range(0..=u32::MAX))
+            .changed();
+    });
+    ui.horizontal_wrapped(|ui| {
+        changed |= field(ui, &mut noise.roughness, "Rough ", 0.01..=1.0);
+        changed |= color(ui, "Low", &mut noise.low);
+        changed |= color(ui, "High", &mut noise.high);
+    });
+    if let Some(path) = &noise.baked {
+        ui.label(path.display().to_string());
+        if ui.small_button(strings::CLEAR).clicked() {
+            noise.baked = None;
+            changed = true;
+        }
+    }
+    if ui.button(strings::BAKE).clicked()
+        && let Ok(image) = noise.render()
+        && let Ok(path) = assets_browser::save_generated(root, "noise", &image)
+        && let Ok(relative) = path.strip_prefix(root)
+    {
+        noise.baked = Some(relative.to_path_buf());
+        changed = true;
+    }
     changed
 }
 
@@ -171,39 +249,7 @@ pub(super) fn show(
         });
     }
 
-    changed |= section(ui, strings::FILL, |ui| {
-        let mut changed = false;
-        let mut gradient = matches!(design.fill, Fill::Linear { .. });
-        changed |= ui.checkbox(&mut gradient, "Gradient").changed();
-        match &mut design.fill {
-            Fill::Solid(value) => changed |= color(ui, "Color", value),
-            Fill::Linear { start, end, angle } => {
-                changed |= color(ui, "From", start) | color(ui, "To", end);
-                changed |= field(ui, angle, "Angle ", -360.0..=360.0);
-            }
-        }
-        if gradient && matches!(design.fill, Fill::Solid(_)) {
-            let start = match design.fill {
-                Fill::Solid(value) => value,
-                Fill::Linear { start, .. } => start,
-            };
-            design.fill = Fill::Linear {
-                start,
-                end: [255, 255, 255, 255],
-                angle: 0.0,
-            };
-            changed = true;
-        }
-        if !gradient && matches!(design.fill, Fill::Linear { .. }) {
-            let start = match design.fill {
-                Fill::Solid(value) => value,
-                Fill::Linear { start, .. } => start,
-            };
-            design.fill = Fill::Solid(start);
-            changed = true;
-        }
-        changed
-    });
+    changed |= section(ui, strings::FILL, |ui| fill_ui(ui, &mut design.fill, root));
 
     changed |= section(ui, strings::STROKE, |ui| {
         let mut enabled = design.stroke.color[3] > 0 || design.stroke.width > 0.0;
