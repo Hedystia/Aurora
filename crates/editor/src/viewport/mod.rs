@@ -193,6 +193,46 @@ fn camera_view(editor: &Editor, rect: Rect) -> Option<(spatial::View, usize)> {
     first
 }
 
+/// Screen-space bounds of the nearest clipping ancestor, like Figma's frame.
+fn design_clip(
+    state: &NodeState,
+    nodes: &[NodeState],
+    document: &engine_core::save::SceneFile,
+    project: impl Fn([f32; 2]) -> Pos2,
+) -> Option<Rect> {
+    let mut parent = state.parent;
+    while let Some(id) = parent {
+        let index = id.value() as usize;
+        let ancestor = nodes.iter().find(|node| node.id == id)?;
+        let clips = document
+            .nodes
+            .get(index)
+            .and_then(|node| match &node.visual {
+                Some(engine_core::save::visual::Visual::Design(design)) => {
+                    design.clips_content.then_some(())
+                }
+                _ => None,
+            })
+            .is_some();
+        if clips {
+            let size = ancestor
+                .sprite
+                .map(|sprite| sprite.size)
+                .unwrap_or_else(|| crate::project::Project::node_size(&document.nodes[index]));
+            let corners = [
+                [0.0, 0.0],
+                [size[0], 0.0],
+                [0.0, size[1]],
+                [size[0], size[1]],
+            ]
+            .map(|point| project(ancestor.world.point(point)));
+            return Some(bounds(corners));
+        }
+        parent = ancestor.parent;
+    }
+    None
+}
+
 /// Moves the camera node itself while looking through it, like Blender's
 /// camera view: right-drag turns it, middle-drag and the wheel slide it, and
 /// WASD/Q/E fly it.
@@ -329,6 +369,16 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
                     editor.viewport.pan = Vec2::ZERO;
                     editor.viewport.zoom = 1.0;
                     editor.viewport.spatial.reset_camera();
+                }
+                if let Some(selected) = editor.project.selected {
+                    if ui.button(strings::CENTER).clicked() {
+                        editor.project.center_selection(false);
+                    }
+                    if editor.project.document.nodes[selected].parent.is_some()
+                        && ui.button(strings::CENTER_IN_PARENT).clicked()
+                    {
+                        editor.project.center_selection(true);
+                    }
                 }
                 if editor.project.group_selection.len() >= 2 {
                     ui.separator();
@@ -602,6 +652,9 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         let appearance = state.appearance.unwrap_or_default();
         let world = |point: [f32; 2]| project(state.world.point(point));
         let origin = world([0.0; 2]);
+        let clip = design_clip(state, &viewport.nodes, &editor.project.document, project);
+        let clipped = clip.map(|rect| painter.with_clip_rect(rect));
+        let sprite_painter = clipped.as_ref().unwrap_or(&painter);
         if let Some(sprite) = state.sprite {
             if let std::collections::hash_map::Entry::Vacant(entry) =
                 viewport.textures.entry(sprite.texture)
@@ -638,12 +691,13 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
                         });
                     }
                     mesh.indices.extend([0, 1, 2, 2, 1, 3]);
-                    painter.add(egui::Shape::mesh(mesh));
+                    sprite_painter.add(egui::Shape::mesh(mesh));
                 }
                 if index < editor.project.document.nodes.len()
-                    && response
-                        .interact_pointer_pos()
-                        .is_some_and(|point| contains_sprite(corners, point))
+                    && response.interact_pointer_pos().is_some_and(|pointer| {
+                        clip.is_none_or(|rect| rect.contains(pointer))
+                            && contains_sprite(corners, pointer)
+                    })
                 {
                     picked = Some(index);
                 }
