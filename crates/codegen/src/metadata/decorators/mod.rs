@@ -216,6 +216,14 @@ impl Declared {
             node_filter: Some(NodeFilter::Image),
         }
     }
+
+    fn design_node() -> Self {
+        Self {
+            kind: PropertyType::Node,
+            component: None,
+            node_filter: Some(NodeFilter::Design),
+        }
+    }
 }
 
 fn kind(value: &str) -> Option<PropertyType> {
@@ -259,6 +267,7 @@ fn declared_kind(value: &str) -> Option<Declared> {
         "Ref.Node" => return Some(Declared::value(PropertyType::Node)),
         "Ref.Text" | "TextRef" => return Some(Declared::text_node()),
         "Ref.Image" | "ImageRef" => return Some(Declared::image_node()),
+        "Ref.Design" | "DesignRef" => return Some(Declared::design_node()),
         "Ref.Prefab" => return Some(Declared::value(PropertyType::Prefab)),
         "Ref.AudioClip" => return Some(Declared::value(PropertyType::AudioClip)),
         "Ref.SpriteFrame" => return Some(Declared::value(PropertyType::SpriteFrame)),
@@ -397,6 +406,7 @@ fn field_property(annotation: Node<'_>, field: Node<'_>, source: &str) -> Result
         let expected = match declared.node_filter {
             Some(NodeFilter::Text) => "TextRef",
             Some(NodeFilter::Image) => "ImageRef",
+            Some(NodeFilter::Design) => "DesignRef",
             None => "NodeRef",
         };
         let mut variants = text(annotation, source)
