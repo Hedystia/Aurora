@@ -1,5 +1,6 @@
 //! Live transform editing and type-checked script properties.
 
+mod design;
 mod joints;
 mod physics;
 
@@ -244,37 +245,45 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
                 reparent = Some(Some(*target));
             }
         });
-        egui::CollapsingHeader::new(strings::NODE)
-            .default_open(true)
-            .show(ui, |ui| {
-                changed |= pair(ui, strings::POSITION, &mut node.transform.position);
-                changed |= ui
-                    .add(
-                        DragValue::new(&mut node.transform.rotation)
-                            .speed(theme::ANGLE_SPEED)
-                            .prefix(strings::ROTATION),
-                    )
-                    .changed();
-                changed |= pair(ui, strings::SCALE, &mut node.transform.scale);
-                let mut visual_changed = pair(ui, strings::ANCHOR, &mut appearance.anchor);
-                visual_changed |= pair(ui, strings::SKEW, &mut appearance.skew);
-                ui.horizontal(|ui| {
-                    ui.label(strings::COLOR);
-                    visual_changed |= ui
-                        .color_edit_button_srgba_unmultiplied(&mut appearance.color)
+        if matches!(
+            node.visual,
+            Some(engine_core::save::visual::Visual::Design(_))
+        ) {
+            changed |= design::show(ui, node, &mut appearance, &root);
+            node.appearance = Some(appearance);
+        } else {
+            egui::CollapsingHeader::new(strings::NODE)
+                .default_open(true)
+                .show(ui, |ui| {
+                    changed |= pair(ui, strings::POSITION, &mut node.transform.position);
+                    changed |= ui
+                        .add(
+                            DragValue::new(&mut node.transform.rotation)
+                                .speed(theme::ANGLE_SPEED)
+                                .prefix(strings::ROTATION),
+                        )
                         .changed();
+                    changed |= pair(ui, strings::SCALE, &mut node.transform.scale);
+                    let mut visual_changed = pair(ui, strings::ANCHOR, &mut appearance.anchor);
+                    visual_changed |= pair(ui, strings::SKEW, &mut appearance.skew);
+                    ui.horizontal(|ui| {
+                        ui.label(strings::COLOR);
+                        visual_changed |= ui
+                            .color_edit_button_srgba_unmultiplied(&mut appearance.color)
+                            .changed();
+                    });
+                    visual_changed |= ui
+                        .add(DragValue::new(&mut appearance.opacity).prefix(strings::OPACITY))
+                        .changed();
+                    visual_changed |= ui
+                        .add(DragValue::new(&mut appearance.layer).prefix(strings::DRAW_ORDER))
+                        .changed();
+                    if visual_changed {
+                        node.appearance = Some(appearance);
+                        changed = true;
+                    }
                 });
-                visual_changed |= ui
-                    .add(DragValue::new(&mut appearance.opacity).prefix(strings::OPACITY))
-                    .changed();
-                visual_changed |= ui
-                    .add(DragValue::new(&mut appearance.layer).prefix(strings::DRAW_ORDER))
-                    .changed();
-                if visual_changed {
-                    node.appearance = Some(appearance);
-                    changed = true;
-                }
-            });
+        }
         ui.separator();
         let mut sprite_drop = None;
         let mut remove_sprite = false;
@@ -312,11 +321,16 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
             changed = true;
         }
         changed |= physics::show(ui, &mut editor.project.document.nodes[selected].physics2d);
-        changed |= visual::show(
-            ui,
-            &mut editor.project.document.nodes[selected].visual,
-            &root,
-        );
+        if !matches!(
+            editor.project.document.nodes[selected].visual,
+            Some(engine_core::save::visual::Visual::Design(_))
+        ) {
+            changed |= visual::show(
+                ui,
+                &mut editor.project.document.nodes[selected].visual,
+                &root,
+            );
+        }
         changed |= gameplay(ui, editor, selected);
         let mut remove_script = None;
         for (index, script) in editor.project.document.nodes[selected]
