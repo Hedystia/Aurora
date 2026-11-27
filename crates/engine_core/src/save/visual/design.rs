@@ -12,7 +12,7 @@ use anyhow::{Context, Result, ensure};
 use image::{Rgba, RgbaImage, imageops};
 use serde::{Deserialize, Serialize};
 
-use crate::assets::Assets;
+use crate::{assets::Assets, save::noise::Noise};
 
 /// Shape or container kind in a design document.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -48,7 +48,7 @@ impl DesignKind {
 }
 
 /// Flat or two-color linear fill.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Fill {
     /// One straight-alpha sRGB color.
@@ -62,6 +62,8 @@ pub enum Fill {
         /// Gradient angle in degrees.
         angle: f32,
     },
+    /// Deterministic procedural noise, tiled over the element bounds.
+    Noise(Noise),
 }
 
 impl Default for Fill {
@@ -222,6 +224,9 @@ impl Design {
             (1..=256).contains(&self.font_size) && self.text.len() <= 16384,
             "Invalid design text"
         );
+        if let Fill::Noise(texture) = &self.fill {
+            texture.validate()?;
+        }
         ensure!(
             self.layout.gap.abs() <= 4096.0
                 && self
@@ -251,7 +256,7 @@ impl Design {
         }
         let width = self.size[0].round().max(1.0) as u32;
         let height = self.size[1].round().max(1.0) as u32;
-        let mut image = self.fill_image(width, height);
+        let mut image = self.fill_image(width, height)?;
         match self.kind {
             DesignKind::Image => {
                 let id = if let Some(png) = &self.png {
@@ -287,15 +292,19 @@ impl Design {
         Ok(image)
     }
 
-    fn fill_image(&self, width: u32, height: u32) -> RgbaImage {
+    fn fill_image(&self, width: u32, height: u32) -> Result<RgbaImage> {
         let mut image = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
-        match self.fill {
+        match &self.fill {
             Fill::Solid(color) => {
                 for y in 0..height {
                     for x in 0..width {
-                        *image.get_pixel_mut(x, y) = Rgba(color);
+                        *image.get_pixel_mut(x, y) = Rgba(*color);
                     }
                 }
+            }
+            Fill::Noise(texture) => {
+                let source = texture.render()?;
+                image = imageops::resize(&source, width, height, imageops::FilterType::Nearest);
             }
             Fill::Linear { start, end, angle } => {
                 let radians = angle.to_radians();
@@ -320,7 +329,7 @@ impl Design {
                 }
             }
         }
-        image
+        Ok(image)
     }
 
     fn mask_and_stroke(&self, image: &mut RgbaImage, width: u32, height: u32) {
