@@ -2,7 +2,7 @@
 //!
 //! The engine's sprite renderer and long-lived `Runtime` are private to
 //! `engine_core`, so this shell steps the public scriptless headless runtime
-//! once per tick and presents a simple changing clear colour. That is enough
+//! once per tick and presents a black frame. That is enough
 //! groundwork to prove the activity, surface, input and simulation all run in
 //! process; replacing the clear pass with the engine renderer is a separate
 //! engine-side change.
@@ -195,7 +195,7 @@ impl ApplicationHandler for Shell {
             WindowEvent::Occluded(false) => window.request_redraw(),
             WindowEvent::RedrawRequested => {
                 if let Some(gpu) = self.gpu.as_mut() {
-                    gpu.draw(self.tick);
+                    gpu.draw();
                 }
             }
             _ => {}
@@ -254,7 +254,7 @@ impl Gpu {
         self.surface.configure(&self.device, &self.config);
     }
 
-    fn draw(&mut self, tick: u64) {
+    fn draw(&mut self) {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
             | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
@@ -282,7 +282,6 @@ impl Gpu {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let phase = (tick % 60) as f64 / 60.0;
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -294,9 +293,9 @@ impl Gpu {
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.04 + phase * 0.1,
-                        g: 0.09,
-                        b: 0.16,
+                        r: 0.0,
+                        g: 0.0,
+                        b: 0.0,
                         a: 1.0,
                     }),
                     store: wgpu::StoreOp::Store,
