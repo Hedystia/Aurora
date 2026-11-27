@@ -19,7 +19,7 @@ export interface Property {
   component?: string;
   choices?: string[];
   readonly?: boolean;
-  node_filter?: "text" | "image";
+  node_filter?: "text" | "image" | "design";
   min?: number;
   max?: number;
   step?: number;
@@ -941,10 +941,14 @@ export class TextRef extends NodeRef {
 
 export class ImageRef extends NodeRef {}
 
+/** Reference to a Figma-style design element node. */
+export class DesignRef extends NodeRef {}
+
 export const Ref = {
   Node: NodeRef,
   Text: TextRef,
   Image: ImageRef,
+  Design: DesignRef,
   Prefab,
   AudioClip,
   SpriteFrame,
@@ -2450,6 +2454,7 @@ type PropertyToken =
   | typeof Image
   | typeof TextRef
   | typeof ImageRef
+  | typeof DesignRef
   | typeof NodeRef
   | typeof Prefab
   | typeof AudioClip
