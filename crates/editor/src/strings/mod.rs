@@ -84,6 +84,7 @@ pub(super) const GAME_EMPTY: &str = "Press Play to start the game";
 pub(super) const VIEW_HINT: &str = "Right drag to pan · Scroll to zoom";
 pub(super) const CENTER: &str = "Center";
 pub(super) const CENTER_IN_PARENT: &str = "Center in parent";
+pub(super) const BAKE: &str = "Bake to PNG";
 pub(super) const FILL: &str = "Fill";
 pub(super) const TEXT: &str = "Text";
 pub(super) const POSITION_AND_SIZE: &str = "Position & size";
