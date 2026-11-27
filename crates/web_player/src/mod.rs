@@ -91,34 +91,22 @@ impl App {
 
 /// Stand-in for the desktop runtime until scene and script support is ported.
 ///
-/// Only tick accounting and pointer coordinates are retained. No child process,
-/// shared memory, audio device or physics step is started in the browser.
+/// Only tick and input accounting are retained. No child process, shared
+/// memory, audio device or physics step is started in the browser.
 #[derive(Default)]
 struct ScriptlessRuntime {
     ticks: u64,
     inputs: u64,
-    last_position: Option<[f32; 2]>,
 }
 
 impl ScriptlessRuntime {
     fn tick(&mut self, input: &[InputEvent]) {
         self.ticks += 1;
         self.inputs += input.len() as u64;
-        for event in input {
-            match *event {
-                InputEvent::PointerStart { position, .. }
-                | InputEvent::PointerMove { position, .. }
-                | InputEvent::PointerEnd { position, .. } => self.last_position = Some(position),
-                _ => {}
-            }
-        }
     }
 
-    /// A subtle pulse and pointer tint make forwarding visible without faking a scene.
     fn tint(&self) -> [f32; 4] {
-        let pulse = (self.ticks % 60) as f32 / 60.0;
-        let pointer = self.last_position.map_or(0.0, |[x, _]| x);
-        [0.04 + 0.03 * pulse, 0.09 + 0.05 * pointer, 0.16, 1.0]
+        [0.0, 0.0, 0.0, 1.0]
     }
 }
 
