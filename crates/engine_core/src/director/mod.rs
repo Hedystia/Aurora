@@ -110,14 +110,21 @@ impl Director {
             .scene
             .visual(node)?
             .context("Target node does not have a Text visual")?;
-        let crate::save::visual::Visual::Text { spans, .. } = &mut visual else {
-            anyhow::bail!("Target node does not have a Text visual");
-        };
-        let first = spans
-            .first_mut()
-            .context("Text visual has no styled runs")?;
-        first.text = text;
-        spans.truncate(1);
+        match &mut visual {
+            crate::save::visual::Visual::Text { spans, .. } => {
+                let first = spans
+                    .first_mut()
+                    .context("Text visual has no styled runs")?;
+                first.text = text;
+                spans.truncate(1);
+            }
+            crate::save::visual::Visual::Design(design)
+                if design.kind == crate::save::visual::design::DesignKind::Text =>
+            {
+                design.text = text;
+            }
+            _ => anyhow::bail!("Target node does not have a Text visual"),
+        }
         visual.validate()?;
         let directory = parent_dir(self.scene_path()).to_path_buf();
         let sprite = visual.resolve(&directory, &mut self.assets)?;
