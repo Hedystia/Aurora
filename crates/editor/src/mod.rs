@@ -105,6 +105,12 @@ struct Editor {
     asset_selection: BTreeSet<PathBuf>,
     /// Anchor used by Shift-click range selection.
     asset_anchor: Option<PathBuf>,
+    /// Paths copied with Ctrl+C in the FileSystem dock.
+    asset_clipboard: Vec<PathBuf>,
+    /// Reversible file operations performed in the FileSystem dock.
+    file_undo: Vec<assets_browser::files::FileChange>,
+    /// True while the pointer is over the FileSystem dock.
+    asset_focus: bool,
     asset_directory: PathBuf,
     asset_grid: bool,
     asset_delete: Vec<PathBuf>,
@@ -157,6 +163,9 @@ impl Editor {
             selected_asset: None,
             asset_selection: BTreeSet::new(),
             asset_anchor: None,
+            asset_clipboard: Vec::new(),
+            file_undo: Vec::new(),
+            asset_focus: false,
             asset_directory: PathBuf::new(),
             asset_grid: true,
             asset_delete: Vec::new(),
@@ -311,6 +320,69 @@ impl Editor {
         Ok(())
     }
 
+    fn copy_assets(&mut self) {
+        self.asset_clipboard = self.asset_selection_vec();
+    }
+
+    /// Copies the clipboard into the current folder with unique Linux-style names.
+    fn paste_assets(&mut self) {
+        let sources = self.asset_clipboard.clone();
+        let directory = self.asset_directory.clone();
+        let root = self.project.root.clone();
+        let mut created = Vec::new();
+        for source in sources {
+            if !source.starts_with(&root) {
+                continue;
+            }
+            let Some(name) = source.file_name() else {
+                continue;
+            };
+            let target = assets_browser::files::copy_name(&directory.join(name));
+            match assets_browser::files::copy_entry(&source, &target) {
+                Ok(path) => created.push(path),
+                Err(error) => self.report(Err(error)),
+            }
+        }
+        self.record_created(created);
+    }
+
+    /// Duplicates the selected assets next to themselves.
+    fn duplicate_assets(&mut self) {
+        let mut created = Vec::new();
+        for source in self.asset_selection_vec() {
+            let target = assets_browser::files::copy_name(&source);
+            match assets_browser::files::copy_entry(&source, &target) {
+                Ok(path) => created.push(path),
+                Err(error) => self.report(Err(error)),
+            }
+        }
+        self.record_created(created);
+    }
+
+    fn record_created(&mut self, created: Vec<PathBuf>) {
+        if created.is_empty() {
+            return;
+        }
+        self.file_undo
+            .push(assets_browser::files::FileChange::Created(created.clone()));
+        self.asset_selection = created.iter().cloned().collect();
+        self.selected_asset = created.first().cloned();
+        self.asset_anchor = created.first().cloned();
+        self.refresh_assets();
+    }
+
+    fn undo_files(&mut self) {
+        let Some(change) = self.file_undo.pop() else {
+            return;
+        };
+        let result = change.undo();
+        self.report(result);
+        self.asset_clipboard.retain(|path| path.exists());
+        self.asset_selection.retain(|path| path.exists());
+        self.selected_asset = self.selected_asset.take().filter(|path| path.exists());
+        self.refresh_assets();
+    }
+
     fn begin_rename(&mut self, index: usize) {
         self.rename = self
             .project
@@ -427,6 +499,9 @@ impl Editor {
                 PathBuf::new()
             };
             self.asset_delete.clear();
+            self.asset_clipboard.clear();
+            self.file_undo.clear();
+            self.asset_focus = false;
             self.rename = None;
             self.layout = load_layout(&project);
             self.default_scene = project::load_session(&project.root).default_scene;
@@ -646,6 +721,21 @@ impl Editor {
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        let files = self.asset_focus
+            && self.rename.is_none()
+            && !self.preview.game_view
+            && !ctx.egui_wants_keyboard_input();
+        if files {
+            if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::C)) {
+                self.copy_assets();
+            }
+            if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::V)) {
+                self.paste_assets();
+            }
+            if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::D)) {
+                self.duplicate_assets();
+            }
+        }
         let save = ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::S));
         if save {
             let result = self.project.save();
@@ -667,7 +757,11 @@ impl Editor {
             } else if ctx
                 .input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Z))
             {
-                self.history.undo(&mut self.project);
+                if files {
+                    self.undo_files();
+                } else {
+                    self.history.undo(&mut self.project);
+                }
             }
         }
         if self.rename.is_none()
@@ -676,7 +770,9 @@ impl Editor {
             if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::F2)) {
                 self.begin_rename(index);
             }
-            if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::D)) {
+            if !files
+                && ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::D))
+            {
                 let result = self.project.duplicate(index);
                 self.report(result);
             }
@@ -695,6 +791,9 @@ impl Editor {
             self.report(result);
             self.refresh_assets();
         }
+        // The FileSystem dock refreshes this after it renders, so a hidden
+        // dock cannot keep owning the shortcuts next frame.
+        self.asset_focus = false;
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
@@ -941,15 +1040,25 @@ impl Editor {
                         {
                             let targets = std::mem::take(&mut self.asset_delete);
                             let open_scene = self.project.path.clone();
+                            let root = self.project.root.clone();
                             for path in targets {
+                                let snapshot = assets_browser::files::FileChange::snapshot_removed(
+                                    &root,
+                                    std::slice::from_ref(&path),
+                                );
                                 let result = self.delete_asset(&path);
-                                let deleted_open = result.is_ok() && path == open_scene;
+                                let deleted = result.is_ok();
                                 self.report(result);
-                                // Keep the open document as an in-memory backup so a
-                                // mistaken deletion can be undone with Ctrl+S. It is
-                                // dirty now, so leaving it prompts to save or discard.
-                                if deleted_open {
-                                    self.project.dirty = true;
+                                if deleted {
+                                    if let Ok(change) = snapshot {
+                                        self.file_undo.push(change);
+                                    }
+                                    // Keep the open document as an in-memory backup so a
+                                    // mistaken deletion can be undone with Ctrl+S. It is
+                                    // dirty now, so leaving it prompts to save or discard.
+                                    if path == open_scene {
+                                        self.project.dirty = true;
+                                    }
                                 }
                             }
                         }
