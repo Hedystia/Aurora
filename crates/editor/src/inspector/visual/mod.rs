@@ -1,16 +1,35 @@
 //! Node palette presets and Inspector fields for authored visuals.
 
 use egui::{DragValue, Ui};
+use engine_core::save::visual::design::{Design, DesignKind, Fill};
 use engine_core::save::visual::{Emitter, Span, Visual};
 use std::path::{Path, PathBuf};
 
-pub(crate) const NAMES: [&str; 6] = [
+/// Figma-style design elements exposed in the Node Library.
+pub(crate) const DESIGN_KINDS: [(&str, DesignKind); 7] = [
+    ("Frame", DesignKind::Frame),
+    ("Rectangle", DesignKind::Rectangle),
+    ("Ellipse", DesignKind::Ellipse),
+    ("Line", DesignKind::Line),
+    ("Design Text", DesignKind::Text),
+    ("Image", DesignKind::Image),
+    ("Group", DesignKind::Group),
+];
+
+pub(crate) const NAMES: [&str; 13] = [
     "Text",
     "Rich Text",
     "Particles",
     "Tile Map",
     "Atlas Sprite",
     "Nine-Slice",
+    "Frame",
+    "Rectangle",
+    "Ellipse",
+    "Line",
+    "Design Text",
+    "Image",
+    "Group",
 ];
 
 pub(crate) fn preset(name: &str) -> Option<Visual> {
@@ -55,7 +74,13 @@ pub(crate) fn preset(name: &str) -> Option<Visual> {
             borders: [8; 4],
             size: [192, 96],
         },
-        _ => return None,
+        name => {
+            let (_, kind) = DESIGN_KINDS.iter().find(|(label, _)| *label == name)?;
+            Visual::Design(Design {
+                kind: *kind,
+                ..Design::default()
+            })
+        }
     })
 }
 
@@ -81,6 +106,10 @@ fn source(
         }
     });
     changed
+}
+
+fn ui_color(ui: &mut Ui, color: &mut [u8; 4]) -> bool {
+    ui.color_edit_button_srgba_unmultiplied(color).changed()
 }
 
 fn values(ui: &mut Ui, label: &str, list: &mut [u32], min: u32) -> bool {
@@ -226,6 +255,174 @@ pub(crate) fn show(ui: &mut Ui, visual: &mut Option<Visual>, root: &Path) -> boo
                     if tiles.len() > 1 && ui.button("Remove last").clicked() {
                         tiles.pop();
                         changed = true;
+                    }
+                });
+            }
+            Visual::Design(element) => {
+                ui.strong(format!("Design · {:?}", element.kind));
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Size W H");
+                    for value in &mut element.size {
+                        changed |= ui
+                            .add(DragValue::new(value).range(1.0..=4096.0).speed(1.0))
+                            .changed();
+                    }
+                });
+                changed |= source(ui, root, &mut element.png, &["png"], "Drop image");
+                if element.kind == DesignKind::Text {
+                    changed |= ui.text_edit_singleline(&mut element.text).changed();
+                    changed |= ui
+                        .add(DragValue::new(&mut element.font_size).range(1..=256))
+                        .changed();
+                    egui::ComboBox::from_label("Align")
+                        .selected_text(format!("{:?}", element.text_align))
+                        .show_ui(ui, |ui| {
+                            for (kind, label) in [
+                                (engine_core::save::visual::design::TextAlign::Start, "Start"),
+                                (
+                                    engine_core::save::visual::design::TextAlign::Center,
+                                    "Center",
+                                ),
+                                (engine_core::save::visual::design::TextAlign::End, "End"),
+                            ] {
+                                changed |= ui
+                                    .selectable_value(&mut element.text_align, kind, label)
+                                    .changed();
+                            }
+                        });
+                    ui.horizontal(|ui| {
+                        ui.label("Text color");
+                        changed |= ui_color(ui, &mut element.text_color);
+                    });
+                }
+                ui.collapsing("Fill", |ui| {
+                    let mut gradient = matches!(element.fill, Fill::Linear { .. });
+                    changed |= ui.checkbox(&mut gradient, "Gradient").changed();
+                    match &mut element.fill {
+                        Fill::Solid(color) => {
+                            changed |= ui_color(ui, color);
+                        }
+                        Fill::Linear { start, end, angle } => {
+                            ui.horizontal(|ui| {
+                                ui.label("From");
+                                changed |= ui_color(ui, start);
+                                ui.label("To");
+                                changed |= ui_color(ui, end);
+                            });
+                            changed |= ui
+                                .add(DragValue::new(angle).range(-360.0..=360.0).prefix("Angle "))
+                                .changed();
+                        }
+                    }
+                    if gradient && matches!(element.fill, Fill::Solid(_)) {
+                        element.fill = Fill::Linear {
+                            start: match element.fill {
+                                Fill::Solid(color) => color,
+                                Fill::Linear { start, .. } => start,
+                            },
+                            end: [255, 255, 255, 255],
+                            angle: 0.0,
+                        };
+                        changed = true;
+                    }
+                    if !gradient && matches!(element.fill, Fill::Linear { .. }) {
+                        let color = match element.fill {
+                            Fill::Solid(color) => color,
+                            Fill::Linear { start, .. } => start,
+                        };
+                        element.fill = Fill::Solid(color);
+                        changed = true;
+                    }
+                });
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Corner");
+                    changed |= ui
+                        .add(DragValue::new(&mut element.corner).range(0.0..=2048.0))
+                        .changed();
+                    ui.label("Blur");
+                    changed |= ui
+                        .add(DragValue::new(&mut element.blur).range(0.0..=256.0))
+                        .changed();
+                });
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Stroke");
+                    changed |= ui_color(ui, &mut element.stroke.color);
+                    changed |= ui
+                        .add(DragValue::new(&mut element.stroke.width).range(0.0..=256.0))
+                        .changed();
+                });
+                ui.horizontal(|ui| {
+                    let mut shadow = element.shadow.is_some();
+                    changed |= ui.checkbox(&mut shadow, "Shadow").changed();
+                    if shadow && element.shadow.is_none() {
+                        element.shadow = Some(Default::default());
+                        changed = true;
+                    }
+                    if !shadow && element.shadow.is_some() {
+                        element.shadow = None;
+                        changed = true;
+                    }
+                    if let Some(effect) = &mut element.shadow {
+                        changed |= ui_color(ui, &mut effect.color);
+                        for value in &mut effect.offset {
+                            changed |= ui.add(DragValue::new(value).speed(1.0)).changed();
+                        }
+                        changed |= ui
+                            .add(DragValue::new(&mut effect.blur).range(0.0..=256.0))
+                            .changed();
+                    }
+                });
+                ui.checkbox(&mut element.clips_content, "Clip content");
+                ui.collapsing("Auto layout", |ui| {
+                    changed |= ui
+                        .checkbox(&mut element.layout.enabled, "Enabled")
+                        .changed();
+                    changed |= ui
+                        .checkbox(&mut element.layout.horizontal, "Horizontal")
+                        .changed();
+                    changed |= ui
+                        .add(
+                            DragValue::new(&mut element.layout.gap)
+                                .range(0.0..=4096.0)
+                                .prefix("Gap "),
+                        )
+                        .changed();
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Padding");
+                        for value in &mut element.layout.padding {
+                            changed |= ui
+                                .add(DragValue::new(value).range(-512.0..=512.0))
+                                .changed();
+                        }
+                    });
+                    changed |= ui
+                        .add(
+                            DragValue::new(&mut element.layout.align)
+                                .range(0.0..=1.0)
+                                .speed(0.05)
+                                .prefix("Align "),
+                        )
+                        .changed();
+                });
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Constraints H V");
+                    for constraint in &mut element.constraints {
+                        let label = format!("{constraint:?}");
+                        egui::ComboBox::from_id_salt(label.clone())
+                            .selected_text(label)
+                            .show_ui(ui, |ui| {
+                                for choice in [
+                                    engine_core::save::visual::design::Constraint::Start,
+                                    engine_core::save::visual::design::Constraint::End,
+                                    engine_core::save::visual::design::Constraint::Center,
+                                    engine_core::save::visual::design::Constraint::Both,
+                                    engine_core::save::visual::design::Constraint::Scale,
+                                ] {
+                                    changed |= ui
+                                        .selectable_value(constraint, choice, format!("{choice:?}"))
+                                        .changed();
+                                }
+                            });
                     }
                 });
             }
