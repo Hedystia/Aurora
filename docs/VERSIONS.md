@@ -88,6 +88,10 @@ Protocol 12 streams local node transforms to the script and adds a per-tick twee
 
 Protocol 13 adds queued ScaleNode and RotateNode edits, so scripts and tweens can change local scale and rotation alongside position. `NodeRef` and `Node` gain `setScale`, `setAngle`, and writable `scaleX`, `scaleY`, and `angle` (degrees), and `tween` drives all three channels. The demo launcher now advances tweens and drains queued edits. `@property` accepts component classes and the editor serializes component references. Existing native scripts must be rebuilt.
 
+## 2026-11-26 · Native image picker
+
+The editor uses `rfd` 0.18.0 for native file dialogs. On Linux the default features use the XDG portal and Wayland backends; no GTK system library is required. The picker is used by Inspector image fields.
+
 ## 2026-11-26 · Script protocol 20
 
 Protocol 20 adds `SetCamera3D`, so a script can render the scene through an authored camera node (for example a loading-screen view) or return to the scene's selected camera. The 60-byte envelope is unchanged; existing native scripts must be rebuilt.
