@@ -392,12 +392,7 @@ impl MeshPass {
                 depth_slice: None,
                 resolve_target: None,
                 ops: Operations {
-                    load: LoadOp::Clear(Color {
-                        r: 0.018,
-                        g: 0.033,
-                        b: 0.065,
-                        a: 1.0,
-                    }),
+                    load: LoadOp::Clear(super::BLACK),
                     store: StoreOp::Store,
                 },
             })],
