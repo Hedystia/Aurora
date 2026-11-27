@@ -219,13 +219,13 @@ fn design_clip(
                 .sprite
                 .map(|sprite| sprite.size)
                 .unwrap_or_else(|| crate::project::Project::node_size(&document.nodes[index]));
-            let corners = [
-                [0.0, 0.0],
-                [size[0], 0.0],
-                [0.0, size[1]],
-                [size[0], size[1]],
-            ]
-            .map(|point| project(ancestor.world.point(point)));
+            // Sprites are centred on their node origin; using [0, size] here
+            // shifted the clip by half a frame and hid GUI elements away from
+            // the centre.
+            let appearance = ancestor.appearance.unwrap_or_default();
+            let corners = appearance
+                .corners(size)
+                .map(|point| project(ancestor.world.point(point)));
             return Some(bounds(corners));
         }
         parent = ancestor.parent;
@@ -583,13 +583,17 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         .unwrap_or_default()
         .resolution;
     let design_size = vec2(w as f32, h as f32);
-    // The GUI overlay fits the viewport like it does in the player; only the
-    // flat design view carries the editor's pan and zoom.
+    // Use the authored fit policy in both views so the GUI overlay fills the
+    // same area as Play. Contain and Cover scale uniformly; Stretch uses X.
+    let [sx, _] = editor
+        .project
+        .document
+        .display
+        .unwrap_or_default()
+        .camera()
+        .scale([rect.width().max(1.0) as u32, rect.height().max(1.0) as u32]);
     let zoom = if three_d { 1.0 } else { viewport.zoom };
-    let scale = zoom
-        * (rect.width() / design_size.x)
-            .min(rect.height() / design_size.y)
-            .max(theme::MIN_SCALE);
+    let scale = (zoom * sx).max(theme::MIN_SCALE);
     let design = Rect::from_center_size(center, design_size * scale);
     let spatial_view = preview_view.map(|(view, _)| view).unwrap_or_else(|| {
         spatial::View::new(viewport.spatial.camera, if three_d { rect } else { design })
