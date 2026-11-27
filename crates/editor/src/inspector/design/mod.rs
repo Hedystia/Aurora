@@ -230,6 +230,8 @@ pub(super) fn show(
                     }
                 });
             changed |= color(ui, "Color", &mut design.text_color);
+            ui.checkbox(&mut design.text_auto_fit, "Auto fit");
+            changed |= field(ui, &mut design.text_wrap, "Wrap ", 0.0..=4096.0);
             changed
         });
     }
