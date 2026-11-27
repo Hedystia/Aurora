@@ -13,7 +13,7 @@ export interface Property {
     component?: string;
     choices?: string[];
     readonly?: boolean;
-    node_filter?: "text" | "image";
+    node_filter?: "text" | "image" | "design";
     min?: number;
     max?: number;
     step?: number;
@@ -330,10 +330,14 @@ export declare class TextRef extends NodeRef {
 }
 export declare class ImageRef extends NodeRef {
 }
+/** Reference to a Figma-style design element node. */
+export declare class DesignRef extends NodeRef {
+}
 export declare const Ref: {
     readonly Node: typeof NodeRef;
     readonly Text: typeof TextRef;
     readonly Image: typeof ImageRef;
+    readonly Design: typeof DesignRef;
     readonly Prefab: typeof Prefab;
     readonly AudioClip: typeof AudioClip;
     readonly SpriteFrame: typeof SpriteFrame;
@@ -624,7 +628,7 @@ export declare function tween(target: NodeRef | Node): Tween;
 /** @internal Advances every active tween once per simulation tick. */
 export declare function advanceTweens(dt: number): void;
 export declare function executionOrder(_order: number): ClassDecorator;
-type PropertyToken = NumberConstructor | typeof Integer | BooleanConstructor | StringConstructor | typeof Text | typeof Vector2 | typeof Vector3 | typeof Size | typeof Rect | typeof Color | typeof Bitmask | typeof Image | typeof TextRef | typeof ImageRef | typeof NodeRef | typeof Prefab | typeof AudioClip | typeof SpriteFrame;
+type PropertyToken = NumberConstructor | typeof Integer | BooleanConstructor | StringConstructor | typeof Text | typeof Vector2 | typeof Vector3 | typeof Size | typeof Rect | typeof Color | typeof Bitmask | typeof Image | typeof TextRef | typeof ImageRef | typeof DesignRef | typeof NodeRef | typeof Prefab | typeof AudioClip | typeof SpriteFrame;
 type PropertyOptions = {
     type?: PropertyToken;
     tooltip?: string;
