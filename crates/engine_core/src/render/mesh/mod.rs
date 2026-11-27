@@ -13,7 +13,7 @@ use super::Cube;
 use crate::assets::{AssetId, Assets};
 use crate::scene::{
     NodeState,
-    spatial::{Role, View3D, matrices},
+    spatial::{FaceUv, Role, View3D, matrices},
 };
 
 use crate::scene::spatial::Geometry;
@@ -40,33 +40,42 @@ impl<'a> MeshScene<'a> {
         }
         let worlds = matrices(nodes);
         let camera = View3D::resolve_selected(nodes, &worlds, selection)?;
-        let instances = nodes
-            .iter()
-            .filter(|n| n.visible)
-            .filter_map(|n| {
-                let spatial = n.spatial.as_ref()?;
-                (spatial.role == Role::Cube).then(|| {
-                    Instance::new(
-                        worlds[&n.id] * Mat4::from_scale(Vec3::splat(0.5)),
-                        spatial.color,
-                        spatial.metallic,
-                        spatial.roughness,
-                    )
-                })
-            })
-            .collect();
-        let meshes = nodes
-            .iter()
-            .filter(|n| n.visible)
-            .filter_map(|n| {
-                let s = n.spatial.as_ref()?;
-                Some((
-                    Arc::clone(s.geometry.as_ref()?),
-                    Instance::new(worlds[&n.id], s.color, s.metallic, s.roughness),
-                    s.texture_asset,
-                ))
-            })
-            .collect();
+        let mut instances = Vec::new();
+        let mut meshes = Vec::new();
+        for node in nodes.iter().filter(|n| n.visible) {
+            let Some(spatial) = node.spatial.as_ref() else {
+                continue;
+            };
+            let texture = spatial.texture_asset.or(spatial.noise_asset);
+            if spatial.role == Role::Cube {
+                let instance = Instance::new(
+                    worlds[&node.id] * Mat4::from_scale(Vec3::splat(0.5)),
+                    spatial.color,
+                    spatial.metallic,
+                    spatial.roughness,
+                );
+                if let Some(texture) = texture {
+                    let geometry = Arc::new(cube_geometry(spatial.faces.as_ref()));
+                    meshes.push((geometry, instance, Some(texture)));
+                } else {
+                    instances.push(instance);
+                }
+                continue;
+            }
+            let Some(geometry) = spatial.geometry.as_ref() else {
+                continue;
+            };
+            meshes.push((
+                Arc::clone(geometry),
+                Instance::new(
+                    worlds[&node.id],
+                    spatial.color,
+                    spatial.metallic,
+                    spatial.roughness,
+                ),
+                texture,
+            ));
+        }
         Some(Self {
             camera,
             instances,
@@ -432,6 +441,27 @@ fn instance_buffer(device: &Device, size: u64) -> Buffer {
         usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
+}
+
+/// Unit cube geometry with optional per-face UV regions.
+fn cube_geometry(faces: Option<&FaceUv>) -> Geometry {
+    let mut positions = Vec::with_capacity(VERTICES as usize);
+    let mut uvs = Vec::with_capacity(VERTICES as usize);
+    let mut indices = Vec::with_capacity(VERTICES as usize);
+    for (index, vertex) in unit_cube().into_iter().enumerate() {
+        let region = faces.map_or([0.0, 0.0, 1.0, 1.0], |faces| faces.regions[index / 6]);
+        positions.push(vertex.position);
+        uvs.push([
+            region[0] + vertex.uv[0] * region[2],
+            region[1] + vertex.uv[1] * region[3],
+        ]);
+        indices.push(index as u32);
+    }
+    Geometry {
+        positions,
+        indices,
+        uvs: Some(uvs),
+    }
 }
 
 fn unit_cube() -> Vec<Vertex> {
