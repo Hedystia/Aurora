@@ -725,6 +725,15 @@ impl Editor {
             && self.rename.is_none()
             && !self.preview.game_view
             && !ctx.egui_wants_keyboard_input();
+        if files
+            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::SHIFT, egui::Key::Delete))
+        {
+            let targets = self.asset_selection_vec();
+            for path in targets {
+                let result = self.delete_asset(&path);
+                self.report(result);
+            }
+        }
         if files {
             if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::C)) {
                 self.copy_assets();
