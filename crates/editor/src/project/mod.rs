@@ -357,6 +357,9 @@ impl Project {
             Some(engine_core::save::visual::Visual::Atlas { cell, .. }) => {
                 [cell[0] as f32, cell[1] as f32]
             }
+            Some(engine_core::save::visual::Visual::Noise(texture)) => {
+                [texture.size[0] as f32, texture.size[1] as f32]
+            }
             _ => [0.0, 0.0],
         }
     }
