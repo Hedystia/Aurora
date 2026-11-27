@@ -1,7 +1,7 @@
 //! Node palette presets and Inspector fields for authored visuals.
 
 use egui::{DragValue, Ui};
-use engine_core::save::visual::design::{Design, DesignKind, Fill};
+use engine_core::save::visual::design::{Design, DesignKind};
 use engine_core::save::visual::{Emitter, Span, Visual};
 use std::path::{Path, PathBuf};
 
@@ -16,7 +16,7 @@ pub(crate) const DESIGN_KINDS: [(&str, DesignKind); 7] = [
     ("Group", DesignKind::Group),
 ];
 
-pub(crate) const NAMES: [&str; 13] = [
+pub(crate) const NAMES: [&str; 14] = [
     "Text",
     "Rich Text",
     "Particles",
@@ -30,6 +30,7 @@ pub(crate) const NAMES: [&str; 13] = [
     "Design Text",
     "Image",
     "Group",
+    "Noise",
 ];
 
 pub(crate) fn preset(name: &str) -> Option<Visual> {
@@ -74,6 +75,7 @@ pub(crate) fn preset(name: &str) -> Option<Visual> {
             borders: [8; 4],
             size: [192, 96],
         },
+        "Noise" => Visual::Noise(engine_core::save::noise::Noise::default()),
         name => {
             let (_, kind) = DESIGN_KINDS.iter().find(|(label, _)| *label == name)?;
             Visual::Design(Design {
@@ -258,6 +260,10 @@ pub(crate) fn show(ui: &mut Ui, visual: &mut Option<Visual>, root: &Path) -> boo
                     }
                 });
             }
+            Visual::Noise(texture) => {
+                ui.strong("Noise texture");
+                changed |= super::design::noise_ui(ui, texture, root);
+            }
             Visual::Design(element) => {
                 ui.strong(format!("Design · {:?}", element.kind));
                 ui.horizontal_wrapped(|ui| {
@@ -296,43 +302,7 @@ pub(crate) fn show(ui: &mut Ui, visual: &mut Option<Visual>, root: &Path) -> boo
                     });
                 }
                 ui.collapsing("Fill", |ui| {
-                    let mut gradient = matches!(element.fill, Fill::Linear { .. });
-                    changed |= ui.checkbox(&mut gradient, "Gradient").changed();
-                    match &mut element.fill {
-                        Fill::Solid(color) => {
-                            changed |= ui_color(ui, color);
-                        }
-                        Fill::Linear { start, end, angle } => {
-                            ui.horizontal(|ui| {
-                                ui.label("From");
-                                changed |= ui_color(ui, start);
-                                ui.label("To");
-                                changed |= ui_color(ui, end);
-                            });
-                            changed |= ui
-                                .add(DragValue::new(angle).range(-360.0..=360.0).prefix("Angle "))
-                                .changed();
-                        }
-                    }
-                    if gradient && matches!(element.fill, Fill::Solid(_)) {
-                        element.fill = Fill::Linear {
-                            start: match element.fill {
-                                Fill::Solid(color) => color,
-                                Fill::Linear { start, .. } => start,
-                            },
-                            end: [255, 255, 255, 255],
-                            angle: 0.0,
-                        };
-                        changed = true;
-                    }
-                    if !gradient && matches!(element.fill, Fill::Linear { .. }) {
-                        let color = match element.fill {
-                            Fill::Solid(color) => color,
-                            Fill::Linear { start, .. } => start,
-                        };
-                        element.fill = Fill::Solid(color);
-                        changed = true;
-                    }
+                    changed |= super::design::fill_ui(ui, &mut element.fill, root);
                 });
                 ui.horizontal_wrapped(|ui| {
                     ui.label("Corner");
