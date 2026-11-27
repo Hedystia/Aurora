@@ -7,7 +7,40 @@
 
 use std::path::{Path, PathBuf};
 
-use ab_glyph::FontArc;
+use ab_glyph::{Font, FontArc, ScaleFont};
+
+/// Wraps text to a pixel width, keeping whole words together.
+fn wrap_text(font: &FontArc, text: &str, size: u32, width: f32) -> String {
+    if width <= 0.0 {
+        return text.to_owned();
+    }
+    let scaled = font.as_scaled(size as f32);
+    let mut output = String::new();
+    for (row, line) in text.split('\n').enumerate() {
+        if row > 0 {
+            output.push('\n');
+        }
+        let mut used = 0.0_f32;
+        let mut first = true;
+        for word in line.split_whitespace() {
+            let advance = |character: char| scaled.h_advance(scaled.glyph_id(character));
+            let width_of_word = word.chars().map(advance).sum::<f32>();
+            if !first && used + width_of_word > width {
+                output.push('\n');
+                used = 0.0;
+                first = true;
+            }
+            if !first {
+                output.push(' ');
+                used += advance(' ');
+            }
+            output.push_str(word);
+            used += width_of_word;
+            first = false;
+        }
+    }
+    output
+}
 use anyhow::{Context, Result, ensure};
 use image::{Rgba, RgbaImage, imageops};
 use serde::{Deserialize, Serialize};
@@ -167,6 +200,10 @@ pub struct Design {
     pub text_color: [u8; 4],
     /// Text alignment.
     pub text_align: TextAlign,
+    /// Width in design pixels at which text wraps; zero disables wrapping.
+    pub text_wrap: f32,
+    /// Shrink the font so wrapped text fits the element height.
+    pub text_auto_fit: bool,
     /// Source image for image elements, relative to the document.
     pub png: Option<PathBuf>,
     /// Auto layout settings for frames and groups.
@@ -191,6 +228,8 @@ impl Default for Design {
             font_size: 20,
             text_color: [255, 255, 255, 255],
             text_align: TextAlign::Start,
+            text_wrap: 0.0,
+            text_auto_fit: true,
             png: None,
             layout: AutoLayout::default(),
             constraints: [Constraint::Start; 2],
@@ -223,6 +262,10 @@ impl Design {
         ensure!(
             (1..=256).contains(&self.font_size) && self.text.len() <= 16384,
             "Invalid design text"
+        );
+        ensure!(
+            self.text_wrap.is_finite() && self.text_wrap.abs() <= 4096.0,
+            "Invalid text wrap width"
         );
         if let Fill::Noise(texture) = &self.fill {
             texture.validate()?;
@@ -271,11 +314,21 @@ impl Design {
             }
             DesignKind::Text => {
                 let font = FontArc::try_from_slice(epaint_default_fonts::UBUNTU_LIGHT)?;
+                let mut font_size = self.font_size;
+                let mut wrapped = wrap_text(&font, &self.text, font_size, self.text_wrap);
+                if self.text_auto_fit {
+                    while font_size > 1
+                        && wrapped.lines().count() as f32 * font_size as f32 * 1.25 > height as f32
+                    {
+                        font_size -= 1;
+                        wrapped = wrap_text(&font, &self.text, font_size, self.text_wrap);
+                    }
+                }
                 let text = super::raster_text(
                     &font,
                     &[super::Span {
-                        text: self.text.clone(),
-                        size: self.font_size,
+                        text: wrapped,
+                        size: font_size,
                         color: self.text_color,
                     }],
                 )?;
@@ -284,7 +337,12 @@ impl Design {
                     TextAlign::Center => (width as i64 - text.width() as i64) / 2,
                     TextAlign::End => width as i64 - text.width() as i64,
                 };
-                imageops::overlay(&mut image, &text, x, 0);
+                let y = if self.text_auto_fit {
+                    (height as i64 - text.height() as i64) / 2
+                } else {
+                    0
+                };
+                imageops::overlay(&mut image, &text, x, y.max(0));
             }
             _ => {}
         }
