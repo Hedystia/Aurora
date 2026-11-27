@@ -1,5 +1,6 @@
 //! Godot-style file system browser, import and asset creation.
 
+pub(crate) mod files;
 mod gltf;
 
 use std::{
@@ -50,6 +51,9 @@ impl AssetKind {
 }
 
 pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
+    editor.asset_focus = ui
+        .input(|input| input.pointer.latest_pos())
+        .is_some_and(|pointer| ui.max_rect().contains(pointer));
     if editor.asset_paths.is_empty() {
         ui.label(strings::DROP_ASSETS);
         return;
