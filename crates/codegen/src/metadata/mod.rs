@@ -69,6 +69,8 @@ pub enum NodeFilter {
     Text,
     /// Node has an authored sprite or image-based visual.
     Image,
+    /// Node has an authored Figma-style design element.
+    Design,
 }
 
 /// Inspector field declaration.
