@@ -1,5 +1,7 @@
 //! Editable 2D visuals resolved into the engine's ordered sprite pass.
 
+pub mod design;
+
 use std::path::{Path, PathBuf};
 
 use ab_glyph::{Font, FontArc, ScaleFont, point};
@@ -85,6 +87,8 @@ pub enum Visual {
         /// Emitter parameters.
         emitter: Emitter,
     },
+    /// Figma-style design element.
+    Design(design::Design),
 }
 
 fn dimensions(size: [u32; 2]) -> Result<()> {
@@ -145,6 +149,7 @@ impl Visual {
                     && e.diameter > 0.0,
                 "Invalid particle parameters"
             ),
+            Self::Design(element) => element.validate()?,
         }
         Ok(())
     }
@@ -157,6 +162,7 @@ impl Visual {
                 png.as_mut()
             }
             Self::Particles { .. } => None,
+            Self::Design(element) => element.png.as_mut(),
         }
     }
 
@@ -188,6 +194,7 @@ impl Visual {
                 };
                 self.raster_sheet(assets.texture(id).context("Missing atlas texture")?)?
             }
+            Self::Design(element) => element.resolve(dir, assets)?,
         };
         let size = [image.width() as f32, image.height() as f32];
         Ok(Sprite {
