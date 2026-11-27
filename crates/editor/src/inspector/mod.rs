@@ -98,11 +98,12 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
         .document
         .nodes
         .iter()
-        .map(|node| {
-            matches!(
-                &node.visual,
-                Some(engine_core::save::visual::Visual::Text { .. })
-            )
+        .map(|node| match &node.visual {
+            Some(engine_core::save::visual::Visual::Text { .. }) => true,
+            Some(engine_core::save::visual::Visual::Design(design)) => {
+                design.kind == engine_core::save::visual::design::DesignKind::Text
+            }
+            _ => false,
         })
         .collect();
     let node_is_image: Vec<_> = editor
@@ -566,13 +567,28 @@ fn asset_drop(
             egui::StrokeKind::Inside,
         );
     }
-    let payload = response.dnd_release_payload::<Drag>()?;
-    match payload.as_ref() {
-        Drag::Asset(path) if valid(payload.as_ref()) => {
-            Some(path.strip_prefix(root).unwrap_or(path).to_path_buf())
-        }
-        _ => None,
+    let dropped =
+        response
+            .dnd_release_payload::<Drag>()
+            .and_then(|payload| match payload.as_ref() {
+                Drag::Asset(path) if valid(payload.as_ref()) => {
+                    Some(path.strip_prefix(root).unwrap_or(path).to_path_buf())
+                }
+                _ => None,
+            });
+    if dropped.is_some() {
+        return dropped;
     }
+    if ui.small_button(strings::BROWSE).clicked() {
+        let mut dialog = rfd::FileDialog::new();
+        if !extensions.is_empty() {
+            dialog = dialog.add_filter("Images", extensions);
+        }
+        if let Some(path) = dialog.pick_file() {
+            return Some(path.strip_prefix(root).unwrap_or(&path).to_path_buf());
+        }
+    }
+    None
 }
 
 fn entry_list(ui: &mut Ui, paths: &mut Vec<std::path::PathBuf>) -> bool {
