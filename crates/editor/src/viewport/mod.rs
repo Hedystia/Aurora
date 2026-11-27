@@ -330,6 +330,29 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
                     editor.viewport.zoom = 1.0;
                     editor.viewport.spatial.reset_camera();
                 }
+                if editor.project.group_selection.len() >= 2 {
+                    ui.separator();
+                    for (label, horizontal, end, center) in [
+                        ("Align left", true, false, false),
+                        ("Align centre", true, false, true),
+                        ("Align right", true, true, false),
+                        ("Align top", false, false, false),
+                        ("Align middle", false, false, true),
+                        ("Align bottom", false, true, false),
+                    ] {
+                        if ui.button(label).clicked() {
+                            editor.project.align_selection(horizontal, end, center);
+                        }
+                    }
+                    if editor.project.group_selection.len() >= 3 {
+                        if ui.button("Distribute H").clicked() {
+                            editor.project.distribute_selection(true);
+                        }
+                        if ui.button("Distribute V").clicked() {
+                            editor.project.distribute_selection(false);
+                        }
+                    }
+                }
                 if three_d {
                     camera_selector(ui, editor);
                 } else {
