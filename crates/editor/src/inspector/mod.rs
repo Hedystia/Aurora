@@ -178,7 +178,7 @@ pub(super) fn show(ui: &mut Ui, editor: &mut Editor) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         let node = &mut editor.project.document.nodes[selected];
         if let Some(spatial) = &mut node.spatial {
-            changed |= spatial::show(ui, spatial);
+            changed |= spatial::show(ui, spatial, &root);
         }
         let mut appearance = node.appearance.unwrap_or_default();
         let node_icon = if node.name == strings::CANVAS {
